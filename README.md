@@ -30,7 +30,7 @@ Always Keep 页面位于插件详情页的 `settings` Plugin Page。页面通过
 
 当前请求的每个 handoff tool 都使用独立的 Noul question。SubAgent 永远不会因为 Noul 结果从本轮 ToolSet 中被过滤；只有通过阈值的候选会进入推荐列表，所以可以推荐 0 个、1 个或多个 SubAgent。推荐不会执行 handoff，而是和普通 Tool 推荐一起渲染到后置提示词中。
 
-普通 Tool 和 SubAgent 的推荐会在同一个可配置提示中分开列出。插件把这段提示追加到本次请求已有的 `req.system_prompt` 末尾，因此 AstrBot 原人格和其它插件已经追加的系统提示词都会保留；插件不会覆盖、清空或重建其它内容。提示明确允许主 LLM 选择零个、一个或多个候选；主 LLM 仍然可以忽略推荐并自行决定调用方式。将 `main_llm_post_prompt` 留空即可关闭这段追加而不关闭 Tool 过滤。
+普通 Tool 和 SubAgent 的推荐会在同一个可配置提示中分开列出。插件把这段提示追加到本次请求已有的 `req.system_prompt` 末尾，因此 AstrBot 原人格和其它插件已经追加的系统提示词都会保留；插件不会覆盖、清空或重建其它内容。提示明确允许主 LLM 选择零个、一个或多个候选；主 LLM 仍然可以忽略推荐并自行决定调用方式。普通 Tool 的逐个过滤始终启用，不提供关闭开关。
 
 ## `decision_evaluate`
 
@@ -59,7 +59,7 @@ AstrBot 要求 `>=4.28.1,<5`。将运行时文件放入 `data/plugins/astrbot_pl
 2. `systemone_path`: 默认 `/v1/systemone`
 3. `api_key`: SystemOne Bearer Key，配置 schema 使用 `secret: true`（仅遮罩，不是加密）
 4. `model`: 默认 `jev-latest`
-5. 开启 `tool_filter_enabled`，按需要调整 Noul 阈值
+5. 按需要调整 Noul 阈值；普通 Tool 逐个过滤始终启用
 6. 在插件详情页 `settings` 中分别勾选普通 Tool 的 `始终保留` 和 `推荐主 LLM`
 7. 如需主动回复，先关闭 AstrBot 自带 `provider_ltm_settings.active_reply`，再开启插件 `proactive_reply_enabled`
 

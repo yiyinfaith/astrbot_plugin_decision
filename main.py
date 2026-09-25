@@ -148,12 +148,7 @@ class DecisionPlugin(Star):
         return value if isinstance(value, bool) else bool(value)
 
     def _policy(self) -> str:
-        configured = self.config.get("jev_pre_prompt")
-        if configured is not None and str(configured).strip():
-            return str(configured).strip()
-        # Keep old installations compatible while making the new field the
-        # canonical setting shown in the configuration UI.
-        return str(self.config.get("decision_policy", "")).strip() or DEFAULT_POLICY
+        return str(self.config.get("jev_pre_prompt", "")).strip() or DEFAULT_POLICY
 
     def _main_llm_post_prompt(self) -> str:
         configured = self.config.get("main_llm_post_prompt")
@@ -234,10 +229,7 @@ class DecisionPlugin(Star):
         if not self._bool("enable", True):
             return
         tool_set = self._ensure_request_toolset(req)
-        tool_filter_enabled = self._bool("tool_filter_enabled", True)
         subagent_recommendation_enabled = self._bool("subagent_recommendation_enabled", True)
-        if not tool_filter_enabled and not subagent_recommendation_enabled:
-            return
         original = list(tool_set.tools)
         if not original:
             return
@@ -269,19 +261,18 @@ class DecisionPlugin(Star):
             )
         question_to_tool: dict[str, str] = {}
         questions: dict[str, dict[str, Any]] = {}
-        if tool_filter_enabled:
-            for index, tool in enumerate(ordinary):
-                name = str(getattr(tool, "name", ""))
-                qid = question_id("tool", name, index)
-                question_to_tool[qid] = name
-                questions[qid] = {
-                    "type": "noul",
-                    "instructions": (
-                        "Should this tool be available to and recommended to the main LLM "
-                        "for the current request? Return a high probability only when it "
-                        "could materially help; zero recommendations are allowed."
-                    ),
-                }
+        for index, tool in enumerate(ordinary):
+            name = str(getattr(tool, "name", ""))
+            qid = question_id("tool", name, index)
+            question_to_tool[qid] = name
+            questions[qid] = {
+                "type": "noul",
+                "instructions": (
+                    "Should this tool be available to and recommended to the main LLM "
+                    "for the current request? Return a high probability only when it "
+                    "could materially help; zero recommendations are allowed."
+                ),
+            }
 
         subagent_question_to_name: dict[str, str] = {}
         if subagent_recommendation_enabled:
@@ -312,7 +303,6 @@ class DecisionPlugin(Star):
                 always_keep=always_keep,
                 decision_tool=decision_tool,
                 always_keep_recommend=always_keep_recommend,
-                filter_ordinary=tool_filter_enabled,
             )
             req.func_tool.tools = outcome.selected
             return
@@ -342,7 +332,6 @@ class DecisionPlugin(Star):
             always_keep=always_keep,
             decision_tool=decision_tool,
             always_keep_recommend=always_keep_recommend,
-            filter_ordinary=tool_filter_enabled,
         )
         threshold = min(1.0, max(0.0, self._float("tool_noul_threshold", 0.2)))
         recommended_subagents = recommendations_from_noul(
@@ -559,7 +548,7 @@ class DecisionPlugin(Star):
                 f"provider={self.config.get('provider', 'systemone_jev')}\n"
                 f"endpoint={self.config.get('base_url', '')}{self.config.get('systemone_path', '/v1/systemone')}\n"
                 f"model={self.config.get('model', 'jev-latest')}\n"
-                f"tool_filter={self._bool('tool_filter_enabled', True)} threshold={self._float('tool_noul_threshold', 0.2):.3f}\n"
+                f"tool_filter=always_on threshold={self._float('tool_noul_threshold', 0.2):.3f}\n"
                 f"registered_tools={len(tools)} handoffs={handoffs} always_keep={len(self.config.get('always_keep_tools', []) or [])}\n"
                 f"calls={self._call_count} failures={self._failure_count} latency_ms={self._last_call_latency_ms or 0:.1f}"
             )

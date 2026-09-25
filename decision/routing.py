@@ -38,15 +38,13 @@ def choose_tools(
     always_keep: set[str],
     decision_tool: Any | None,
     always_keep_recommend: set[str] | None = None,
-    filter_ordinary: bool = True,
 ) -> RoutingOutcome:
     """Route tools while keeping SubAgents available for advisory recommendations.
 
-    Ordinary tools are filtered by their per-tool Noul answer when
-    ``filter_ordinary`` is enabled. Handoff tools are always retained and are
-    never filtered here. ``always_keep_recommend`` is intentionally separate
-    from ``always_keep``: a manually preserved tool may be retained without
-    being recommended to the main LLM.
+    Ordinary tools are filtered by their per-tool Noul answer. Handoff tools
+    are always retained and are never filtered here. ``always_keep_recommend``
+    is intentionally separate from ``always_keep``: a manually preserved tool
+    may be retained without being recommended to the main LLM.
     """
 
     final: list[Any] = []
@@ -66,9 +64,7 @@ def choose_tools(
             final.append(tool)
             continue
         keep = name in always_keep
-        if not filter_ordinary:
-            keep = True
-        elif not keep:
+        if not keep:
             matching_ids = [qid for qid, tool_name in question_to_tool.items() if tool_name == name]
             keep = any(
                 isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
@@ -80,7 +76,7 @@ def choose_tools(
             final.append(tool)
         if name in always_keep and name in always_keep_recommend:
             recommended_tools.append(name)
-        elif filter_ordinary and keep and name not in always_keep:
+        elif keep and name not in always_keep:
             matching_ids = [qid for qid, tool_name in question_to_tool.items() if tool_name == name]
             if any(
                 isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))

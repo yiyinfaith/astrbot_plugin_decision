@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -449,6 +450,16 @@ def test_state_excludes_system_prompt_and_tool_schema():
     assert "search the web" in state
     assert "system_prompt" not in state
     assert "parameters" not in state
+
+
+def test_public_schema_hides_custom_page_prompts_and_has_no_redundant_switches():
+    schema = json.loads(
+        (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
+    )
+    assert schema["jev_pre_prompt"]["invisible"] is True
+    assert schema["main_llm_post_prompt"]["invisible"] is True
+    assert "decision_policy" not in schema
+    assert "tool_filter_enabled" not in schema
 
 
 def test_context_limits_history_and_truncates_tool_results():
