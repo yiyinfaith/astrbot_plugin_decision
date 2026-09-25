@@ -10,7 +10,7 @@ from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, register
 from astrbot.core import AstrBotConfig
 from astrbot.core.agent.handoff import HandoffTool
-from astrbot.core.agent.tool import FunctionTool
+from astrbot.core.agent.tool import FunctionTool, ToolSet
 from astrbot.core.platform import MessageType
 from astrbot.core.star.filter.event_message_type import EventMessageType
 
@@ -152,6 +152,23 @@ class DecisionPlugin(Star):
     def _tool_list(self, req: ProviderRequest) -> list[Any]:
         return list(getattr(getattr(req, "func_tool", None), "tools", None) or [])
 
+    def _ensure_request_toolset(self, req: ProviderRequest) -> ToolSet:
+        """Keep the provider request usable even when AstrBot supplied no ToolSet.
+
+        The Decision Engine tool is registered globally through ``Context``. A
+        request can still arrive with ``func_tool=None`` when the active
+        persona has no ordinary tools, so add a local ToolSet rather than
+        silently making ``decision_evaluate`` unavailable.
+        """
+
+        tool_set = getattr(req, "func_tool", None)
+        if tool_set is None:
+            tool_set = ToolSet(tools=[])
+            req.func_tool = tool_set
+        if tool_set.get_tool(DECISION_TOOL_NAME) is None:
+            tool_set.add_tool(self._decision_tool)
+        return tool_set
+
     def _state_for_request(
         self,
         req: ProviderRequest,
@@ -200,9 +217,12 @@ class DecisionPlugin(Star):
     ) -> None:
         """Run one fan-out decision request before AstrBot's main LLM call."""
 
-        if not self._bool("enable", True) or not self._bool("tool_filter_enabled", True):
+        if not self._bool("enable", True):
             return
-        original = self._tool_list(req)
+        tool_set = self._ensure_request_toolset(req)
+        if not self._bool("tool_filter_enabled", True):
+            return
+        original = list(tool_set.tools)
         if not original:
             return
         handoffs = [tool for tool in original if is_handoff_tool(tool)]
@@ -218,6 +238,14 @@ class DecisionPlugin(Star):
             for name in (self.config.get("always_keep_tools", []) or [])
             if str(name).strip()
         }
+        unknown_always_keep = always_keep - {
+            str(getattr(tool, "name", "")) for tool in original if getattr(tool, "name", None)
+        }
+        if unknown_always_keep:
+            logger.debug(
+                "Decision Engine ignored %d Always Keep names not present in this request.",
+                len(unknown_always_keep),
+            )
         question_to_tool: dict[str, str] = {}
         questions: dict[str, dict[str, Any]] = {}
         for index, tool in enumerate(ordinary):
@@ -233,7 +261,7 @@ class DecisionPlugin(Star):
             }
 
         handoff_choice_id: str | None = None
-        if self._bool("subagent_recommendation_enabled", True) and len(handoffs) >= 2:
+        if self._bool("subagent_recommendation_enabled", True) and handoffs:
             handoff_choice_id = "subagent_recommendation"
             criteria = {
                 str(getattr(tool, "name", "")): short_description(
@@ -273,8 +301,8 @@ class DecisionPlugin(Star):
             # request untouched, apart from making the built-in decision tool
             # available when AstrBot supplied a tool set.
             logger.warning("Decision Engine tool filter unavailable: %s", _safe_error(exc))
-            if req.func_tool.get_tool(DECISION_TOOL_NAME) is None:
-                req.func_tool.add_tool(decision_tool)
+            if tool_set.get_tool(DECISION_TOOL_NAME) is None:
+                tool_set.add_tool(decision_tool)
             return
 
         noul_answers = {
