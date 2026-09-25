@@ -68,7 +68,7 @@ AstrBot 要求 `>=4.28.1,<5`。将运行时文件放入 `data/plugins/astrbot_pl
 6. 在插件详情页 `settings` 中分别勾选普通 Tool 的 `始终保留` 和 `推荐主 LLM`
 7. 如需主动回复，先关闭 AstrBot 自带 `provider_ltm_settings.active_reply`，再开启插件 `proactive_reply_enabled`
 
-其余配置包括超时、重试、两套可编辑提示词、Tool 描述截断、历史消息限制、Always Keep、主动回复冷却/窗口和调试日志，均定义在 `_conf_schema.json`。两套提示词和两个过滤开关使用隐藏 Schema 字段保存，只在插件详情页的 `settings` 页面编辑；运行时配置由 AstrBot 保存到 `data/config/astrbot_plugin_decision_config.json`。
+其余配置包括超时、重试、两套可编辑提示词、Tool 描述截断、历史消息限制、Always Keep、主动回复冷却/窗口和调试日志，均定义在 `_conf_schema.json`。通用配置页用 `[全局设置]`、`[Tools 与 SubAgent]`、`[主动对话]` 副标题区分适用范围；两套提示词、两个过滤开关和两个 Always Keep 列表使用隐藏 Schema 字段保存，只在插件详情页的 `settings` 页面编辑。运行时配置由 AstrBot 保存到 `data/config/astrbot_plugin_decision_config.json`。
 
 管理员诊断命令：
 

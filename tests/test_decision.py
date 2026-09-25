@@ -529,6 +529,11 @@ def test_public_schema_hides_custom_page_prompts_and_page_switches():
     assert schema["subagent_filter_enabled"]["default"] is False
     assert schema["tools_subagents_decision_enabled"]["default"] is True
     assert "不影响主动对话" in schema["tools_subagents_decision_enabled"]["description"]
+    assert schema["provider"]["description"].startswith("[全局设置]")
+    assert schema["history_max_messages"]["description"].startswith("[全局设置]")
+    assert schema["history_max_chars"]["description"].startswith("[全局设置]")
+    assert schema["always_keep_tools"]["invisible"] is True
+    assert schema["always_keep_recommend_tools"]["invisible"] is True
     assert "decision_policy" not in schema
     assert "subagent_recommendation_enabled" not in schema
     assert "enable" not in schema
