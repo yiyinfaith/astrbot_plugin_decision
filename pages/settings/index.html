@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Decision Engine · Always Keep Tools</title>
+    <style>
+      :root { color-scheme: light dark; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      body { margin: 0; padding: 24px; background: Canvas; color: CanvasText; }
+      main { max-width: 920px; margin: 0 auto; }
+      h1 { font-size: 22px; margin: 0 0 8px; }
+      p { color: color-mix(in srgb, CanvasText 70%, transparent); }
+      .bar { display: flex; gap: 10px; flex-wrap: wrap; margin: 20px 0 12px; }
+      input[type="search"] { flex: 1 1 280px; min-width: 220px; padding: 10px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, CanvasText 30%, transparent); background: Canvas; color: CanvasText; }
+      button { border: 0; border-radius: 8px; padding: 10px 16px; cursor: pointer; background: #4f46e5; color: white; font-weight: 600; }
+      button.secondary { background: color-mix(in srgb, CanvasText 15%, Canvas); color: CanvasText; }
+      #status { min-height: 22px; }
+      .list { display: grid; gap: 8px; }
+      label.tool { display: grid; grid-template-columns: 22px 1fr; gap: 8px; padding: 12px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 10px; }
+      label.tool:hover { border-color: #6366f1; }
+      .name { font-weight: 650; }
+      .desc { display: block; margin-top: 4px; font-size: 13px; opacity: .72; }
+      .tag { display: inline-block; margin-left: 6px; padding: 2px 6px; border-radius: 999px; font-size: 11px; background: color-mix(in srgb, #6366f1 24%, Canvas); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>始终保留 Tools</h1>
+      <p>只会从当前 AstrBot 已注册的工具中保存选择；本轮 Persona 未提供的工具不会被扩权加入。</p>
+      <div class="bar">
+        <input id="search" type="search" placeholder="搜索工具名称或描述" />
+        <button id="selectVisible" class="secondary">全选当前结果</button>
+        <button id="clearVisible" class="secondary">取消当前结果</button>
+        <button id="save">保存</button>
+      </div>
+      <div id="status"></div>
+      <div id="list" class="list">加载中…</div>
+    </main>
+    <script type="module">
+      const bridge = window.AstrBotPluginPage;
+      const list = document.getElementById("list");
+      const search = document.getElementById("search");
+      const status = document.getElementById("status");
+      let tools = [];
+      let selected = new Set();
+
+      function visibleTools() {
+        const query = search.value.trim().toLowerCase();
+        return tools.filter((tool) => !query || `${tool.name} ${tool.description}`.toLowerCase().includes(query));
+      }
+      function render() {
+        list.replaceChildren();
+        for (const tool of visibleTools()) {
+          const label = document.createElement("label");
+          label.className = "tool";
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = selected.has(tool.name);
+          checkbox.disabled = !tool.active;
+          checkbox.addEventListener("change", () => checkbox.checked ? selected.add(tool.name) : selected.delete(tool.name));
+          const text = document.createElement("span");
+          text.innerHTML = `<span class="name"></span>${tool.handoff ? '<span class="tag">SubAgent</span>' : ''}<span class="desc"></span>`;
+          text.querySelector(".name").textContent = tool.name;
+          text.querySelector(".desc").textContent = tool.description + (tool.active ? "" : "（未激活）");
+          label.append(checkbox, text);
+          list.append(label);
+        }
+        if (!list.children.length) list.textContent = "没有匹配的工具";
+      }
+      search.addEventListener("input", render);
+      document.getElementById("selectVisible").addEventListener("click", () => { for (const tool of visibleTools()) if (tool.active) selected.add(tool.name); render(); });
+      document.getElementById("clearVisible").addEventListener("click", () => { for (const tool of visibleTools()) selected.delete(tool.name); render(); });
+      document.getElementById("save").addEventListener("click", async () => {
+        try { await bridge.apiPost("settings/save", { always_keep_tools: [...selected] }); status.textContent = "已保存"; }
+        catch (error) { status.textContent = `保存失败：${error.message}`; }
+      });
+      try {
+        await bridge.ready();
+        const [toolData, settings] = await Promise.all([bridge.apiGet("tools"), bridge.apiGet("settings")]);
+        tools = toolData.tools || [];
+        selected = new Set(settings.always_keep_tools || []);
+        render();
+      } catch (error) { status.textContent = `加载失败：${error.message}`; list.textContent = "无法读取工具列表"; }
+    </script>
+  </body>
+</html>
