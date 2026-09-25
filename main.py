@@ -46,7 +46,7 @@ DEFAULT_POLICY = (
 @register(
     PLUGIN_NAME,
     "yiyinfaith",
-    "AstrBot 智能决策引擎：Tools 逐个过滤与推荐、SubAgent 逐个推荐、主动回复判断和结构化决策。",
+    "AstrBot Tools 与 SubAgent 决策：逐个过滤、推荐和结构化判断；主动对话单独配置。",
     "0.1.0",
 )
 class DecisionPlugin(Star):
@@ -226,7 +226,7 @@ class DecisionPlugin(Star):
     ) -> None:
         """Run one fan-out decision request before AstrBot's main LLM call."""
 
-        if not self._bool("enable", True):
+        if not self._bool("tools_subagents_decision_enabled", True):
             return
         tool_set = self._ensure_request_toolset(req)
         tool_filter_enabled = self._bool("tool_filter_enabled", True)
@@ -442,7 +442,7 @@ class DecisionPlugin(Star):
     async def proactive_reply(self, event: AstrMessageEvent):
         """Optionally wake AstrBot's normal Agent loop for ambient group messages."""
 
-        if not self._bool("enable", True) or not self._bool("proactive_reply_enabled", False):
+        if not self._bool("proactive_reply_enabled", False):
             return
         if not self.provider or not self._ready or self._should_skip_proactive(event):
             return
@@ -550,7 +550,8 @@ class DecisionPlugin(Star):
             tools = self.context.get_llm_tool_manager().func_list
             handoffs = sum(isinstance(item, HandoffTool) for item in tools)
             output = (
-                f"Decision Engine: {'enabled' if self._bool('enable', True) else 'disabled'}\n"
+                f"Tools/SubAgent decision: {'enabled' if self._bool('tools_subagents_decision_enabled', True) else 'disabled'}\n"
+                f"proactive_reply={self._bool('proactive_reply_enabled', False)}\n"
                 f"provider={self.config.get('provider', 'systemone_jev')}\n"
                 f"endpoint={self.config.get('base_url', '')}{self.config.get('systemone_path', '/v1/systemone')}\n"
                 f"model={self.config.get('model', 'jev-latest')}\n"

@@ -27,6 +27,8 @@ AstrBot 智能决策引擎。插件在 AstrBot 主 LLM 请求前调用一个 Dec
 - `过滤普通 Tools` 默认开启。开启时主 LLM 只能看到 Jev 判断达到阈值的普通 Tool；关闭时所有普通 Tool 都保留，但推荐提示仍只列出 Jev 选中的 Tool。
 - `过滤 SubAgents` 默认关闭。关闭时所有 SubAgent 都保留，但推荐提示仍只列出 Jev 选中的 SubAgent；开启时主 LLM 只能看到 Jev 判断达到阈值的 SubAgent。
 
+通用配置页顶部的 `启用 Tools 与 SubAgent 决策（不影响主动对话）` 只控制这条 Tools/SubAgent 决策链。主动对话由单独的 `proactive_reply_enabled` 控制；关闭前者不会关闭主动回复，关闭后者也不会影响 Tools/SubAgent 判断。
+
 若服务端返回当前已知的“混合题型 usage”400，Provider 会按 Noul、Choice、Score 题型拆成最多三路；同一题型（包括大量 Noul）仍保持单请求。
 
 Always Keep 页面位于插件详情页的 `settings` Plugin Page。页面通过 AstrBot 官方 `window.AstrBotPluginPage` bridge 调用插件 Web API，自动读取已注册 Tool、搜索、勾选和保存。每个普通 Tool 有两个独立选项：`始终保留` 和 `推荐主 LLM`。第二项只有在第一项勾选后才可用；因此可以让一个 Tool 始终留在本轮 ToolSet 中，但不主动推荐它。Always Keep 只在本轮原本允许的 `req.func_tool` 中生效，因此不会突破 Persona 的 Tool 权限。SubAgent 的推荐由 Jev 逐个判断，页面不提供手工推荐勾选；`decision_evaluate` 始终保留。
@@ -62,7 +64,7 @@ AstrBot 要求 `>=4.28.1,<5`。将运行时文件放入 `data/plugins/astrbot_pl
 2. `systemone_path`: 默认 `/v1/systemone`
 3. `api_key`: SystemOne Bearer Key，配置 schema 使用 `secret: true`（仅遮罩，不是加密）
 4. `model`: 默认 `jev-latest`
-5. 按需要调整 Noul 阈值；在插件详情页 `settings` 中设置 `过滤普通 Tools`（默认开）和 `过滤 SubAgents`（默认关）
+5. 通用配置页中，`[Tools 与 SubAgent] 启用 Tools 与 SubAgent 决策（不影响主动对话）` 控制决策链总开关；在插件详情页 `settings` 中设置 `过滤普通 Tools`（默认开）和 `过滤 SubAgents`（默认关）
 6. 在插件详情页 `settings` 中分别勾选普通 Tool 的 `始终保留` 和 `推荐主 LLM`
 7. 如需主动回复，先关闭 AstrBot 自带 `provider_ltm_settings.active_reply`，再开启插件 `proactive_reply_enabled`
 
