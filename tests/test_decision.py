@@ -13,9 +13,11 @@ from decision.proactive import ProactiveRecord, ProactiveState
 from decision.providers.systemone import SystemOneProvider
 from decision.routing import (
     add_routing_hint,
+    append_system_prompt,
     choose_tools,
     decision_tool_parameters,
-    recommendation_from_answer,
+    recommendations_from_noul,
+    render_routing_prompt,
 )
 
 
@@ -350,6 +352,7 @@ def test_routing_always_keep_handoff_and_decision_tool():
         threshold=0.2,
         always_keep={"keep"},
         decision_tool=decision,
+        always_keep_recommend={"keep"},
     )
     assert [tool.name for tool in outcome.selected] == [
         "keep",
@@ -357,18 +360,80 @@ def test_routing_always_keep_handoff_and_decision_tool():
         "decision_evaluate",
     ]
     assert [tool.name for tool in outcome.handoffs] == ["transfer_to_search"]
+    assert outcome.recommended_tools == ["keep"]
 
 
-def test_recommendation_is_advisory_and_uses_temp_part_fallback():
+def test_each_noul_can_recommend_zero_one_or_many_subagents():
+    answers = {
+        "a": {"noul": 0.1},
+        "b": {"noul": 0.8},
+        "c": {"noul": 0.9},
+    }
+    mapping = {"a": "agent_a", "b": "agent_b", "c": "agent_c"}
+    assert recommendations_from_noul(answers, mapping, threshold=0.2) == ["agent_b", "agent_c"]
     assert (
-        recommendation_from_answer({"choice": "transfer_to_search"}, {"transfer_to_search"})
-        == "transfer_to_search"
+        recommendations_from_noul({key: {"noul": 0.1} for key in mapping}, mapping, threshold=0.2)
+        == []
     )
-    assert recommendation_from_answer({"choice": "invented"}, {"transfer_to_search"}) is None
-    req = SimpleNamespace(extra_user_content_parts=[])
-    add_routing_hint(req, "transfer_to_search")
-    assert req.extra_user_content_parts
-    assert "transfer_to_search" in str(req.extra_user_content_parts[0])
+
+
+def test_subagents_are_never_filtered_and_ordinary_tools_can_be_recommended():
+    ordinary = SimpleNamespace(name="ordinary", description="ordinary", active=True)
+    dropped = SimpleNamespace(name="dropped", description="dropped", active=True)
+    handoff_a = type("HandoffTool", (), {"name": "agent_a", "description": "a"})()
+    handoff_b = type("HandoffTool", (), {"name": "agent_b", "description": "b"})()
+    decision = SimpleNamespace(name="decision_evaluate", description="decision")
+    outcome = choose_tools(
+        [ordinary, dropped, handoff_a, handoff_b],
+        {"ordinary_q": {"noul": 0.8}, "dropped_q": {"noul": 0.1}},
+        {"ordinary_q": "ordinary", "dropped_q": "dropped"},
+        threshold=0.2,
+        always_keep=set(),
+        decision_tool=decision,
+    )
+    assert [tool.name for tool in outcome.selected] == [
+        "ordinary",
+        "agent_a",
+        "agent_b",
+        "decision_evaluate",
+    ]
+    assert [tool.name for tool in outcome.handoffs] == ["agent_a", "agent_b"]
+    assert outcome.recommended_tools == ["ordinary"]
+
+
+def test_recommendation_is_appended_to_system_prompt_and_preserves_other_plugins():
+    req = SimpleNamespace(
+        system_prompt="AstrBot persona\n\nOther plugin prompt", extra_user_content_parts=[]
+    )
+    add_routing_hint(
+        req,
+        recommended_tools=["search", "calendar"],
+        recommended_subagents=["transfer_to_search", "transfer_to_code"],
+    )
+    hint = req.system_prompt
+    assert "当前场景需要根据用户请求选择合适的能力" in hint
+    assert "search, calendar" in hint
+    assert "transfer_to_search, transfer_to_code" in hint
+    assert "AstrBot persona" in hint
+    assert "Other plugin prompt" in hint
+    assert req.extra_user_content_parts == []
+
+
+def test_custom_routing_template_replaces_only_supported_placeholders():
+    rendered = render_routing_prompt(
+        'tools={tools}; agents={subagents}; json={"keep": true}',
+        recommended_tools=["search"],
+        recommended_subagents=[],
+    )
+    assert rendered == 'tools=search; agents=(无); json={"keep": true}'
+
+
+def test_append_system_prompt_is_idempotent_for_this_plugin_section():
+    req = SimpleNamespace(system_prompt="persona")
+    append_system_prompt(req, "recommendation")
+    first = req.system_prompt
+    append_system_prompt(req, "recommendation")
+    assert req.system_prompt == first
 
 
 def test_state_excludes_system_prompt_and_tool_schema():

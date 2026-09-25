@@ -27,25 +27,26 @@ from .decision.proactive import ProactiveRecord, ProactiveState
 from .decision.providers.systemone import SystemOneProvider
 from .decision.routing import (
     DECISION_TOOL_NAME,
+    DEFAULT_MAIN_LLM_POST_PROMPT,
     add_routing_hint,
     choose_tools,
     compact_answer,
     decision_tool_parameters,
-    recommendation_from_answer,
+    recommendations_from_noul,
 )
 
 PLUGIN_NAME = "astrbot_plugin_decision"
 DEFAULT_POLICY = (
-    "Make fast, conservative decisions from the supplied state. "
-    "Use only the candidates present in the question. Do not invent names, "
-    "execute tools, or write a final answer."
+    "你是一个只负责结构化判断的 Decision Model。\n"
+    "请严格根据当前场景、用户请求和候选能力逐项判断。\n"
+    "不要生成最终回答，不要执行工具，不要发明候选名称。"
 )
 
 
 @register(
     PLUGIN_NAME,
     "yiyinfaith",
-    "AstrBot 智能决策引擎：工具预筛选、SubAgent 推荐、主动回复判断和结构化决策。",
+    "AstrBot 智能决策引擎：Tools 逐个过滤与推荐、SubAgent 逐个推荐、主动回复判断和结构化决策。",
     "0.1.0",
 )
 class DecisionPlugin(Star):
@@ -147,7 +148,20 @@ class DecisionPlugin(Star):
         return value if isinstance(value, bool) else bool(value)
 
     def _policy(self) -> str:
+        configured = self.config.get("jev_pre_prompt")
+        if configured is not None and str(configured).strip():
+            return str(configured).strip()
+        # Keep old installations compatible while making the new field the
+        # canonical setting shown in the configuration UI.
         return str(self.config.get("decision_policy", "")).strip() or DEFAULT_POLICY
+
+    def _main_llm_post_prompt(self) -> str:
+        configured = self.config.get("main_llm_post_prompt")
+        if configured is None:
+            return DEFAULT_MAIN_LLM_POST_PROMPT
+        # An explicitly empty value is a supported way to disable this
+        # optional advisory section without disabling Tool filtering.
+        return str(configured)
 
     def _tool_list(self, req: ProviderRequest) -> list[Any]:
         return list(getattr(getattr(req, "func_tool", None), "tools", None) or [])
@@ -220,7 +234,9 @@ class DecisionPlugin(Star):
         if not self._bool("enable", True):
             return
         tool_set = self._ensure_request_toolset(req)
-        if not self._bool("tool_filter_enabled", True):
+        tool_filter_enabled = self._bool("tool_filter_enabled", True)
+        subagent_recommendation_enabled = self._bool("subagent_recommendation_enabled", True)
+        if not tool_filter_enabled and not subagent_recommendation_enabled:
             return
         original = list(tool_set.tools)
         if not original:
@@ -238,6 +254,11 @@ class DecisionPlugin(Star):
             for name in (self.config.get("always_keep_tools", []) or [])
             if str(name).strip()
         }
+        always_keep_recommend = {
+            str(name).strip()
+            for name in (self.config.get("always_keep_recommend_tools", []) or [])
+            if str(name).strip()
+        } & always_keep
         unknown_always_keep = always_keep - {
             str(getattr(tool, "name", "")) for tool in original if getattr(tool, "name", None)
         }
@@ -248,35 +269,36 @@ class DecisionPlugin(Star):
             )
         question_to_tool: dict[str, str] = {}
         questions: dict[str, dict[str, Any]] = {}
-        for index, tool in enumerate(ordinary):
-            name = str(getattr(tool, "name", ""))
-            qid = question_id("tool", name, index)
-            question_to_tool[qid] = name
-            questions[qid] = {
-                "type": "noul",
-                "instructions": (
-                    "Should this tool be made available to the main LLM for the current request? "
-                    "Favor recall when the tool could materially help."
-                ),
-            }
+        if tool_filter_enabled:
+            for index, tool in enumerate(ordinary):
+                name = str(getattr(tool, "name", ""))
+                qid = question_id("tool", name, index)
+                question_to_tool[qid] = name
+                questions[qid] = {
+                    "type": "noul",
+                    "instructions": (
+                        "Should this tool be available to and recommended to the main LLM "
+                        "for the current request? Return a high probability only when it "
+                        "could materially help; zero recommendations are allowed."
+                    ),
+                }
 
-        handoff_choice_id: str | None = None
-        if self._bool("subagent_recommendation_enabled", True) and handoffs:
-            handoff_choice_id = "subagent_recommendation"
-            criteria = {
-                str(getattr(tool, "name", "")): short_description(
-                    getattr(tool, "description", ""),
-                    self._int("tool_description_max_chars", 240),
-                )
-                for tool in handoffs
-                if getattr(tool, "name", None)
-            }
-            criteria["none"] = "Do not recommend delegating to a SubAgent."
-            questions[handoff_choice_id] = {
-                "type": "choice",
-                "instructions": "Which SubAgent is most worth considering first for this request?",
-                "criteria": criteria,
-            }
+        subagent_question_to_name: dict[str, str] = {}
+        if subagent_recommendation_enabled:
+            for index, tool in enumerate(handoffs):
+                name = str(getattr(tool, "name", ""))
+                if not name:
+                    continue
+                qid = question_id("subagent", name, index)
+                subagent_question_to_name[qid] = name
+                questions[qid] = {
+                    "type": "noul",
+                    "instructions": (
+                        "Should the main LLM consider delegating this request to this "
+                        "SubAgent? Return a high probability only when delegation could "
+                        "materially help; zero or multiple recommendations are allowed."
+                    ),
+                }
 
         decision_tool = self._decision_tool
         if not questions:
@@ -289,6 +311,8 @@ class DecisionPlugin(Star):
                 threshold=self._float("tool_noul_threshold", 0.2),
                 always_keep=always_keep,
                 decision_tool=decision_tool,
+                always_keep_recommend=always_keep_recommend,
+                filter_ordinary=tool_filter_enabled,
             )
             req.func_tool.tools = outcome.selected
             return
@@ -306,7 +330,9 @@ class DecisionPlugin(Star):
             return
 
         noul_answers = {
-            qid: answer for qid, answer in result.answers.items() if qid in question_to_tool
+            qid: answer
+            for qid, answer in result.answers.items()
+            if qid in question_to_tool or qid in subagent_question_to_name
         }
         outcome = choose_tools(
             original,
@@ -315,25 +341,34 @@ class DecisionPlugin(Star):
             threshold=min(1.0, max(0.0, self._float("tool_noul_threshold", 0.2))),
             always_keep=always_keep,
             decision_tool=decision_tool,
+            always_keep_recommend=always_keep_recommend,
+            filter_ordinary=tool_filter_enabled,
         )
-        recommendation = None
-        if handoff_choice_id and self._bool("inject_subagent_hint", True):
-            recommendation = recommendation_from_answer(
-                result.answers.get(handoff_choice_id),
-                {str(getattr(tool, "name", "")) for tool in handoffs},
-            )
-            if recommendation:
-                add_routing_hint(req, recommendation)
+        threshold = min(1.0, max(0.0, self._float("tool_noul_threshold", 0.2)))
+        recommended_subagents = recommendations_from_noul(
+            noul_answers,
+            subagent_question_to_name,
+            threshold=threshold,
+        )
+        recommended_tools = outcome.recommended_tools
+        add_routing_hint(
+            req,
+            template=self._main_llm_post_prompt(),
+            recommended_tools=recommended_tools,
+            recommended_subagents=recommended_subagents,
+        )
         req.func_tool.tools = outcome.selected
         if self._bool("debug_log", False):
             selected_names = [str(getattr(tool, "name", "")) for tool in outcome.selected]
             logger.debug(
-                "Decision tool filter: input_tools=%d selected=%d always_keep=%d subagents=%d recommendation=%s",
+                "Decision routing: input_tools=%d selected=%d always_keep=%d always_keep_recommend=%d subagents=%d recommended_tools=%s recommended_subagents=%s",
                 len(original),
                 len(selected_names),
                 len(always_keep),
+                len(always_keep_recommend),
                 len(handoffs),
-                recommendation or "none",
+                ",".join(recommended_tools) or "none",
+                ",".join(recommended_subagents) or "none",
             )
 
     async def _run_decision_tool(
@@ -578,11 +613,18 @@ class DecisionPlugin(Star):
     async def page_settings(self):
         from astrbot.api.web import json_response
 
+        always_keep = [str(item) for item in (self.config.get("always_keep_tools", []) or [])]
+        always_keep_recommend = [
+            str(item)
+            for item in (self.config.get("always_keep_recommend_tools", []) or [])
+            if str(item) in always_keep
+        ]
         return json_response(
             {
-                "always_keep_tools": [
-                    str(item) for item in (self.config.get("always_keep_tools", []) or [])
-                ],
+                "always_keep_tools": always_keep,
+                "always_keep_recommend_tools": always_keep_recommend,
+                "jev_pre_prompt": self._policy(),
+                "main_llm_post_prompt": self._main_llm_post_prompt(),
                 "description_max_chars": self._int("tool_description_max_chars", 240),
             }
         )
@@ -591,15 +633,59 @@ class DecisionPlugin(Star):
         from astrbot.api.web import error_response, json_response, request
 
         payload = await request.json(default={})
-        values = payload.get("always_keep_tools") if isinstance(payload, Mapping) else None
+        if not isinstance(payload, Mapping):
+            return error_response("request body must be an object", status_code=400)
+        values = payload.get("always_keep_tools")
+        recommendation_values = payload.get("always_keep_recommend_tools", [])
         if not isinstance(values, list) or any(not isinstance(item, str) for item in values):
             return error_response("always_keep_tools must be a string list", status_code=400)
-        cleaned = list(dict.fromkeys(item.strip() for item in values if item.strip()))[:500]
+        if not isinstance(recommendation_values, list) or any(
+            not isinstance(item, str) for item in recommendation_values
+        ):
+            return error_response(
+                "always_keep_recommend_tools must be a string list", status_code=400
+            )
+        jev_pre_prompt = payload.get("jev_pre_prompt")
+        main_llm_post_prompt = payload.get("main_llm_post_prompt")
+        if jev_pre_prompt is not None and not isinstance(jev_pre_prompt, str):
+            return error_response("jev_pre_prompt must be a string", status_code=400)
+        if main_llm_post_prompt is not None and not isinstance(main_llm_post_prompt, str):
+            return error_response("main_llm_post_prompt must be a string", status_code=400)
+        available = {
+            str(getattr(tool, "name", ""))
+            for tool in self.context.get_llm_tool_manager().func_list
+            if getattr(tool, "name", None) and getattr(tool, "name", None) != DECISION_TOOL_NAME
+        }
+        cleaned = list(
+            dict.fromkeys(
+                item.strip() for item in values if item.strip() and item.strip() in available
+            )
+        )[:500]
+        cleaned_recommend = list(
+            dict.fromkeys(
+                item.strip()
+                for item in recommendation_values
+                if item.strip() in cleaned and item.strip() in available
+            )
+        )[:500]
         self.config["always_keep_tools"] = cleaned
+        self.config["always_keep_recommend_tools"] = cleaned_recommend
+        if jev_pre_prompt is not None:
+            self.config["jev_pre_prompt"] = jev_pre_prompt[:50000]
+        if main_llm_post_prompt is not None:
+            self.config["main_llm_post_prompt"] = main_llm_post_prompt[:50000]
         save = getattr(self.config, "save_config", None)
         if callable(save):
             save()
-        return json_response({"saved": True, "always_keep_tools": cleaned})
+        return json_response(
+            {
+                "saved": True,
+                "always_keep_tools": cleaned,
+                "always_keep_recommend_tools": cleaned_recommend,
+                "jev_pre_prompt": self._policy(),
+                "main_llm_post_prompt": self._main_llm_post_prompt(),
+            }
+        )
 
 
 def _safe_error(error: BaseException) -> str:

@@ -2,12 +2,23 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .context import is_handoff_tool
 
 DECISION_TOOL_NAME = "decision_evaluate"
+DEFAULT_MAIN_LLM_POST_PROMPT = """<decision_routing_hint>
+当前场景需要根据用户请求选择合适的能力。
+推荐你优先考虑使用以下 Tools：{tools}
+如果确有必要委派，推荐你考虑以下 SubAgents：{subagents}
+
+以上是 Decision Engine 根据当前场景给出的推荐；你仍需自行判断是否调用、调用哪些参数，以及是否委派。
+推荐列表可以为空，也可以同时包含多个候选。
+</decision_routing_hint>"""
+ROUTING_HINT_TEMPLATE = DEFAULT_MAIN_LLM_POST_PROMPT
+ROUTING_HINT_MARKER = "<astrbot_plugin_decision_routing>"
+ROUTING_HINT_END_MARKER = "</astrbot_plugin_decision_routing>"
 
 
 @dataclass(slots=True)
@@ -15,7 +26,7 @@ class RoutingOutcome:
     selected: list[Any]
     handoffs: list[Any]
     decision_tool: Any | None
-    recommendation: str | None = None
+    recommended_tools: list[str] = field(default_factory=list)
 
 
 def choose_tools(
@@ -26,11 +37,22 @@ def choose_tools(
     threshold: float,
     always_keep: set[str],
     decision_tool: Any | None,
+    always_keep_recommend: set[str] | None = None,
+    filter_ordinary: bool = True,
 ) -> RoutingOutcome:
-    """Filter only ordinary tools while preserving original order and permission."""
+    """Route tools while keeping SubAgents available for advisory recommendations.
+
+    Ordinary tools are filtered by their per-tool Noul answer when
+    ``filter_ordinary`` is enabled. Handoff tools are always retained and are
+    never filtered here. ``always_keep_recommend`` is intentionally separate
+    from ``always_keep``: a manually preserved tool may be retained without
+    being recommended to the main LLM.
+    """
 
     final: list[Any] = []
     handoffs: list[Any] = []
+    recommended_tools: list[str] = []
+    always_keep_recommend = always_keep_recommend or set()
     seen: set[str] = set()
     for tool in original_tools:
         name = str(getattr(tool, "name", ""))
@@ -44,7 +66,9 @@ def choose_tools(
             final.append(tool)
             continue
         keep = name in always_keep
-        if not keep:
+        if not filter_ordinary:
+            keep = True
+        elif not keep:
             matching_ids = [qid for qid, tool_name in question_to_tool.items() if tool_name == name]
             keep = any(
                 isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
@@ -54,47 +78,111 @@ def choose_tools(
             )
         if keep:
             final.append(tool)
+        if name in always_keep and name in always_keep_recommend:
+            recommended_tools.append(name)
+        elif filter_ordinary and keep and name not in always_keep:
+            matching_ids = [qid for qid, tool_name in question_to_tool.items() if tool_name == name]
+            if any(
+                isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
+                and not isinstance(noul_answers.get(qid, {}).get("noul"), bool)
+                and noul_answers[qid]["noul"] >= threshold
+                for qid in matching_ids
+            ):
+                recommended_tools.append(name)
 
     if decision_tool is not None and all(
         getattr(tool, "name", None) != DECISION_TOOL_NAME for tool in final
     ):
         final.append(decision_tool)
-    return RoutingOutcome(selected=final, handoffs=handoffs, decision_tool=decision_tool)
-
-
-def recommendation_from_answer(
-    answer: Mapping[str, Any] | None,
-    allowed_names: set[str],
-) -> str | None:
-    if not answer:
-        return None
-    choice = answer.get("choice")
-    if not isinstance(choice, str) or choice in {"none", "", "null"}:
-        return None
-    return choice if choice in allowed_names else None
-
-
-def add_routing_hint(req: Any, recommendation: str) -> None:
-    text = (
-        "<decision_routing_hint>\n"
-        "Decision Engine recommends considering subagent: "
-        f"{recommendation}\n\n"
-        "This is advisory only. You may choose another subagent or not delegate. "
-        "If you delegate, formulate the actual task yourself and call the appropriate handoff tool.\n"
-        "</decision_routing_hint>"
+    return RoutingOutcome(
+        selected=final,
+        handoffs=handoffs,
+        decision_tool=decision_tool,
+        recommended_tools=recommended_tools,
     )
-    try:
-        from astrbot.core.agent.message import TextPart
 
-        req.extra_user_content_parts.append(TextPart(text=text).mark_as_temp())
-    except Exception:
-        # This fallback is useful for isolated unit tests and older compatible
-        # runtimes; AstrBot 4.28.1 takes the TextPart path above.
-        parts = getattr(req, "extra_user_content_parts", None)
-        if parts is None:
-            req.extra_user_content_parts = []
-            parts = req.extra_user_content_parts
-        parts.append({"type": "text", "text": text, "_no_save": True})
+
+def recommendations_from_noul(
+    noul_answers: Mapping[str, Mapping[str, Any]],
+    question_to_name: Mapping[str, str],
+    *,
+    threshold: float,
+) -> list[str]:
+    """Return every candidate whose individual Noul answer passes ``threshold``.
+
+    The function deliberately does not choose a single winner. It can return
+    zero, one, or many names while preserving the order of the question map.
+    """
+
+    recommendations: list[str] = []
+    seen: set[str] = set()
+    for question_id, name in question_to_name.items():
+        if not name or name in seen:
+            continue
+        answer = noul_answers.get(question_id, {})
+        value = answer.get("noul") if isinstance(answer, Mapping) else None
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= threshold:
+            recommendations.append(name)
+            seen.add(name)
+    return recommendations
+
+
+def render_routing_prompt(
+    template: str,
+    *,
+    recommended_tools: Sequence[str] = (),
+    recommended_subagents: Sequence[str] = (),
+) -> str:
+    """Render the configurable post-decision prompt without interpreting other braces."""
+
+    tools_text = ", ".join(dict.fromkeys(str(name) for name in recommended_tools if name))
+    subagents_text = ", ".join(dict.fromkeys(str(name) for name in recommended_subagents if name))
+    # Deliberately use targeted replacement rather than str.format: users may
+    # put their own JSON/schema braces in the editable prompt.
+    return (
+        str(template)
+        .replace("{tools}", tools_text or "(无)")
+        .replace("{subagents}", subagents_text or "(无)")
+    )
+
+
+def append_system_prompt(req: Any, text: str) -> None:
+    """Append one plugin-owned system section while preserving all existing text."""
+
+    text = str(text or "").strip()
+    if not text:
+        return
+    current = str(getattr(req, "system_prompt", "") or "")
+    # A request should normally pass this hook once, but this guard keeps a
+    # retry or nested invocation from duplicating the same routing section.
+    if ROUTING_HINT_MARKER in current:
+        return
+    section = f"{ROUTING_HINT_MARKER}\n{text}\n{ROUTING_HINT_END_MARKER}"
+    req.system_prompt = f"{current}\n\n{section}" if current else section
+
+
+def add_routing_hint(
+    req: Any,
+    recommendation: str | None = None,
+    *,
+    template: str = DEFAULT_MAIN_LLM_POST_PROMPT,
+    recommended_tools: Sequence[str] = (),
+    recommended_subagents: Sequence[str] = (),
+) -> None:
+    """Append an advisory hint to the main LLM system prompt.
+
+    ``recommendation`` remains accepted for compatibility with older callers;
+    it is treated as a single SubAgent recommendation.
+    """
+
+    if recommendation and not recommended_subagents:
+        recommended_subagents = (recommendation,)
+    text = render_routing_prompt(
+        template,
+        recommended_tools=recommended_tools,
+        recommended_subagents=recommended_subagents,
+    )
+    append_system_prompt(req, text)
 
 
 def decision_tool_parameters() -> dict[str, Any]:
