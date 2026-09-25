@@ -378,28 +378,93 @@ def test_each_noul_can_recommend_zero_one_or_many_subagents():
     )
 
 
-def test_subagents_are_never_filtered_and_ordinary_tools_can_be_recommended():
+def test_filter_switches_keep_all_or_filter_each_candidate_independently():
     ordinary = SimpleNamespace(name="ordinary", description="ordinary", active=True)
     dropped = SimpleNamespace(name="dropped", description="dropped", active=True)
     handoff_a = type("HandoffTool", (), {"name": "agent_a", "description": "a"})()
     handoff_b = type("HandoffTool", (), {"name": "agent_b", "description": "b"})()
     decision = SimpleNamespace(name="decision_evaluate", description="decision")
-    outcome = choose_tools(
+    answers = {
+        "ordinary_q": {"noul": 0.8},
+        "dropped_q": {"noul": 0.1},
+        "agent_a_q": {"noul": 0.8},
+        "agent_b_q": {"noul": 0.1},
+    }
+    ordinary_questions = {"ordinary_q": "ordinary", "dropped_q": "dropped"}
+    handoff_questions = {"agent_a_q": "agent_a", "agent_b_q": "agent_b"}
+
+    keep_all = choose_tools(
         [ordinary, dropped, handoff_a, handoff_b],
-        {"ordinary_q": {"noul": 0.8}, "dropped_q": {"noul": 0.1}},
-        {"ordinary_q": "ordinary", "dropped_q": "dropped"},
+        answers,
+        ordinary_questions,
         threshold=0.2,
         always_keep=set(),
         decision_tool=decision,
+        question_to_handoff=handoff_questions,
+        filter_ordinary=False,
+        filter_handoffs=False,
     )
-    assert [tool.name for tool in outcome.selected] == [
+    assert [tool.name for tool in keep_all.selected] == [
+        "ordinary",
+        "dropped",
+        "agent_a",
+        "agent_b",
+        "decision_evaluate",
+    ]
+    assert keep_all.recommended_tools == ["ordinary"]
+
+    filter_tools_only = choose_tools(
+        [ordinary, dropped, handoff_a, handoff_b],
+        answers,
+        ordinary_questions,
+        threshold=0.2,
+        always_keep=set(),
+        decision_tool=decision,
+        question_to_handoff=handoff_questions,
+        filter_ordinary=True,
+        filter_handoffs=False,
+    )
+    assert [tool.name for tool in filter_tools_only.selected] == [
         "ordinary",
         "agent_a",
         "agent_b",
         "decision_evaluate",
     ]
-    assert [tool.name for tool in outcome.handoffs] == ["agent_a", "agent_b"]
-    assert outcome.recommended_tools == ["ordinary"]
+    assert filter_tools_only.recommended_tools == ["ordinary"]
+
+    filter_both = choose_tools(
+        [ordinary, dropped, handoff_a, handoff_b],
+        answers,
+        ordinary_questions,
+        threshold=0.2,
+        always_keep=set(),
+        decision_tool=decision,
+        question_to_handoff=handoff_questions,
+        filter_ordinary=True,
+        filter_handoffs=True,
+    )
+    assert [tool.name for tool in filter_both.selected] == [
+        "ordinary",
+        "agent_a",
+        "decision_evaluate",
+    ]
+    assert filter_both.recommended_tools == ["ordinary"]
+
+
+def test_always_keep_without_recommendation_stays_silent_even_when_jev_selects_it():
+    keep = SimpleNamespace(name="keep", description="keep", active=True)
+    decision = SimpleNamespace(name="decision_evaluate", description="decision")
+    outcome = choose_tools(
+        [keep],
+        {"keep_q": {"noul": 0.9}},
+        {"keep_q": "keep"},
+        threshold=0.2,
+        always_keep={"keep"},
+        decision_tool=decision,
+        always_keep_recommend=set(),
+    )
+    assert [tool.name for tool in outcome.selected] == ["keep", "decision_evaluate"]
+    assert outcome.recommended_tools == []
 
 
 def test_recommendation_is_appended_to_system_prompt_and_preserves_other_plugins():
@@ -452,14 +517,18 @@ def test_state_excludes_system_prompt_and_tool_schema():
     assert "parameters" not in state
 
 
-def test_public_schema_hides_custom_page_prompts_and_has_no_redundant_switches():
+def test_public_schema_hides_custom_page_prompts_and_page_switches():
     schema = json.loads(
         (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
     )
     assert schema["jev_pre_prompt"]["invisible"] is True
     assert schema["main_llm_post_prompt"]["invisible"] is True
+    assert schema["tool_filter_enabled"]["invisible"] is True
+    assert schema["tool_filter_enabled"]["default"] is True
+    assert schema["subagent_filter_enabled"]["invisible"] is True
+    assert schema["subagent_filter_enabled"]["default"] is False
     assert "decision_policy" not in schema
-    assert "tool_filter_enabled" not in schema
+    assert "subagent_recommendation_enabled" not in schema
 
 
 def test_context_limits_history_and_truncates_tool_results():

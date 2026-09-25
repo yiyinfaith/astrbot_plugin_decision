@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Decision Engine · Tools &amp; Recommendations</title>
+    <title>Decision Engine · Tools &amp; SubAgents</title>
     <style>
       :root { color-scheme: light dark; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
       body { margin: 0; padding: 24px; background: Canvas; color: CanvasText; }
@@ -30,19 +30,34 @@
       .prompt-field { display: grid; gap: 6px; }
       .prompt-field label { font-weight: 650; }
       .prompt-field small { opacity: .72; }
+      .switches { display: grid; gap: 10px; margin: 18px 0 22px; }
+      .switch-option { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 10px; }
+      .switch-option input { margin-top: 3px; accent-color: #4f46e5; }
+      .switch-option span { display: grid; gap: 3px; }
+      .switch-option small { opacity: .72; }
       textarea { width: 100%; min-height: 150px; box-sizing: border-box; resize: vertical; padding: 10px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, CanvasText 30%, transparent); background: Canvas; color: CanvasText; font: 13px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
     </style>
   </head>
   <body>
     <main>
-      <h1>Tools 过滤与推荐</h1>
-      <p>普通 Tool 会由 Decision Model 逐个判断并过滤、推荐；SubAgent 始终保留，只逐个判断是否推荐。手动勾选的 Tool 可以选择“始终保留”以及是否额外推荐给主 LLM。</p>
+      <h1>Tools 与 SubAgent 过滤和推荐</h1>
+      <p>Decision Model 会逐个判断普通 Tool 和 SubAgent，并把通过判断的候选推荐给主 LLM。下面的开关分别控制主 LLM 能看到的是全部候选，还是过滤后的候选；推荐提示仍然只列出 Jev 选中的候选。</p>
       <div class="bar">
         <input id="search" type="search" placeholder="搜索工具名称或描述" />
         <button id="selectVisible" class="secondary">全选当前结果</button>
         <button id="clearVisible" class="secondary">取消当前结果</button>
         <button id="save">保存</button>
       </div>
+      <section class="switches">
+        <label class="switch-option">
+          <input id="toolFilterEnabled" type="checkbox" checked />
+          <span><strong>过滤普通 Tools</strong><small>开启后主 LLM 只能看到 Jev 判断通过的普通 Tool；关闭后保留全部普通 Tool，但仍生成推荐。</small></span>
+        </label>
+        <label class="switch-option">
+          <input id="subagentFilterEnabled" type="checkbox" />
+          <span><strong>过滤 SubAgents</strong><small>开启后主 LLM 只能看到 Jev 判断通过的 SubAgent；关闭后保留全部 SubAgent，但仍生成推荐。</small></span>
+        </label>
+      </section>
       <section class="prompts">
         <div class="prompt-field">
           <label for="jevPrePrompt">Jev 判断前提示词</label>
@@ -68,6 +83,8 @@
       let selectedRecommend = new Set();
       const jevPrePrompt = document.getElementById("jevPrePrompt");
       const mainLlmPostPrompt = document.getElementById("mainLlmPostPrompt");
+      const toolFilterEnabled = document.getElementById("toolFilterEnabled");
+      const subagentFilterEnabled = document.getElementById("subagentFilterEnabled");
 
       function visibleTools() {
         const query = search.value.trim().toLowerCase();
@@ -101,13 +118,13 @@
           recommendCheckbox.type = "checkbox";
           recommendCheckbox.checked = selectedRecommend.has(tool.name) && selectedKeep.has(tool.name);
           recommendCheckbox.disabled = !tool.active || tool.handoff || !keepCheckbox.checked;
-          recommendCheckbox.title = tool.handoff ? "SubAgent 由逐个 Noul 自动推荐" : "仅对始终保留的 Tool 生效";
+          recommendCheckbox.title = tool.handoff ? "SubAgent 由 Jev 逐个判断并自动推荐" : "仅对始终保留的 Tool 生效";
           recommendCheckbox.addEventListener("change", () => recommendCheckbox.checked ? selectedRecommend.add(tool.name) : selectedRecommend.delete(tool.name));
           recommendLabel.append(recommendCheckbox, document.createTextNode("推荐主 LLM"));
           controls.append(keepLabel, recommendLabel);
           const text = document.createElement("span");
           text.className = "tool-info";
-          text.innerHTML = `<span class="name"></span>${tool.handoff ? '<span class="tag">SubAgent · 仅推荐</span>' : ''}<span class="desc"></span>`;
+          text.innerHTML = `<span class="name"></span>${tool.handoff ? '<span class="tag">SubAgent · 自动判断</span>' : ''}<span class="desc"></span>`;
           text.querySelector(".name").textContent = tool.name;
           text.querySelector(".desc").textContent = tool.description + (tool.active ? "" : "（未激活）");
           label.append(controls, text);
@@ -126,6 +143,8 @@
             always_keep_recommend_tools: [...selectedRecommend],
             jev_pre_prompt: jevPrePrompt.value,
             main_llm_post_prompt: mainLlmPostPrompt.value,
+            tool_filter_enabled: toolFilterEnabled.checked,
+            subagent_filter_enabled: subagentFilterEnabled.checked,
           });
           status.textContent = "已保存";
         }
@@ -139,6 +158,8 @@
         selectedRecommend = new Set(settings.always_keep_recommend_tools || []);
         jevPrePrompt.value = settings.jev_pre_prompt || "";
         mainLlmPostPrompt.value = settings.main_llm_post_prompt || "";
+        toolFilterEnabled.checked = settings.tool_filter_enabled !== false;
+        subagentFilterEnabled.checked = settings.subagent_filter_enabled === true;
         render();
       } catch (error) { status.textContent = `加载失败：${error.message}`; list.textContent = "无法读取工具列表"; }
     </script>

@@ -229,7 +229,8 @@ class DecisionPlugin(Star):
         if not self._bool("enable", True):
             return
         tool_set = self._ensure_request_toolset(req)
-        subagent_recommendation_enabled = self._bool("subagent_recommendation_enabled", True)
+        tool_filter_enabled = self._bool("tool_filter_enabled", True)
+        subagent_filter_enabled = self._bool("subagent_filter_enabled", False)
         original = list(tool_set.tools)
         if not original:
             return
@@ -275,21 +276,20 @@ class DecisionPlugin(Star):
             }
 
         subagent_question_to_name: dict[str, str] = {}
-        if subagent_recommendation_enabled:
-            for index, tool in enumerate(handoffs):
-                name = str(getattr(tool, "name", ""))
-                if not name:
-                    continue
-                qid = question_id("subagent", name, index)
-                subagent_question_to_name[qid] = name
-                questions[qid] = {
-                    "type": "noul",
-                    "instructions": (
-                        "Should the main LLM consider delegating this request to this "
-                        "SubAgent? Return a high probability only when delegation could "
-                        "materially help; zero or multiple recommendations are allowed."
-                    ),
-                }
+        for index, tool in enumerate(handoffs):
+            name = str(getattr(tool, "name", ""))
+            if not name:
+                continue
+            qid = question_id("subagent", name, index)
+            subagent_question_to_name[qid] = name
+            questions[qid] = {
+                "type": "noul",
+                "instructions": (
+                    "Should the main LLM consider delegating this request to this "
+                    "SubAgent? Return a high probability only when delegation could "
+                    "materially help; zero or multiple recommendations are allowed."
+                ),
+            }
 
         decision_tool = self._decision_tool
         if not questions:
@@ -303,6 +303,9 @@ class DecisionPlugin(Star):
                 always_keep=always_keep,
                 decision_tool=decision_tool,
                 always_keep_recommend=always_keep_recommend,
+                question_to_handoff=subagent_question_to_name,
+                filter_ordinary=tool_filter_enabled,
+                filter_handoffs=subagent_filter_enabled,
             )
             req.func_tool.tools = outcome.selected
             return
@@ -332,6 +335,9 @@ class DecisionPlugin(Star):
             always_keep=always_keep,
             decision_tool=decision_tool,
             always_keep_recommend=always_keep_recommend,
+            question_to_handoff=subagent_question_to_name,
+            filter_ordinary=tool_filter_enabled,
+            filter_handoffs=subagent_filter_enabled,
         )
         threshold = min(1.0, max(0.0, self._float("tool_noul_threshold", 0.2)))
         recommended_subagents = recommendations_from_noul(
@@ -548,7 +554,7 @@ class DecisionPlugin(Star):
                 f"provider={self.config.get('provider', 'systemone_jev')}\n"
                 f"endpoint={self.config.get('base_url', '')}{self.config.get('systemone_path', '/v1/systemone')}\n"
                 f"model={self.config.get('model', 'jev-latest')}\n"
-                f"tool_filter=always_on threshold={self._float('tool_noul_threshold', 0.2):.3f}\n"
+                f"tool_filter={self._bool('tool_filter_enabled', True)} subagent_filter={self._bool('subagent_filter_enabled', False)} threshold={self._float('tool_noul_threshold', 0.2):.3f}\n"
                 f"registered_tools={len(tools)} handoffs={handoffs} always_keep={len(self.config.get('always_keep_tools', []) or [])}\n"
                 f"calls={self._call_count} failures={self._failure_count} latency_ms={self._last_call_latency_ms or 0:.1f}"
             )
@@ -614,6 +620,8 @@ class DecisionPlugin(Star):
                 "always_keep_recommend_tools": always_keep_recommend,
                 "jev_pre_prompt": self._policy(),
                 "main_llm_post_prompt": self._main_llm_post_prompt(),
+                "tool_filter_enabled": self._bool("tool_filter_enabled", True),
+                "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
                 "description_max_chars": self._int("tool_description_max_chars", 240),
             }
         )
@@ -636,10 +644,16 @@ class DecisionPlugin(Star):
             )
         jev_pre_prompt = payload.get("jev_pre_prompt")
         main_llm_post_prompt = payload.get("main_llm_post_prompt")
+        tool_filter_enabled = payload.get("tool_filter_enabled")
+        subagent_filter_enabled = payload.get("subagent_filter_enabled")
         if jev_pre_prompt is not None and not isinstance(jev_pre_prompt, str):
             return error_response("jev_pre_prompt must be a string", status_code=400)
         if main_llm_post_prompt is not None and not isinstance(main_llm_post_prompt, str):
             return error_response("main_llm_post_prompt must be a string", status_code=400)
+        if tool_filter_enabled is not None and not isinstance(tool_filter_enabled, bool):
+            return error_response("tool_filter_enabled must be a boolean", status_code=400)
+        if subagent_filter_enabled is not None and not isinstance(subagent_filter_enabled, bool):
+            return error_response("subagent_filter_enabled must be a boolean", status_code=400)
         available = {
             str(getattr(tool, "name", ""))
             for tool in self.context.get_llm_tool_manager().func_list
@@ -663,6 +677,10 @@ class DecisionPlugin(Star):
             self.config["jev_pre_prompt"] = jev_pre_prompt[:50000]
         if main_llm_post_prompt is not None:
             self.config["main_llm_post_prompt"] = main_llm_post_prompt[:50000]
+        if tool_filter_enabled is not None:
+            self.config["tool_filter_enabled"] = tool_filter_enabled
+        if subagent_filter_enabled is not None:
+            self.config["subagent_filter_enabled"] = subagent_filter_enabled
         save = getattr(self.config, "save_config", None)
         if callable(save):
             save()
@@ -673,6 +691,8 @@ class DecisionPlugin(Star):
                 "always_keep_recommend_tools": cleaned_recommend,
                 "jev_pre_prompt": self._policy(),
                 "main_llm_post_prompt": self._main_llm_post_prompt(),
+                "tool_filter_enabled": self._bool("tool_filter_enabled", True),
+                "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
             }
         )
 

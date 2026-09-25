@@ -38,13 +38,16 @@ def choose_tools(
     always_keep: set[str],
     decision_tool: Any | None,
     always_keep_recommend: set[str] | None = None,
+    question_to_handoff: Mapping[str, str] | None = None,
+    filter_ordinary: bool = True,
+    filter_handoffs: bool = False,
 ) -> RoutingOutcome:
-    """Route tools while keeping SubAgents available for advisory recommendations.
+    """Route ordinary Tools and handoffs according to independent filter switches.
 
-    Ordinary tools are filtered by their per-tool Noul answer. Handoff tools
-    are always retained and are never filtered here. ``always_keep_recommend``
-    is intentionally separate from ``always_keep``: a manually preserved tool
-    may be retained without being recommended to the main LLM.
+    Jev answers are always used to build recommendations. ``filter_ordinary``
+    and ``filter_handoffs`` only control what remains visible to the main LLM.
+    ``always_keep_recommend`` is intentionally separate from ``always_keep``:
+    a manually preserved tool may be retained without being recommended.
     """
 
     final: list[Any] = []
@@ -61,29 +64,40 @@ def choose_tools(
             continue
         if is_handoff_tool(tool):
             handoffs.append(tool)
-            final.append(tool)
+            keep = True
+            if filter_handoffs:
+                matching_ids = [
+                    qid
+                    for qid, handoff_name in (question_to_handoff or {}).items()
+                    if handoff_name == name
+                ]
+                keep = any(
+                    isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
+                    and not isinstance(noul_answers.get(qid, {}).get("noul"), bool)
+                    and noul_answers[qid]["noul"] >= threshold
+                    for qid in matching_ids
+                )
+            if keep:
+                final.append(tool)
             continue
         keep = name in always_keep
-        if not keep:
-            matching_ids = [qid for qid, tool_name in question_to_tool.items() if tool_name == name]
-            keep = any(
-                isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
-                and not isinstance(noul_answers.get(qid, {}).get("noul"), bool)
-                and noul_answers[qid]["noul"] >= threshold
-                for qid in matching_ids
-            )
+        matching_ids = [qid for qid, tool_name in question_to_tool.items() if tool_name == name]
+        selected_by_jev = any(
+            isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
+            and not isinstance(noul_answers.get(qid, {}).get("noul"), bool)
+            and noul_answers[qid]["noul"] >= threshold
+            for qid in matching_ids
+        )
+        if not keep and filter_ordinary:
+            keep = selected_by_jev
+        elif not keep:
+            keep = True
         if keep:
             final.append(tool)
         if name in always_keep and name in always_keep_recommend:
             recommended_tools.append(name)
-        elif keep and name not in always_keep:
-            matching_ids = [qid for qid, tool_name in question_to_tool.items() if tool_name == name]
-            if any(
-                isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
-                and not isinstance(noul_answers.get(qid, {}).get("noul"), bool)
-                and noul_answers[qid]["noul"] >= threshold
-                for qid in matching_ids
-            ):
+        elif selected_by_jev and name not in always_keep:
+            if name not in recommended_tools:
                 recommended_tools.append(name)
 
     if decision_tool is not None and all(
