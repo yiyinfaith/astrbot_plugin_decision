@@ -220,18 +220,20 @@ class DecisionPlugin(Star):
             return f"MCP · {mcp_server}"
         module_path = str(getattr(tool, "handler_module_path", "") or "").strip()
         if module_path:
-            getter = getattr(self.context, "get_registered_star", None)
+            getter = getattr(self.context, "get_all_stars", None)
             if callable(getter):
                 try:
-                    star = getter(module_path)
+                    stars = getter()
                 except (AttributeError, KeyError, TypeError, ValueError):
-                    star = None
-                if star is not None:
-                    return str(
-                        getattr(star, "display_name", None)
-                        or getattr(star, "name", None)
-                        or module_path
-                    )
+                    stars = []
+                for star in stars or []:
+                    star_module = str(getattr(star, "module_path", "") or "")
+                    if module_path == star_module or module_path.startswith(f"{star_module}."):
+                        return str(
+                            getattr(star, "display_name", None)
+                            or getattr(star, "name", None)
+                            or module_path
+                        )
             return module_path
         return "未知来源"
 
