@@ -276,11 +276,16 @@ class ProactiveState:
 
         current = self._session(session)
         now = time.monotonic()
+        # A zero limit is a useful per-window kill switch.  Treat negative
+        # values the same way instead of silently allowing one reply through
+        # because of a defensive ``max(1, ...)`` clamp.
+        if int(max_replies) <= 0:
+            return False
         if now - current.last_reply < max(0.0, cooldown_seconds):
             return False
         while current.reply_times and now - current.reply_times[0] > max(1.0, window_seconds):
             current.reply_times.popleft()
-        if len(current.reply_times) >= max(1, max_replies):
+        if len(current.reply_times) >= int(max_replies):
             return False
         current.reply_times.append(now)
         current.last_reply = now

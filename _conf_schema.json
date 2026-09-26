@@ -183,6 +183,7 @@
   "max_replies_per_window": {
     "type": "int",
     "description": "[主动对话] 单个会话窗口内最多主动回复次数",
+    "hint": "设为 0 时禁止主动回复，但仍会记录会话消息。",
     "default": 2
   },
   "proactive_history_max_messages": {

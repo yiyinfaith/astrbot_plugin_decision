@@ -727,6 +727,7 @@ def test_proactive_cooldown_and_window():
     state = ProactiveState()
     assert state.allow_reply("g", cooldown_seconds=60, window_seconds=600, max_replies=2)
     assert not state.allow_reply("g", cooldown_seconds=60, window_seconds=600, max_replies=2)
+    assert not state.allow_reply("disabled", cooldown_seconds=0, window_seconds=600, max_replies=0)
 
 
 def test_direct_prefix_matching_reserves_at_for_real_message_components():

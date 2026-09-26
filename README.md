@@ -56,7 +56,7 @@ Always Keep 页面位于插件详情页的 `settings` Plugin Page。页面通过
 
 `direct_reply_prefixes` 默认是 `/` 和 `@`。普通前缀命中时跳过主动对话 Jev；特殊值 `@` 只匹配消息链中真正的 `At` 机器人节点，不会把文本中的 `@用户名` 当作直接回复。命中后仅设置 AstrBot 原生的 wake 标记，由原生 Agent 回复，因此不会改变人格提示词，也不会接管上下文。这个正常的 Agent 请求随后仍会经过 Tools/SubAgent 的独立 Jev 过滤与推荐链，这是有意保留的一次能力决策；直接回复只跳过主动对话判断，不跳过 Tools/SubAgent 判断。`force_reply_when_summoned` 和 `proactive_alias` 可分别控制真正 @/回复机器人的行为和文本昵称识别；文本昵称本身仍交给 Jev 判断。
 
-每个会话有独立的异步锁、判断间隔、回复冷却、窗口上限、失败退避和最大历史；达到会话上限时清理最久未访问的空闲会话。Jev 请求失败后的退避默认是 0 秒，会在下一条白名单消息到达时立即允许重试；仍受同一会话的正常判断间隔限制。若 AstrBot 内置 `active_reply` 已开启，插件会停用自己的 ambient 判断并记录 warning；不会修改全局配置。某些平台只有 @Bot 消息才会推送给 Bot，插件无法判断未收到的群聊消息。
+每个会话有独立的异步锁、判断间隔、回复冷却、窗口上限、失败退避和最大历史；达到会话上限时清理最久未访问的空闲会话。`max_replies_per_window` 设为 0 时可在保留消息观测的同时禁止主动回复。Jev 请求失败后的退避默认是 0 秒，会在下一条白名单消息到达时立即允许重试；仍受同一会话的正常判断间隔限制。若 AstrBot 内置 `active_reply` 已开启，插件会停用自己的 ambient 判断并记录 warning；不会修改全局配置。某些平台只有 @Bot 消息才会推送给 Bot，插件无法判断未收到的群聊消息。
 
 主动对话使用 `event.request_llm()` 进入 AstrBot 原生 Agent 流程，故人格、原生上下文、备用模型和其他插件的 system prompt 处理仍由 AstrBot 负责。主动判断在 Jev 失败时保持 fail-closed；普通 Tool Filter 在失败时保留原始 Tool，保证主聊天能力不被决策服务故障拖垮。
 
