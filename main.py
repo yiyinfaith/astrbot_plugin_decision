@@ -190,6 +190,26 @@ class DecisionPlugin(Star):
             tool_set.add_tool(self._decision_tool)
         return tool_set
 
+    def _builtin_tool_objects(self) -> list[Any]:
+        """Return AstrBot's native tools without making them request-scoped."""
+
+        manager = self.context.get_llm_tool_manager()
+        iterator = getattr(manager, "iter_builtin_tools", None)
+        if not callable(iterator):
+            return []
+        try:
+            return list(iterator())
+        except (KeyError, RuntimeError, TypeError, ValueError):
+            logger.debug("Decision Engine could not enumerate AstrBot builtin tools.")
+            return []
+
+    def _builtin_tool_names(self) -> set[str]:
+        return {
+            str(getattr(tool, "name", "")).strip()
+            for tool in self._builtin_tool_objects()
+            if str(getattr(tool, "name", "")).strip()
+        }
+
     def _state_for_request(
         self,
         req: ProviderRequest,
@@ -259,6 +279,8 @@ class DecisionPlugin(Star):
             for name in (self.config.get("always_keep_tools", []) or [])
             if str(name).strip()
         }
+        if not self._bool("always_keep_tools_customized", False):
+            always_keep.update(self._builtin_tool_names())
         always_keep_recommend = {
             str(name).strip()
             for name in (self.config.get("always_keep_recommend_tools", []) or [])
@@ -787,23 +809,42 @@ class DecisionPlugin(Star):
         from astrbot.api.web import json_response
 
         tools = []
-        decision_tool_seen = False
+        seen_names: set[str] = set()
         for tool in self.context.get_llm_tool_manager().func_list:
-            if getattr(tool, "name", None) == DECISION_TOOL_NAME:
-                decision_tool_seen = True
+            name = str(getattr(tool, "name", ""))
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
             tools.append(
                 {
-                    "name": str(getattr(tool, "name", "")),
+                    "name": name,
                     "description": short_description(
                         getattr(tool, "description", ""),
                         self._int("tool_description_max_chars", 240),
                     ),
                     "handoff": is_handoff_tool(tool),
                     "active": tool_is_active(tool),
-                    "builtin": getattr(tool, "name", None) == DECISION_TOOL_NAME,
+                    "builtin": name == DECISION_TOOL_NAME,
                 }
             )
-        if not decision_tool_seen:
+        for tool in self._builtin_tool_objects():
+            name = str(getattr(tool, "name", ""))
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
+            tools.append(
+                {
+                    "name": name,
+                    "description": short_description(
+                        getattr(tool, "description", "") or "AstrBot 内置工具",
+                        self._int("tool_description_max_chars", 240),
+                    ),
+                    "handoff": False,
+                    "active": tool_is_active(tool),
+                    "builtin": True,
+                }
+            )
+        if DECISION_TOOL_NAME not in seen_names:
             tools.insert(
                 0,
                 {
@@ -820,6 +861,9 @@ class DecisionPlugin(Star):
         from astrbot.api.web import json_response
 
         always_keep = [str(item) for item in (self.config.get("always_keep_tools", []) or [])]
+        if not self._bool("always_keep_tools_customized", False):
+            always_keep.extend(sorted(self._builtin_tool_names()))
+        always_keep = list(dict.fromkeys(always_keep))
         always_keep_recommend = [
             str(item)
             for item in (self.config.get("always_keep_recommend_tools", []) or [])
@@ -871,6 +915,7 @@ class DecisionPlugin(Star):
             if getattr(tool, "name", None)
         }
         available.add(DECISION_TOOL_NAME)
+        available.update(self._builtin_tool_names())
         cleaned = list(
             dict.fromkeys(
                 item.strip() for item in values if item.strip() and item.strip() in available
@@ -885,6 +930,7 @@ class DecisionPlugin(Star):
         )[:500]
         self.config["always_keep_tools"] = cleaned
         self.config["always_keep_recommend_tools"] = cleaned_recommend
+        self.config["always_keep_tools_customized"] = True
         if jev_pre_prompt is not None:
             self.config["jev_pre_prompt"] = jev_pre_prompt[:50000]
         if main_llm_post_prompt is not None:

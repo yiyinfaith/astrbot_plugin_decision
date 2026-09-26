@@ -113,6 +113,12 @@
     "default": [],
     "invisible": true
   },
+  "always_keep_tools_customized": {
+    "type": "bool",
+    "description": "工具保留设置是否已由插件详情页保存过（内部状态）",
+    "default": false,
+    "invisible": true
+  },
   "proactive_reply_enabled": {
     "type": "bool",
     "description": "[主动对话] 对白名单内的群聊和私聊消息做 Jev 主动回复判断（默认关闭）",

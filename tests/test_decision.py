@@ -613,6 +613,8 @@ def test_public_schema_hides_custom_page_prompts_and_page_switches():
     assert schema["always_keep_tools"]["invisible"] is True
     assert schema["always_keep_tools"]["default"] == ["jev_decide"]
     assert schema["always_keep_recommend_tools"]["invisible"] is True
+    assert schema["always_keep_tools_customized"]["invisible"] is True
+    assert schema["always_keep_tools_customized"]["default"] is False
     assert "decision_policy" not in schema
     assert "subagent_recommendation_enabled" not in schema
     assert "enable" not in schema
