@@ -35,8 +35,15 @@
   },
   "retries": {
     "type": "int",
-    "description": "[全局设置] 超时、连接错误、429 和 5xx 的重试次数",
+    "description": "[全局设置] Jev 请求最大重试次数（不含首次请求；Tools、SubAgent、主动对话共用）",
+    "hint": "默认 1；设为 0 表示失败后不重试。",
     "default": 1
+  },
+  "retry_backoff_seconds": {
+    "type": "float",
+    "description": "[全局设置] Jev 失败后的重试间隔（秒；Tools、SubAgent、主动对话共用）",
+    "hint": "默认 0 秒，立即重试；主动对话连续失败时也使用此值作为基础退避间隔。",
+    "default": 0.0
   },
   "history_max_messages": {
     "type": "int",
@@ -201,12 +208,6 @@
     "description": "[主动对话] 判断后再次分析的最短间隔",
     "hint": "无论 Jev 建议回复还是继续观察，都会至少等待此时间，减少重复判断。",
     "default": 3.0
-  },
-  "proactive_failure_backoff_seconds": {
-    "type": "float",
-    "description": "[主动对话] Jev 失败后的退避时间",
-    "hint": "Jev 请求失败后等待多久再允许下一次主动判断；默认 0 秒，立即重试。",
-    "default": 0.0
   },
   "observation_timeout_seconds": {
     "type": "float",

@@ -268,6 +268,7 @@ async def test_provider_retries_server_error_then_succeeds():
         api_key="key",
         model="jev-latest",
         retries=1,
+        retry_backoff_sec=0,
         session=session,
     )
     result = await provider.evaluate(state="state", questions=questions)
@@ -301,6 +302,34 @@ async def test_provider_retry_is_immediate_and_default_timeout_is_five_seconds(m
     assert provider.timeout_sec == 5.0
     await provider.evaluate(state="state", questions=questions)
     assert sleeps == [0]
+
+
+@pytest.mark.asyncio
+async def test_provider_uses_configured_retry_backoff(monkeypatch):
+    questions = {"q": {"type": "noul", "instructions": "x"}}
+    session = FakeSession(
+        [
+            FakeResponse(500, {"error": "temporary"}),
+            FakeResponse(payload=answer_payload(questions)),
+        ]
+    )
+    sleeps = []
+
+    async def remember_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", remember_sleep)
+    provider = SystemOneProvider(
+        base_url="https://example.invalid",
+        path="/v1/systemone",
+        api_key="key",
+        model="jev-latest",
+        retries=1,
+        retry_backoff_sec=1.5,
+        session=session,
+    )
+    await provider.evaluate(state="state", questions=questions)
+    assert sleeps == [1.5]
 
 
 @pytest.mark.asyncio
@@ -635,7 +664,8 @@ def test_public_schema_hides_custom_page_prompts_and_page_switches():
     assert schema["proactive_whitelist"]["default"] == []
     assert "白名单" in schema["proactive_whitelist"]["description"]
     assert "analysis_on_mention_only" not in schema
-    assert schema["proactive_failure_backoff_seconds"]["default"] == 0.0
+    assert schema["retry_backoff_seconds"]["default"] == 0.0
+    assert "Tools、SubAgent、主动对话共用" in schema["retries"]["description"]
     assert schema["provider"]["description"].startswith("[全局设置]")
     assert schema["history_max_messages"]["description"].startswith("[全局设置]")
     assert schema["history_max_chars"]["description"].startswith("[全局设置]")

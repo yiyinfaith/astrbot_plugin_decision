@@ -32,6 +32,7 @@ class SystemOneProvider(DecisionProvider):
         model: str,
         timeout_sec: float = 5,
         retries: int = 1,
+        retry_backoff_sec: float = 0,
         chunk_size: int = 32,
         session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -41,6 +42,7 @@ class SystemOneProvider(DecisionProvider):
         self.model = model.strip() or "jev-latest"
         self.timeout_sec = max(1.0, float(timeout_sec))
         self.retries = max(0, int(retries))
+        self.retry_backoff_sec = max(0.0, float(retry_backoff_sec))
         self.chunk_size = max(2, int(chunk_size))
         self._session = session
         self._owns_session = session is None
@@ -279,9 +281,9 @@ class SystemOneProvider(DecisionProvider):
                 )
                 if not retryable or attempt >= self.retries:
                     raise
-                # Jev decisions are latency-sensitive and fail-closed. Retry
-                # immediately; the caller's timeout already bounds each try.
-                await asyncio.sleep(0)
+                # The interval is shared by Tools/SubAgents and proactive
+                # decisions. The caller's timeout still bounds each attempt.
+                await asyncio.sleep(self.retry_backoff_sec)
         raise DecisionProviderError("SystemOne request failed") from last_error
 
     async def close(self) -> None:

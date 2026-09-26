@@ -122,6 +122,7 @@ class DecisionPlugin(Star):
             model=str(self.config.get("model", "jev-latest")),
             timeout_sec=self._float("timeout_sec", 5.0),
             retries=self._int("retries", 1),
+            retry_backoff_sec=self._float("retry_backoff_seconds", 0.0),
         )
         # Create the reusable session during plugin initialization. A missing key
         # is reported only as a configuration warning and does not break AstrBot.
@@ -697,7 +698,7 @@ class DecisionPlugin(Star):
                     self.proactive.mark_analysis(
                         session,
                         success=False,
-                        no_reply_cooldown=self._float("proactive_failure_backoff_seconds", 0.0),
+                        no_reply_cooldown=self._float("retry_backoff_seconds", 0.0),
                     )
                     logger.debug(
                         "Decision Engine proactive check closed after failure: %s", _safe_error(exc)
