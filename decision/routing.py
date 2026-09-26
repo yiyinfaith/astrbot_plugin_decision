@@ -7,7 +7,7 @@ from typing import Any
 
 from .context import is_handoff_tool
 
-DECISION_TOOL_NAME = "decision_evaluate"
+DECISION_TOOL_NAME = "jev_decide"
 DEFAULT_MAIN_LLM_POST_PROMPT = """<decision_routing_hint>
 当前场景需要根据用户请求选择合适的能力。
 推荐你优先考虑使用以下 Tools：{tools}
@@ -61,6 +61,10 @@ def choose_tools(
             continue
         seen.add(name)
         if name == DECISION_TOOL_NAME or tool is decision_tool:
+            if name in always_keep:
+                final.append(tool)
+            if name in always_keep_recommend and name in always_keep:
+                recommended_tools.append(name)
             continue
         if is_handoff_tool(tool):
             handoffs.append(tool)
@@ -100,10 +104,17 @@ def choose_tools(
             if name not in recommended_tools:
                 recommended_tools.append(name)
 
-    if decision_tool is not None and all(
-        getattr(tool, "name", None) != DECISION_TOOL_NAME for tool in final
+    if (
+        decision_tool is not None
+        and DECISION_TOOL_NAME in always_keep
+        and all(getattr(tool, "name", None) != DECISION_TOOL_NAME for tool in final)
     ):
         final.append(decision_tool)
+        if (
+            DECISION_TOOL_NAME in always_keep_recommend
+            and DECISION_TOOL_NAME not in recommended_tools
+        ):
+            recommended_tools.append(DECISION_TOOL_NAME)
     return RoutingOutcome(
         selected=final,
         handoffs=handoffs,

@@ -380,21 +380,21 @@ def test_routing_always_keep_handoff_and_decision_tool():
     ordinary = SimpleNamespace(name="ordinary", description="ordinary", active=True)
     keep = SimpleNamespace(name="keep", description="keep", active=True)
     handoff = type("HandoffTool", (), {"name": "transfer_to_search", "description": "search"})()
-    decision = SimpleNamespace(name="decision_evaluate", description="decision")
+    decision = SimpleNamespace(name="jev_decide", description="decision")
     original = [ordinary, keep, handoff]
     outcome = choose_tools(
         original,
         {"q": {"noul": 0.1}},
         {"q": "ordinary"},
         threshold=0.2,
-        always_keep={"keep"},
+        always_keep={"keep", "jev_decide"},
         decision_tool=decision,
         always_keep_recommend={"keep"},
     )
     assert [tool.name for tool in outcome.selected] == [
         "keep",
         "transfer_to_search",
-        "decision_evaluate",
+        "jev_decide",
     ]
     assert [tool.name for tool in outcome.handoffs] == ["transfer_to_search"]
     assert outcome.recommended_tools == ["keep"]
@@ -419,7 +419,7 @@ def test_filter_switches_keep_all_or_filter_each_candidate_independently():
     dropped = SimpleNamespace(name="dropped", description="dropped", active=True)
     handoff_a = type("HandoffTool", (), {"name": "agent_a", "description": "a"})()
     handoff_b = type("HandoffTool", (), {"name": "agent_b", "description": "b"})()
-    decision = SimpleNamespace(name="decision_evaluate", description="decision")
+    decision = SimpleNamespace(name="jev_decide", description="decision")
     answers = {
         "ordinary_q": {"noul": 0.8},
         "dropped_q": {"noul": 0.1},
@@ -434,7 +434,7 @@ def test_filter_switches_keep_all_or_filter_each_candidate_independently():
         answers,
         ordinary_questions,
         threshold=0.2,
-        always_keep=set(),
+        always_keep={"jev_decide"},
         decision_tool=decision,
         question_to_handoff=handoff_questions,
         filter_ordinary=False,
@@ -445,7 +445,7 @@ def test_filter_switches_keep_all_or_filter_each_candidate_independently():
         "dropped",
         "agent_a",
         "agent_b",
-        "decision_evaluate",
+        "jev_decide",
     ]
     assert keep_all.recommended_tools == ["ordinary"]
 
@@ -454,7 +454,7 @@ def test_filter_switches_keep_all_or_filter_each_candidate_independently():
         answers,
         ordinary_questions,
         threshold=0.2,
-        always_keep=set(),
+        always_keep={"jev_decide"},
         decision_tool=decision,
         question_to_handoff=handoff_questions,
         filter_ordinary=True,
@@ -464,7 +464,7 @@ def test_filter_switches_keep_all_or_filter_each_candidate_independently():
         "ordinary",
         "agent_a",
         "agent_b",
-        "decision_evaluate",
+        "jev_decide",
     ]
     assert filter_tools_only.recommended_tools == ["ordinary"]
 
@@ -473,7 +473,7 @@ def test_filter_switches_keep_all_or_filter_each_candidate_independently():
         answers,
         ordinary_questions,
         threshold=0.2,
-        always_keep=set(),
+        always_keep={"jev_decide"},
         decision_tool=decision,
         question_to_handoff=handoff_questions,
         filter_ordinary=True,
@@ -482,25 +482,62 @@ def test_filter_switches_keep_all_or_filter_each_candidate_independently():
     assert [tool.name for tool in filter_both.selected] == [
         "ordinary",
         "agent_a",
-        "decision_evaluate",
+        "jev_decide",
     ]
     assert filter_both.recommended_tools == ["ordinary"]
 
 
 def test_always_keep_without_recommendation_stays_silent_even_when_jev_selects_it():
     keep = SimpleNamespace(name="keep", description="keep", active=True)
-    decision = SimpleNamespace(name="decision_evaluate", description="decision")
+    decision = SimpleNamespace(name="jev_decide", description="decision")
     outcome = choose_tools(
         [keep],
         {"keep_q": {"noul": 0.9}},
         {"keep_q": "keep"},
         threshold=0.2,
-        always_keep={"keep"},
+        always_keep={"keep", "jev_decide"},
         decision_tool=decision,
         always_keep_recommend=set(),
     )
-    assert [tool.name for tool in outcome.selected] == ["keep", "decision_evaluate"]
+    assert [tool.name for tool in outcome.selected] == ["keep", "jev_decide"]
     assert outcome.recommended_tools == []
+
+    opt_out = choose_tools(
+        [keep],
+        {},
+        {},
+        threshold=0.2,
+        always_keep=set(),
+        decision_tool=decision,
+        filter_ordinary=False,
+    )
+    assert [tool.name for tool in opt_out.selected] == ["keep"]
+
+
+def test_builtin_jev_tool_can_be_manually_recommended_from_page_settings():
+    decision = SimpleNamespace(name="jev_decide", description="decision")
+    outcome = choose_tools(
+        [],
+        {},
+        {},
+        threshold=0.2,
+        always_keep={"jev_decide"},
+        decision_tool=decision,
+        always_keep_recommend={"jev_decide"},
+    )
+    assert [tool.name for tool in outcome.selected] == ["jev_decide"]
+    assert outcome.recommended_tools == ["jev_decide"]
+
+    existing = choose_tools(
+        [decision],
+        {},
+        {},
+        threshold=0.2,
+        always_keep={"jev_decide"},
+        decision_tool=decision,
+        always_keep_recommend={"jev_decide"},
+    )
+    assert existing.recommended_tools == ["jev_decide"]
 
 
 def test_recommendation_is_appended_to_system_prompt_and_preserves_other_plugins():
@@ -565,15 +602,29 @@ def test_public_schema_hides_custom_page_prompts_and_page_switches():
     assert schema["subagent_filter_enabled"]["default"] is False
     assert schema["tools_subagents_decision_enabled"]["default"] is True
     assert "不影响主动对话" in schema["tools_subagents_decision_enabled"]["description"]
+    assert schema["proactive_whitelist"]["default"] == []
+    assert "白名单" in schema["proactive_whitelist"]["description"]
+    assert "analysis_on_mention_only" not in schema
+    assert schema["proactive_failure_backoff_seconds"]["default"] == 0.0
     assert schema["provider"]["description"].startswith("[全局设置]")
     assert schema["history_max_messages"]["description"].startswith("[全局设置]")
     assert schema["history_max_chars"]["description"].startswith("[全局设置]")
     assert schema["timeout_sec"]["default"] == 5.0
     assert schema["always_keep_tools"]["invisible"] is True
+    assert schema["always_keep_tools"]["default"] == ["jev_decide"]
     assert schema["always_keep_recommend_tools"]["invisible"] is True
     assert "decision_policy" not in schema
     assert "subagent_recommendation_enabled" not in schema
     assert "enable" not in schema
+
+
+def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
+    page = (Path(__file__).resolve().parents[1] / "pages" / "settings" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    assert "推荐给主 LLM" in page
+    assert "jev_decide" not in page
+    assert "tool.builtin === true" in page
 
 
 def test_proactive_schema_contains_direct_prefix_and_state_controls_only():
@@ -617,16 +668,16 @@ def test_decision_tool_schema_has_valid_array_items():
 def test_choose_tools_fail_open_shape_preserves_handoffs_and_decision_tool():
     ordinary = SimpleNamespace(name="ordinary", description="ordinary", active=True)
     handoff = type("HandoffTool", (), {"name": "transfer_to_search", "description": "search"})()
-    decision = SimpleNamespace(name="decision_evaluate", description="decision")
+    decision = SimpleNamespace(name="jev_decide", description="decision")
     outcome = choose_tools(
         [ordinary, handoff],
         {},
         {"ordinary": "missing-answer"},
         threshold=0.2,
-        always_keep=set(),
+        always_keep={"jev_decide"},
         decision_tool=decision,
     )
-    assert [tool.name for tool in outcome.selected] == ["transfer_to_search", "decision_evaluate"]
+    assert [tool.name for tool in outcome.selected] == ["transfer_to_search", "jev_decide"]
 
 
 def test_proactive_history_records_bot_and_user_roles():

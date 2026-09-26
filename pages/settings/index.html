@@ -101,6 +101,7 @@
           keepLabel.className = "check-option";
           const keepCheckbox = document.createElement("input");
           keepCheckbox.type = "checkbox";
+          const builtInDecisionTool = tool.builtin === true;
           keepCheckbox.checked = selectedKeep.has(tool.name);
           keepCheckbox.disabled = !tool.active;
           keepCheckbox.addEventListener("change", () => {
@@ -120,11 +121,11 @@
           recommendCheckbox.disabled = !tool.active || tool.handoff || !keepCheckbox.checked;
           recommendCheckbox.title = tool.handoff ? "SubAgent 由 Jev 逐个判断并自动推荐" : "仅对始终保留的 Tool 生效";
           recommendCheckbox.addEventListener("change", () => recommendCheckbox.checked ? selectedRecommend.add(tool.name) : selectedRecommend.delete(tool.name));
-          recommendLabel.append(recommendCheckbox, document.createTextNode("推荐主 LLM"));
+          recommendLabel.append(recommendCheckbox, document.createTextNode("推荐给主 LLM"));
           controls.append(keepLabel, recommendLabel);
           const text = document.createElement("span");
           text.className = "tool-info";
-          text.innerHTML = `<span class="name"></span>${tool.handoff ? '<span class="tag">SubAgent · 自动判断</span>' : ''}<span class="desc"></span>`;
+          text.innerHTML = `<span class="name"></span>${tool.handoff ? '<span class="tag">SubAgent · 自动判断</span>' : ''}${builtInDecisionTool ? '<span class="tag">内置决策工具</span>' : ''}<span class="desc"></span>`;
           text.querySelector(".name").textContent = tool.name;
           text.querySelector(".desc").textContent = tool.description + (tool.active ? "" : "（未激活）");
           label.append(controls, text);

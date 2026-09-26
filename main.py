@@ -179,7 +179,7 @@ class DecisionPlugin(Star):
         The Decision Engine tool is registered globally through ``Context``. A
         request can still arrive with ``func_tool=None`` when the active
         persona has no ordinary tools, so add a local ToolSet rather than
-        silently making ``decision_evaluate`` unavailable.
+        silently making ``jev_decide`` unavailable.
         """
 
         tool_set = getattr(req, "func_tool", None)
@@ -306,7 +306,7 @@ class DecisionPlugin(Star):
         decision_tool = self._decision_tool
         if not questions:
             # Even when there are no ordinary tools, the handoffs and the
-            # explicit Decision Engine tool must survive unchanged.
+            # explicitly kept Decision Engine tool are routed consistently.
             outcome = choose_tools(
                 original,
                 {},
@@ -327,11 +327,14 @@ class DecisionPlugin(Star):
             result = await self._evaluate(state=state, questions=questions)
         except Exception as exc:
             # Tool filtering is deliberately fail-open: leave the original
-            # request untouched, apart from making the built-in decision tool
-            # available when AstrBot supplied a tool set.
+            # request untouched. Respect an explicit decision-tool opt-out.
             logger.warning("Decision Engine tool filter unavailable: %s", _safe_error(exc))
-            if tool_set.get_tool(DECISION_TOOL_NAME) is None:
-                tool_set.add_tool(decision_tool)
+            if DECISION_TOOL_NAME not in always_keep:
+                req.func_tool.tools = [
+                    tool
+                    for tool in tool_set.tools
+                    if getattr(tool, "name", None) != DECISION_TOOL_NAME
+                ]
             return
 
         noul_answers = {
@@ -387,7 +390,7 @@ class DecisionPlugin(Star):
         choice_options: list[dict[str, str]] | None = None,
         score_levels: list[str] | None = None,
     ) -> str:
-        """Handler exposed to the main LLM as ``decision_evaluate``."""
+        """Handler exposed to the main LLM as ``jev_decide``."""
 
         if decision_type not in {"noul", "choice", "score"}:
             return "Decision Engine error: decision_type must be noul, choice, or score."
@@ -481,8 +484,41 @@ class DecisionPlugin(Star):
         ]
         return bool(aliases and any(alias in text for alias in aliases))
 
+    def _proactive_whitelist_allows(self, event: AstrMessageEvent) -> bool:
+        """Return whether this group or private conversation is allowlisted.
+
+        AstrBot's ``unified_msg_origin`` is accepted for deployments that need
+        platform-specific precision.  Raw group IDs and sender IDs are also
+        accepted, which keeps the common WebUI configuration simple.
+        """
+
+        configured = self.config.get("proactive_whitelist", [])
+        if not isinstance(configured, (list, tuple, set)):
+            return False
+        allowlist = {str(item).strip() for item in configured if str(item).strip()}
+        if not allowlist:
+            return False
+
+        candidates: set[str] = set()
+        try:
+            candidates.add(str(event.unified_msg_origin).strip())
+        except (AttributeError, TypeError):
+            pass
+        for method_name in ("get_group_id", "get_sender_id"):
+            method = getattr(event, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                value = method()
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if value is not None and str(value).strip():
+                candidates.add(str(value).strip())
+        return bool(candidates & allowlist)
+
     def _should_skip_proactive(self, event: AstrMessageEvent) -> bool:
-        if event.get_message_type() != MessageType.GROUP_MESSAGE:
+        message_type = event.get_message_type()
+        if message_type not in {MessageType.GROUP_MESSAGE, MessageType.FRIEND_MESSAGE}:
             return True
         if event.get_extra("handlers_parsed_params", {}):
             return True
@@ -494,14 +530,21 @@ class DecisionPlugin(Star):
         # native pipeline to handle it and do not issue a second Jev request.
         if bool(getattr(event, "is_at_or_wake_command", False)):
             return True
-        _, _, at_all, _ = self._message_address_flags(event)
-        return at_all
+        if message_type == MessageType.GROUP_MESSAGE:
+            _, _, at_all, _ = self._message_address_flags(event)
+            return at_all
+        return False
 
-    @filter.event_message_type(EventMessageType.GROUP_MESSAGE, priority=1000)
+    @filter.event_message_type(
+        EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE,
+        priority=1000,
+    )
     async def proactive_reply(self, event: AstrMessageEvent):
         """Use Jev to decide whether AstrBot's normal Agent should interject."""
 
         if not self._bool("proactive_reply_enabled", False):
+            return
+        if not self._proactive_whitelist_allows(event):
             return
         if self._should_skip_proactive(event):
             return
@@ -533,10 +576,6 @@ class DecisionPlugin(Star):
         at_self, reply_self, at_all, parse_failed = self._message_address_flags(event)
         explicit_summon = not parse_failed and not at_all and (at_self or reply_self)
         summoned = explicit_summon or self._proactive_summoned(event)
-        if self._bool("analysis_on_mention_only", False) and not summoned:
-            self.proactive.add(session, ProactiveRecord(sender_name, sender_id, text))
-            return
-
         async with self.proactive.lock_for(session):
             if not self.proactive.can_analyze(session):
                 return
@@ -595,7 +634,7 @@ class DecisionPlugin(Star):
                     self.proactive.mark_analysis(
                         session,
                         success=False,
-                        no_reply_cooldown=self._float("proactive_failure_backoff_seconds", 8.0),
+                        no_reply_cooldown=self._float("proactive_failure_backoff_seconds", 0.0),
                     )
                     logger.debug(
                         "Decision Engine proactive check closed after failure: %s", _safe_error(exc)
@@ -668,7 +707,12 @@ class DecisionPlugin(Star):
     async def remember_bot_response(self, event: AstrMessageEvent, response: Any) -> None:
         if not self._bool("proactive_reply_enabled", False):
             return
-        if event.get_message_type() != MessageType.GROUP_MESSAGE:
+        if event.get_message_type() not in {
+            MessageType.GROUP_MESSAGE,
+            MessageType.FRIEND_MESSAGE,
+        }:
+            return
+        if not self._proactive_whitelist_allows(event):
             return
         text = str(getattr(response, "completion_text", "") or "").strip()
         session = str(event.unified_msg_origin)
@@ -743,9 +787,10 @@ class DecisionPlugin(Star):
         from astrbot.api.web import json_response
 
         tools = []
+        decision_tool_seen = False
         for tool in self.context.get_llm_tool_manager().func_list:
             if getattr(tool, "name", None) == DECISION_TOOL_NAME:
-                continue
+                decision_tool_seen = True
             tools.append(
                 {
                     "name": str(getattr(tool, "name", "")),
@@ -755,7 +800,19 @@ class DecisionPlugin(Star):
                     ),
                     "handoff": is_handoff_tool(tool),
                     "active": tool_is_active(tool),
+                    "builtin": getattr(tool, "name", None) == DECISION_TOOL_NAME,
                 }
+            )
+        if not decision_tool_seen:
+            tools.insert(
+                0,
+                {
+                    "name": DECISION_TOOL_NAME,
+                    "description": "调用 Jev/SystemOne 对当前场景执行一次结构化判断；不会执行其他工具。",
+                    "handoff": False,
+                    "active": True,
+                    "builtin": True,
+                },
             )
         return json_response({"tools": tools})
 
@@ -811,8 +868,9 @@ class DecisionPlugin(Star):
         available = {
             str(getattr(tool, "name", ""))
             for tool in self.context.get_llm_tool_manager().func_list
-            if getattr(tool, "name", None) and getattr(tool, "name", None) != DECISION_TOOL_NAME
+            if getattr(tool, "name", None)
         }
+        available.add(DECISION_TOOL_NAME)
         cleaned = list(
             dict.fromkeys(
                 item.strip() for item in values if item.strip() and item.strip() in available

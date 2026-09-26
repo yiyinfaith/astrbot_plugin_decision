@@ -103,8 +103,8 @@
   },
   "always_keep_tools": {
     "type": "list",
-    "description": "始终保留的 Tool 名称；只会从本轮原本允许的 Tool 中选择",
-    "default": [],
+    "description": "始终保留的 Tool 名称；jev_decide 为内置决策工具，默认始终保留",
+    "default": ["jev_decide"],
     "invisible": true
   },
   "always_keep_recommend_tools": {
@@ -115,8 +115,17 @@
   },
   "proactive_reply_enabled": {
     "type": "bool",
-    "description": "[主动对话] 对收到的群聊消息做 Jev 主动回复判断（默认关闭）",
+    "description": "[主动对话] 对白名单内的群聊和私聊消息做 Jev 主动回复判断（默认关闭）",
     "default": false
+  },
+  "proactive_whitelist": {
+    "type": "list",
+    "description": "[主动对话] 主动对话白名单（填写群聊 ID 或私聊用户 ID；也支持完整 unified_msg_origin）",
+    "hint": "只有白名单内的会话会进入主动对话判断；留空时不会对任何会话主动回复。每行填写一个群聊 ID 或用户 ID。",
+    "items": {
+      "type": "string"
+    },
+    "default": []
   },
   "direct_reply_prefixes": {
     "type": "list",
@@ -126,12 +135,6 @@
       "type": "string"
     },
     "default": ["/", "@"]
-  },
-  "analysis_on_mention_only": {
-    "type": "bool",
-    "description": "[主动对话] 仅在被呼唤时分析",
-    "hint": "开启后，普通群聊消息只会记录，不会请求 Jev；@机器人、回复机器人或消息中包含昵称时仍可分析。",
-    "default": false
   },
   "force_reply_when_summoned": {
     "type": "bool",
@@ -195,7 +198,8 @@
   "proactive_failure_backoff_seconds": {
     "type": "float",
     "description": "[主动对话] Jev 失败后的退避时间",
-    "default": 8.0
+    "hint": "Jev 请求失败后等待多久再允许下一次主动判断；默认 0 秒，立即重试。",
+    "default": 0.0
   },
   "observation_timeout_seconds": {
     "type": "float",
