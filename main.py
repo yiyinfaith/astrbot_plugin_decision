@@ -120,7 +120,7 @@ class DecisionPlugin(Star):
             path=str(self.config.get("systemone_path", "/v1/systemone")),
             api_key=str(self.config.get("api_key", "")),
             model=str(self.config.get("model", "jev-latest")),
-            timeout_sec=self._float("timeout_sec", 10.0),
+            timeout_sec=self._float("timeout_sec", 5.0),
             retries=self._int("retries", 1),
         )
         # Create the reusable session during plugin initialization. A missing key

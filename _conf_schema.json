@@ -30,8 +30,8 @@
   },
   "timeout_sec": {
     "type": "float",
-    "description": "[全局设置] 每次 SystemOne 请求超时时间（秒）",
-    "default": 10.0
+    "description": "[全局设置] 每次 SystemOne 请求超时时间（秒），默认 5 秒",
+    "default": 5.0
   },
   "retries": {
     "type": "int",

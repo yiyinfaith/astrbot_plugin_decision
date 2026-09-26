@@ -30,7 +30,7 @@ class SystemOneProvider(DecisionProvider):
         path: str,
         api_key: str,
         model: str,
-        timeout_sec: float = 10,
+        timeout_sec: float = 5,
         retries: int = 1,
         chunk_size: int = 32,
         session: aiohttp.ClientSession | None = None,
@@ -252,7 +252,9 @@ class SystemOneProvider(DecisionProvider):
                 )
                 if not retryable or attempt >= self.retries:
                     raise
-                await asyncio.sleep(min(2.0, 0.25 * (2**attempt)))
+                # Jev decisions are latency-sensitive and fail-closed. Retry
+                # immediately; the caller's timeout already bounds each try.
+                await asyncio.sleep(0)
         raise DecisionProviderError("SystemOne request failed") from last_error
 
     async def close(self) -> None:

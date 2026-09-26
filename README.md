@@ -54,7 +54,7 @@ Always Keep 页面位于插件详情页的 `settings` Plugin Page。页面通过
 
 每个群聊会话维护一个有上限的消息队列和状态：`不在场`、`被呼唤`、`混脸熟`、`观测中`。复读和密集对话只用于状态提示，真正是否介入仍由 Jev 判断。普通消息用一次 Jev/SystemOne 请求逐项评估五个 Noul 维度：是否指向机器人、是否适合介入、是否能提供相关价值、时机是否合适、回复是否能自然延续对话。加权结果和直接指向/自然介入阈值共同决定是否回复，异常或缺字段时保持不回复。
 
-`direct_reply_prefixes` 默认是 `/` 和 `@`。普通前缀命中时跳过 Jev；特殊值 `@` 只匹配消息链中真正的 `At` 机器人节点，不会把文本中的 `@用户名` 当作直接回复。命中后仅设置 AstrBot 原生的 wake 标记，由原生 Agent 回复，因此不会改变人格提示词，也不会接管上下文。`analysis_on_mention_only`、`force_reply_when_summoned` 和 `proactive_alias` 可分别控制普通消息分析、真正 @/回复机器人的行为和文本昵称识别；文本昵称本身仍交给 Jev 判断。
+`direct_reply_prefixes` 默认是 `/` 和 `@`。普通前缀命中时跳过主动对话 Jev；特殊值 `@` 只匹配消息链中真正的 `At` 机器人节点，不会把文本中的 `@用户名` 当作直接回复。命中后仅设置 AstrBot 原生的 wake 标记，由原生 Agent 回复，因此不会改变人格提示词，也不会接管上下文。这个正常的 Agent 请求随后仍会经过 Tools/SubAgent 的独立 Jev 过滤与推荐链，这是有意保留的一次能力决策；直接回复只跳过主动对话判断，不跳过 Tools/SubAgent 判断。`analysis_on_mention_only`、`force_reply_when_summoned` 和 `proactive_alias` 可分别控制普通消息分析、真正 @/回复机器人的行为和文本昵称识别；文本昵称本身仍交给 Jev 判断。
 
 每个会话有独立的异步锁、判断间隔、回复冷却、窗口上限、失败退避和最大历史；达到会话上限时清理最久未访问的空闲会话。若 AstrBot 内置 `active_reply` 已开启，插件会停用自己的 ambient 判断并记录 warning；不会修改全局配置。某些平台只有 @Bot 消息才会推送给 Bot，插件无法判断未收到的群聊消息。
 
@@ -72,7 +72,7 @@ AstrBot 要求 `>=4.28.1,<5`。将运行时文件放入 `data/plugins/astrbot_pl
 6. 在插件详情页 `settings` 中分别勾选普通 Tool 的 `始终保留` 和 `推荐主 LLM`
 7. 如需主动回复，先关闭 AstrBot 自带 `provider_ltm_settings.active_reply`，再开启插件 `proactive_reply_enabled`
 
-其余配置包括超时、重试、两套可编辑提示词、Tool 描述截断、历史消息限制、Always Keep、主动回复冷却/窗口和调试日志，均定义在 `_conf_schema.json`。通用配置页用 `[全局设置]`、`[Tools 与 SubAgent]`、`[主动对话]` 副标题区分适用范围；两套提示词、两个过滤开关和两个 Always Keep 列表使用隐藏 Schema 字段保存，只在插件详情页的 `settings` 页面编辑。运行时配置由 AstrBot 保存到 `data/config/astrbot_plugin_decision_config.json`。
+其余配置包括默认 5 秒超时、立即重试、两套可编辑提示词、Tool 描述截断、历史消息限制、Always Keep、主动回复冷却/窗口和调试日志，均定义在 `_conf_schema.json`。通用配置页用 `[全局设置]`、`[Tools 与 SubAgent]`、`[主动对话]` 副标题区分适用范围；两套提示词、两个过滤开关和两个 Always Keep 列表使用隐藏 Schema 字段保存，只在插件详情页的 `settings` 页面编辑。运行时配置由 AstrBot 保存到 `data/config/astrbot_plugin_decision_config.json`。
 
 管理员诊断命令：
 

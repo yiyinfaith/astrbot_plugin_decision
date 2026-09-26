@@ -276,6 +276,34 @@ async def test_provider_retries_server_error_then_succeeds():
 
 
 @pytest.mark.asyncio
+async def test_provider_retry_is_immediate_and_default_timeout_is_five_seconds(monkeypatch):
+    questions = {"q": {"type": "noul", "instructions": "x"}}
+    session = FakeSession(
+        [
+            FakeResponse(500, {"error": "temporary"}),
+            FakeResponse(payload=answer_payload(questions)),
+        ]
+    )
+    sleeps = []
+
+    async def remember_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", remember_sleep)
+    provider = SystemOneProvider(
+        base_url="https://example.invalid",
+        path="/v1/systemone",
+        api_key="key",
+        model="jev-latest",
+        session=session,
+        retries=1,
+    )
+    assert provider.timeout_sec == 5.0
+    await provider.evaluate(state="state", questions=questions)
+    assert sleeps == [0]
+
+
+@pytest.mark.asyncio
 async def test_provider_chunks_only_after_explicit_question_limit():
     questions = {f"q_{index}": {"type": "noul", "instructions": "x"} for index in range(5)}
     chunks = [
@@ -540,6 +568,7 @@ def test_public_schema_hides_custom_page_prompts_and_page_switches():
     assert schema["provider"]["description"].startswith("[全局设置]")
     assert schema["history_max_messages"]["description"].startswith("[全局设置]")
     assert schema["history_max_chars"]["description"].startswith("[全局设置]")
+    assert schema["timeout_sec"]["default"] == 5.0
     assert schema["always_keep_tools"]["invisible"] is True
     assert schema["always_keep_recommend_tools"]["invisible"] is True
     assert "decision_policy" not in schema
