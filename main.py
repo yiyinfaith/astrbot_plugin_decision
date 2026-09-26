@@ -23,7 +23,16 @@ from .decision.context import (
     tool_summary,
 )
 from .decision.models import DecisionProviderError
-from .decision.proactive import ProactiveRecord, ProactiveState
+from .decision.proactive import (
+    ProactiveRecord,
+    ProactiveState,
+    ProactiveStatus,
+    aggregate_scores,
+    bounded_float,
+    normalize_prefixes,
+    parse_noul_scores,
+    text_matches_prefix,
+)
 from .decision.providers.systemone import SystemOneProvider
 from .decision.routing import (
     DECISION_TOOL_NAME,
@@ -59,7 +68,10 @@ class DecisionPlugin(Star):
         self.provider: SystemOneProvider | None = None
         self._ready = False
         self._active_reply_warning_emitted = False
-        self.proactive = ProactiveState(self._int("proactive_history_max_messages", 12))
+        self.proactive = ProactiveState(
+            self._int("proactive_history_max_messages", 12),
+            self._int("proactive_max_sessions", 500),
+        )
         self._last_call_latency_ms: float | None = None
         self._call_count = 0
         self._failure_count = 0
@@ -414,38 +426,94 @@ class DecisionPlugin(Star):
         except Exception:
             return False
 
-    def _should_skip_proactive(self, event: AstrMessageEvent) -> bool:
-        if event.get_message_type() != MessageType.GROUP_MESSAGE:
-            return True
-        if bool(getattr(event, "is_at_or_wake_command", False)):
-            return True
-        if event.get_extra("handlers_parsed_params", {}):
-            return True
+    def _message_address_flags(self, event: AstrMessageEvent) -> tuple[bool, bool, bool, bool]:
+        """Return (at-self, reply-to-self, at-all, parse-failed) safely."""
+
+        at_self = reply_self = at_all = False
         try:
-            from astrbot.api.message_components import Reply
+            from astrbot.api.message_components import At, AtAll, Reply
 
             self_id = str(event.get_self_id() or "")
             for component in event.get_messages():
-                if isinstance(component, Reply):
+                if isinstance(component, AtAll):
+                    at_all = True
+                elif isinstance(component, At):
+                    target = getattr(component, "qq", None) or getattr(component, "target", None)
+                    if str(target or "") == self_id:
+                        at_self = True
+                elif isinstance(component, Reply):
                     sender_id = str(
                         getattr(component, "sender_id", None)
                         or getattr(component, "sender", None)
                         or ""
                     )
                     if sender_id and sender_id == self_id:
-                        return True
-        except Exception:
-            pass
-        return False
+                        reply_self = True
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return at_self, reply_self, at_all, True
+        return at_self, reply_self, at_all, False
+
+    def _direct_reply_requested(self, event: AstrMessageEvent) -> bool:
+        """Implement AngelHeart's direct prefix feature without text @ matching."""
+
+        prefixes = normalize_prefixes(self.config.get("direct_reply_prefixes", ["/", "@"]))
+        at_self, _, at_all, parse_failed = self._message_address_flags(event)
+        if not parse_failed and not at_all and "@" in prefixes and at_self:
+            return True
+        try:
+            outline = event.get_message_outline()
+        except (AttributeError, TypeError):
+            outline = event.get_message_str()
+        return text_matches_prefix(str(outline or ""), prefixes)
+
+    def _proactive_summoned(self, event: AstrMessageEvent) -> bool:
+        at_self, reply_self, at_all, parse_failed = self._message_address_flags(event)
+        if not parse_failed and not at_all and (at_self or reply_self):
+            return True
+        try:
+            text = str(event.get_message_outline() or event.get_message_str() or "")
+        except (AttributeError, TypeError):
+            text = str(event.get_message_str() or "")
+        aliases = [
+            item.strip()
+            for item in str(self.config.get("proactive_alias", "AI|助手") or "").split("|")
+            if item.strip()
+        ]
+        return bool(aliases and any(alias in text for alias in aliases))
+
+    def _should_skip_proactive(self, event: AstrMessageEvent) -> bool:
+        if event.get_message_type() != MessageType.GROUP_MESSAGE:
+            return True
+        if event.get_extra("handlers_parsed_params", {}):
+            return True
+        if str(event.get_sender_id() or "") == str(event.get_self_id() or ""):
+            return True
+        # AstrBot has already decided this is a wake/command event; allow its
+        # native pipeline to handle it and do not issue a second Jev request.
+        if bool(getattr(event, "is_at_or_wake_command", False)):
+            return True
+        _, _, at_all, _ = self._message_address_flags(event)
+        return at_all
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE, priority=1000)
     async def proactive_reply(self, event: AstrMessageEvent):
-        """Optionally wake AstrBot's normal Agent loop for ambient group messages."""
+        """Use Jev to decide whether AstrBot's normal Agent should interject."""
 
         if not self._bool("proactive_reply_enabled", False):
             return
-        if not self.provider or not self._ready or self._should_skip_proactive(event):
+        if self._should_skip_proactive(event):
             return
+
+        # A direct prefix is always handled by AstrBot's native Agent path;
+        # native active-reply settings must not prevent this explicit wake-up.
+        if self._direct_reply_requested(event):
+            event.is_at_or_wake_command = True
+            self.proactive.set_status(str(event.unified_msg_origin), ProactiveStatus.SUMMONED)
+            return
+
+        if not self.provider or not self._ready:
+            return
+
         if self._builtin_active_reply_enabled(event):
             if not self._active_reply_warning_emitted:
                 logger.warning(
@@ -460,61 +528,139 @@ class DecisionPlugin(Star):
             return
         sender_id = str(event.get_sender_id() or "")
         sender_name = str(event.get_sender_name() or sender_id or "user")
-        history = self.proactive.history_lines(session, self._int("history_max_chars", 6000))
-        self.proactive.add(session, ProactiveRecord(sender_name, sender_id, text))
-        state = (
-            f"[Decision Policy]\n{self._policy()}\n\n"
-            "[Group Conversation]\n"
-            f"{chr(10).join(history) or '(none)'}\n\n"
-            f"[Current Message]\n{sender_name} ({sender_id}): {text}\n"
-            "The current message was not directly addressed to the bot."
-        )
-        questions = {
-            "is_addressing_bot": {
-                "type": "noul",
-                "instructions": "Is the current message meaningfully addressing the bot?",
-            },
-            "should_interject": {
-                "type": "noul",
-                "instructions": "Would a brief, helpful bot reply now be natural rather than disruptive?",
-            },
-        }
-        try:
-            result = await self._evaluate(state=state, questions=questions)
-        except Exception as exc:
-            logger.debug(
-                "Decision Engine proactive check closed after failure: %s", _safe_error(exc)
-            )
-            return
-        addressing = float(result.answers["is_addressing_bot"].get("noul", 0.0))
-        interject = float(result.answers["should_interject"].get("noul", 0.0))
-        if addressing < self._float("addressing_threshold", 0.7) and interject < self._float(
-            "interject_threshold", 0.85
-        ):
-            return
-        if not self.proactive.allow_reply(
-            session,
-            cooldown_seconds=self._float("cooldown_seconds", 60),
-            window_seconds=self._float("reply_window_seconds", 600),
-            max_replies=self._int("max_replies_per_window", 2),
-        ):
+        at_self, reply_self, at_all, parse_failed = self._message_address_flags(event)
+        explicit_summon = not parse_failed and not at_all and (at_self or reply_self)
+        summoned = explicit_summon or self._proactive_summoned(event)
+        if self._bool("analysis_on_mention_only", False) and not summoned:
+            self.proactive.add(session, ProactiveRecord(sender_name, sender_id, text))
             return
 
-        try:
-            cid = await self.context.conversation_manager.get_curr_conversation_id(session)
-            conversation = await self.context.conversation_manager.get_conversation(session, cid)
-            if not conversation:
+        async with self.proactive.lock_for(session):
+            if not self.proactive.can_analyze(session):
                 return
-            yield event.request_llm(
-                prompt=text,
-                # AstrBot's native active-reply flow passes the current
-                # conversation id as session_id so the request continues the
-                # existing Agent conversation instead of starting a new one.
-                session_id=cid,
-                conversation=conversation,
+            history = self.proactive.history_lines(session, self._int("history_max_chars", 6000))
+            self.proactive.add(session, ProactiveRecord(sender_name, sender_id, text))
+            status = self.proactive.observe_message(
+                session,
+                text=text,
+                sender_id=sender_id,
+                summoned=summoned,
+                echo_threshold=self._int("echo_detection_threshold", 3),
+                echo_window=self._float("echo_detection_window_seconds", 30.0),
+                dense_threshold=self._int("dense_conversation_threshold", 30),
+                dense_window=self._float("dense_conversation_window_seconds", 600.0),
+                min_participants=self._int("min_participant_count", 2),
+                observation_timeout=self._float("observation_timeout_seconds", 600.0),
             )
-        except Exception as exc:
-            logger.debug("Decision Engine proactive request was not queued: %s", _safe_error(exc))
+            if explicit_summon and self._bool("force_reply_when_summoned", True):
+                should_reply = True
+                scores: dict[str, float] = {}
+                aggregate = 1.0
+            else:
+                state = (
+                    f"[Decision Policy]\n{self._policy()}\n\n"
+                    "[Group Conversation]\n"
+                    f"{chr(10).join(history) or '(none)'}\n\n"
+                    f"[Current Message]\n{sender_name} ({sender_id}): {text}\n"
+                    f"[Interaction State]\n{status.value}\n"
+                    f"Directly summoned: {str(summoned).lower()}"
+                )
+                questions = {
+                    "is_addressing_bot": {
+                        "type": "noul",
+                        "instructions": "Is the current message meaningfully addressing the bot?",
+                    },
+                    "should_interject": {
+                        "type": "noul",
+                        "instructions": "Would a brief, helpful bot reply now be natural rather than disruptive?",
+                    },
+                    "conversation_relevance": {
+                        "type": "noul",
+                        "instructions": "Would the bot add relevant value to this conversation right now?",
+                    },
+                    "timing": {
+                        "type": "noul",
+                        "instructions": "Is this a good moment for one concise bot reply?",
+                    },
+                    "continuity": {
+                        "type": "noul",
+                        "instructions": "Would replying continue the current conversation naturally?",
+                    },
+                }
+                try:
+                    result = await self._evaluate(state=state, questions=questions)
+                except Exception as exc:
+                    self.proactive.mark_analysis(
+                        session,
+                        success=False,
+                        no_reply_cooldown=self._float("proactive_failure_backoff_seconds", 8.0),
+                    )
+                    logger.debug(
+                        "Decision Engine proactive check closed after failure: %s", _safe_error(exc)
+                    )
+                    return
+                names = tuple(questions)
+                scores = parse_noul_scores(result.answers, names)
+                weights = {
+                    "is_addressing_bot": 1.4,
+                    "should_interject": 1.4,
+                    "conversation_relevance": 1.2,
+                    "timing": 0.8,
+                    "continuity": 0.8,
+                }
+                aggregate = aggregate_scores(scores, weights)
+                addressing = scores.get("is_addressing_bot", 0.0)
+                interject = scores.get("should_interject", 0.0)
+                should_reply = bool(
+                    len(scores) == len(names)
+                    and (
+                        aggregate
+                        >= bounded_float(self.config.get("proactive_score_threshold", 0.68), 0.68)
+                        or (
+                            addressing
+                            >= bounded_float(self.config.get("addressing_threshold", 0.7), 0.7)
+                            and interject
+                            >= bounded_float(self.config.get("interject_threshold", 0.85), 0.85)
+                        )
+                    )
+                )
+            self.proactive.mark_analysis(
+                session,
+                success=True,
+                no_reply_cooldown=self._float("no_reply_cooldown_seconds", 3.0),
+            )
+            if not should_reply:
+                self.proactive.set_status(session, ProactiveStatus.OBSERVATION)
+                return
+            if not self.proactive.allow_reply(
+                session,
+                cooldown_seconds=self._float("cooldown_seconds", 60),
+                window_seconds=self._float("reply_window_seconds", 600),
+                max_replies=self._int("max_replies_per_window", 2),
+            ):
+                return
+
+            try:
+                cid = await self.context.conversation_manager.get_curr_conversation_id(session)
+                conversation = await self.context.conversation_manager.get_conversation(
+                    session, cid
+                )
+                if not conversation:
+                    self.proactive.mark_reply_finished(session)
+                    return
+                event.is_at_or_wake_command = True
+                yield event.request_llm(
+                    prompt=text,
+                    # Continue AstrBot's native conversation so persona and
+                    # other plugin system prompts remain intact.
+                    session_id=cid,
+                    conversation=conversation,
+                )
+            except Exception as exc:
+                self.proactive.mark_reply_finished(session)
+                logger.debug(
+                    "Decision Engine proactive request was not queued: %s", _safe_error(exc)
+                )
 
     @filter.on_llm_response()
     async def remember_bot_response(self, event: AstrMessageEvent, response: Any) -> None:
@@ -523,9 +669,11 @@ class DecisionPlugin(Star):
         if event.get_message_type() != MessageType.GROUP_MESSAGE:
             return
         text = str(getattr(response, "completion_text", "") or "").strip()
+        session = str(event.unified_msg_origin)
+        self.proactive.mark_reply_success(session)
         if text:
             self.proactive.add(
-                str(event.unified_msg_origin),
+                session,
                 ProactiveRecord("bot", str(event.get_self_id() or "bot"), text, True),
             )
 

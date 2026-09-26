@@ -10,7 +10,15 @@ import pytest
 from decision.context import build_decision_state, context_lines
 from decision.context import question_id as make_question_id
 from decision.models import DecisionProviderError, DecisionValidationError, parse_systemone_response
-from decision.proactive import ProactiveRecord, ProactiveState
+from decision.proactive import (
+    ProactiveRecord,
+    ProactiveState,
+    ProactiveStatus,
+    aggregate_scores,
+    normalize_prefixes,
+    parse_noul_scores,
+    text_matches_prefix,
+)
 from decision.providers.systemone import SystemOneProvider
 from decision.routing import (
     add_routing_hint,
@@ -539,6 +547,18 @@ def test_public_schema_hides_custom_page_prompts_and_page_switches():
     assert "enable" not in schema
 
 
+def test_proactive_schema_contains_direct_prefix_and_state_controls_only():
+    schema = json.loads(
+        (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
+    )
+    assert schema["direct_reply_prefixes"]["default"] == ["/", "@"]
+    assert schema["force_reply_when_summoned"]["default"] is True
+    assert schema["proactive_score_threshold"]["default"] == 0.68
+    descriptions = " ".join(item.get("description", "") for item in schema.values())
+    for excluded in ("工具调用提示", "安抚机制", "AI人格设定", "接管astrbot原生上下文"):
+        assert excluded not in descriptions
+
+
 def test_context_limits_history_and_truncates_tool_results():
     lines = context_lines(
         [
@@ -591,3 +611,50 @@ def test_proactive_cooldown_and_window():
     state = ProactiveState()
     assert state.allow_reply("g", cooldown_seconds=60, window_seconds=600, max_replies=2)
     assert not state.allow_reply("g", cooldown_seconds=60, window_seconds=600, max_replies=2)
+
+
+def test_direct_prefix_matching_reserves_at_for_real_message_components():
+    assert normalize_prefixes(["/", "@", "", "/"]) == ["/", "@"]
+    assert text_matches_prefix("/hello", ["/", "@"])
+    assert not text_matches_prefix("hello @bot", ["/", "@"])
+    assert not text_matches_prefix("@bot hello", ["@"])
+
+
+def test_proactive_scores_are_strict_and_weighted():
+    scores = parse_noul_scores(
+        {
+            "good": {"noul": 0.8},
+            "bad": {"noul": "0.9"},
+            "clamped": {"noul": 2},
+            "bool": {"noul": True},
+        },
+        ["good", "bad", "clamped", "bool"],
+    )
+    assert scores == {"good": 0.8, "clamped": 1.0}
+    assert aggregate_scores(scores, {"good": 3, "clamped": 1}) == pytest.approx(0.85)
+
+
+def test_proactive_state_tracks_echo_status_and_per_session_locks():
+    state = ProactiveState(max_messages=5)
+    state.add("g", ProactiveRecord("Alice", "1", "same"))
+    state.add("g", ProactiveRecord("Bob", "2", "same"))
+    state.add("g", ProactiveRecord("Carol", "3", "same"))
+    status = state.observe_message(
+        "g",
+        text="same",
+        sender_id="4",
+        echo_threshold=3,
+        echo_window=60,
+        dense_threshold=99,
+    )
+    assert status == ProactiveStatus.GETTING_FAMILIAR
+    assert state.lock_for("g") is state.lock_for("g")
+    assert state.lock_for("g") is not state.lock_for("other")
+
+
+def test_proactive_state_session_limit_does_not_grow_without_bound():
+    state = ProactiveState(max_sessions=2)
+    state.add("one", ProactiveRecord("a", "1", "x"))
+    state.add("two", ProactiveRecord("b", "2", "x"))
+    state.add("three", ProactiveRecord("c", "3", "x"))
+    assert len(state.sessions) <= 2

@@ -115,17 +115,50 @@
   },
   "proactive_reply_enabled": {
     "type": "bool",
-    "description": "[主动对话] 对收到的群聊 ambient message 做主动回复判断（默认关闭）",
+    "description": "[主动对话] 对收到的群聊消息做 Jev 主动回复判断（默认关闭）",
     "default": false
+  },
+  "direct_reply_prefixes": {
+    "type": "list",
+    "description": "[主动对话] 直接唤醒前缀",
+    "hint": "命中这些前缀时跳过 Jev，直接交给 AstrBot 原生 Agent。特殊值 @ 只匹配消息链中真正 @ 机器人的 At，不匹配普通文本中的 @；@ 机器人可以出现在消息任意位置。",
+    "items": {
+      "type": "string"
+    },
+    "default": ["/", "@"]
+  },
+  "analysis_on_mention_only": {
+    "type": "bool",
+    "description": "[主动对话] 仅在被呼唤时分析",
+    "hint": "开启后，普通群聊消息只会记录，不会请求 Jev；@机器人、回复机器人或消息中包含昵称时仍可分析。",
+    "default": false
+  },
+  "force_reply_when_summoned": {
+    "type": "bool",
+    "description": "[主动对话] 被呼唤时直接回复",
+    "hint": "开启后，命中真正 @机器人或回复机器人时跳过 Jev 判断，直接使用 AstrBot 原生 Agent 回复；文本昵称仍交给 Jev 判断。",
+    "default": true
+  },
+  "proactive_alias": {
+    "type": "string",
+    "description": "[主动对话] 机器人昵称",
+    "hint": "多个昵称用 | 分隔，用于识别文本中的呼唤。",
+    "default": "AI|助手"
+  },
+  "proactive_score_threshold": {
+    "type": "float",
+    "description": "[主动对话] Jev 综合介入阈值",
+    "hint": "Jev 对相关性、时机、连续性等维度的加权平均达到此值时才建议回复。",
+    "default": 0.68
   },
   "addressing_threshold": {
     "type": "float",
-    "description": "[主动对话] is_addressing_bot 的触发阈值",
+    "description": "[主动对话] Jev 直接指向阈值",
     "default": 0.7
   },
   "interject_threshold": {
     "type": "float",
-    "description": "[主动对话] should_interject 的触发阈值",
+    "description": "[主动对话] Jev 自然介入阈值",
     "default": 0.85
   },
   "cooldown_seconds": {
@@ -147,5 +180,52 @@
     "type": "int",
     "description": "[主动对话] 主动回复模块保留的群聊消息数",
     "default": 12
+  },
+  "proactive_max_sessions": {
+    "type": "int",
+    "description": "[主动对话] 最多跟踪的群聊会话数",
+    "default": 500
+  },
+  "no_reply_cooldown_seconds": {
+    "type": "float",
+    "description": "[主动对话] 判断后再次分析的最短间隔",
+    "hint": "无论 Jev 建议回复还是继续观察，都会至少等待此时间，减少重复判断。",
+    "default": 3.0
+  },
+  "proactive_failure_backoff_seconds": {
+    "type": "float",
+    "description": "[主动对话] Jev 失败后的退避时间",
+    "default": 8.0
+  },
+  "observation_timeout_seconds": {
+    "type": "float",
+    "description": "[主动对话] 观测状态超时时间",
+    "hint": "超过此时间没有新活动时，会从观测状态回到不在场。",
+    "default": 600.0
+  },
+  "echo_detection_threshold": {
+    "type": "int",
+    "description": "[主动对话] 复读检测条数",
+    "default": 3
+  },
+  "echo_detection_window_seconds": {
+    "type": "float",
+    "description": "[主动对话] 复读检测窗口（秒）",
+    "default": 30.0
+  },
+  "dense_conversation_threshold": {
+    "type": "int",
+    "description": "[主动对话] 密集对话消息数",
+    "default": 30
+  },
+  "dense_conversation_window_seconds": {
+    "type": "float",
+    "description": "[主动对话] 密集对话窗口（秒）",
+    "default": 600.0
+  },
+  "min_participant_count": {
+    "type": "int",
+    "description": "[主动对话] 密集对话最少参与人数",
+    "default": 2
   }
 }

@@ -50,11 +50,15 @@ Always Keep 页面位于插件详情页的 `settings` Plugin Page。页面通过
 
 ## 主动回复
 
-主动回复默认关闭，只处理 AstrBot 实际收到的群聊 ambient message。插件维护每个会话的少量消息队列，用一次 SystemOne 请求同时询问 `is_addressing_bot` 和 `should_interject`，通过阈值、冷却和窗口计数后，使用官方 `event.request_llm()` 进入 AstrBot 原生 Agent 流程。
+主动回复默认关闭，只处理 AstrBot 实际收到的群聊消息。实现借鉴了 AngelHeart 的直接回复前缀、四状态思路、事件缓存和每会话串行处理，也吸收了 AstrBot 市场中高使用量主动回复插件的会话冷却、活跃度、去重和资源上限设计；没有复制它们的独立模型、人格提示词、安抚消息或上下文接管。
 
-会跳过 @/wake、指令、回复 Bot 和已经准备正常响应的消息。若 AstrBot 内置 `active_reply` 已开启，插件会停用自己的主动回复并记录 warning；不会修改全局配置。某些平台只有 @Bot 消息才会推送给 Bot，插件无法判断未收到的群聊消息。
+每个群聊会话维护一个有上限的消息队列和状态：`不在场`、`被呼唤`、`混脸熟`、`观测中`。复读和密集对话只用于状态提示，真正是否介入仍由 Jev 判断。普通消息用一次 Jev/SystemOne 请求逐项评估五个 Noul 维度：是否指向机器人、是否适合介入、是否能提供相关价值、时机是否合适、回复是否能自然延续对话。加权结果和直接指向/自然介入阈值共同决定是否回复，异常或缺字段时保持不回复。
 
-主动回复在 SystemOne 失败时保持 fail-closed；普通 Tool Filter 在失败时保留原始 Tool，保证主聊天能力不被决策服务故障拖垮。
+`direct_reply_prefixes` 默认是 `/` 和 `@`。普通前缀命中时跳过 Jev；特殊值 `@` 只匹配消息链中真正的 `At` 机器人节点，不会把文本中的 `@用户名` 当作直接回复。命中后仅设置 AstrBot 原生的 wake 标记，由原生 Agent 回复，因此不会改变人格提示词，也不会接管上下文。`analysis_on_mention_only`、`force_reply_when_summoned` 和 `proactive_alias` 可分别控制普通消息分析、真正 @/回复机器人的行为和文本昵称识别；文本昵称本身仍交给 Jev 判断。
+
+每个会话有独立的异步锁、判断间隔、回复冷却、窗口上限、失败退避和最大历史；达到会话上限时清理最久未访问的空闲会话。若 AstrBot 内置 `active_reply` 已开启，插件会停用自己的 ambient 判断并记录 warning；不会修改全局配置。某些平台只有 @Bot 消息才会推送给 Bot，插件无法判断未收到的群聊消息。
+
+主动对话使用 `event.request_llm()` 进入 AstrBot 原生 Agent 流程，故人格、原生上下文、备用模型和其他插件的 system prompt 处理仍由 AstrBot 负责。主动判断在 Jev 失败时保持 fail-closed；普通 Tool Filter 在失败时保留原始 Tool，保证主聊天能力不被决策服务故障拖垮。
 
 ## 安装和配置
 
