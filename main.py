@@ -553,7 +553,21 @@ class DecisionPlugin(Star):
             candidates.add(str(event.unified_msg_origin).strip())
         except (AttributeError, TypeError):
             pass
-        for method_name in ("get_group_id", "get_sender_id"):
+
+        # Keep group and private identifiers in their own namespaces.  A
+        # private-chat user ID in the allowlist must not accidentally enable
+        # proactive replies for that same user's messages in every group.
+        try:
+            message_type = event.get_message_type()
+        except (AttributeError, TypeError, ValueError):
+            message_type = None
+        if message_type == MessageType.GROUP_MESSAGE:
+            method_names = ("get_group_id",)
+        elif message_type == MessageType.FRIEND_MESSAGE:
+            method_names = ("get_sender_id",)
+        else:
+            method_names = ()
+        for method_name in method_names:
             method = getattr(event, method_name, None)
             if not callable(method):
                 continue
@@ -649,7 +663,7 @@ class DecisionPlugin(Star):
             else:
                 state = (
                     f"[Decision Policy]\n{self._policy()}\n\n"
-                    "[Group Conversation]\n"
+                    "[Conversation]\n"
                     f"{chr(10).join(history) or '(none)'}\n\n"
                     f"[Current Message]\n{sender_name} ({sender_id}): {text}\n"
                     f"[Interaction State]\n{status.value}\n"

@@ -331,6 +331,36 @@ async def test_provider_chunks_only_after_explicit_question_limit():
 
 
 @pytest.mark.asyncio
+async def test_provider_adapts_when_server_limit_is_smaller_than_nominal_chunk_size():
+    questions = {f"q_{index}": {"type": "noul", "instructions": "x"} for index in range(5)}
+    # The first request and every payload larger than two questions is rejected.
+    # The provider must split rejected chunks again rather than retrying the same
+    # default-sized body forever.
+    responses = [FakeResponse(413, {"error": "too many questions"})]
+    responses.extend(
+        [
+            FakeResponse(413, {"error": "too many questions"}),
+            FakeResponse(payload=answer_payload({key: questions[key] for key in ("q_0", "q_1")})),
+            FakeResponse(413, {"error": "too many questions"}),
+            FakeResponse(payload=answer_payload({"q_2": questions["q_2"]})),
+            FakeResponse(payload=answer_payload({key: questions[key] for key in ("q_3", "q_4")})),
+        ]
+    )
+    session = FakeSession(responses)
+    provider = SystemOneProvider(
+        base_url="https://example.invalid",
+        path="/v1/systemone",
+        api_key="key",
+        model="jev-latest",
+        retries=0,
+        chunk_size=32,
+        session=session,
+    )
+    result = await provider.evaluate(state="state", questions=questions)
+    assert set(result.answers) == set(questions)
+
+
+@pytest.mark.asyncio
 async def test_provider_splits_known_mixed_type_service_error():
     questions = {
         "n": {"type": "noul", "instructions": "x"},

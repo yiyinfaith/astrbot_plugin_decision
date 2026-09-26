@@ -89,11 +89,13 @@ class SystemOneProvider(DecisionProvider):
                 model=model or self.model,
             )
         except _QuestionLimitError:
-            if len(question_map) <= self.chunk_size:
+            if len(question_map) <= 1:
                 self.failures += 1
                 raise
             # A normal successful request stays a single fan-out request. Chunking
-            # is only a fallback for an endpoint that explicitly rejects size.
+            # is only a fallback for an endpoint that explicitly rejects size. The
+            # fallback adapts to a server limit smaller than our nominal chunk size
+            # by splitting rejected chunks again instead of retrying the same body.
             try:
                 result = await self._evaluate_in_chunks(
                     state=state,
@@ -164,12 +166,37 @@ class SystemOneProvider(DecisionProvider):
         model: str,
     ) -> DecisionResult:
         items = list(questions.items())
-        chunks = [
-            dict(items[i : i + self.chunk_size]) for i in range(0, len(items), self.chunk_size)
+
+        async def evaluate_chunk(
+            chunk_items: list[tuple[str, dict[str, Any]]],
+        ) -> DecisionResult:
+            chunk = dict(chunk_items)
+            try:
+                return await self._evaluate_once(state=state, questions=chunk, model=model)
+            except _QuestionLimitError:
+                if len(chunk_items) <= 1:
+                    raise
+                midpoint = max(1, len(chunk_items) // 2)
+                left, right = await asyncio.gather(
+                    evaluate_chunk(chunk_items[:midpoint]),
+                    evaluate_chunk(chunk_items[midpoint:]),
+                )
+                merged_answers = {**left.answers, **right.answers}
+                merged_usage = {**left.usage, **right.usage}
+                latencies = [
+                    value for value in (left.latency_ms, right.latency_ms) if value is not None
+                ]
+                return DecisionResult(
+                    answers=merged_answers,
+                    latency_ms=sum(latencies) if latencies else None,
+                    usage=merged_usage,
+                    raw={"answers": merged_answers},
+                )
+
+        initial_chunks = [
+            items[i : i + self.chunk_size] for i in range(0, len(items), self.chunk_size)
         ]
-        results = await asyncio.gather(
-            *(self._evaluate_once(state=state, questions=chunk, model=model) for chunk in chunks)
-        )
+        results = await asyncio.gather(*(evaluate_chunk(chunk) for chunk in initial_chunks))
         merged: dict[str, dict[str, Any]] = {}
         usage: dict[str, Any] = {}
         latencies: list[float] = []

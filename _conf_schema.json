@@ -182,17 +182,17 @@
   },
   "max_replies_per_window": {
     "type": "int",
-    "description": "[主动对话] 单个群聊窗口内最多主动回复次数",
+    "description": "[主动对话] 单个会话窗口内最多主动回复次数",
     "default": 2
   },
   "proactive_history_max_messages": {
     "type": "int",
-    "description": "[主动对话] 主动回复模块保留的群聊消息数",
+    "description": "[主动对话] 主动回复模块保留的会话消息数",
     "default": 12
   },
   "proactive_max_sessions": {
     "type": "int",
-    "description": "[主动对话] 最多跟踪的群聊会话数",
+    "description": "[主动对话] 最多跟踪的会话数",
     "default": 500
   },
   "no_reply_cooldown_seconds": {
