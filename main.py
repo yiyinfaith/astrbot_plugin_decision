@@ -449,7 +449,7 @@ class DecisionPlugin(Star):
                     )
                     if sender_id and sender_id == self_id:
                         reply_self = True
-        except (AttributeError, KeyError, TypeError, ValueError):
+        except (AttributeError, ImportError, KeyError, TypeError, ValueError):
             return at_self, reply_self, at_all, True
         return at_self, reply_self, at_all, False
 
