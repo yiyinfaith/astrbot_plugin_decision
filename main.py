@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import math
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -43,6 +45,7 @@ from .decision.routing import (
     decision_tool_parameters,
     recommendations_from_noul,
 )
+from .decision.tokens import estimate_request_tokens, fit_request_state
 
 PLUGIN_NAME = "astrbot_plugin_decision"
 DEFAULT_POLICY = (
@@ -244,16 +247,143 @@ class DecisionPlugin(Star):
         tools: list[Any],
         handoffs: list[Any],
     ) -> str:
-        max_desc = self._int("tool_description_max_chars", 240)
         return build_decision_state(
             policy=self._policy(),
             current_prompt=str(req.prompt or ""),
             contexts=req.contexts,
-            tools=[tool_summary(tool, max_desc) for tool in tools],
-            subagents=[tool_summary(tool, max_desc) for tool in handoffs],
+            tools=[tool_summary(tool) for tool in tools],
+            subagents=[tool_summary(tool) for tool in handoffs],
             history_max_messages=self._int("history_max_messages", 8),
             history_max_chars=self._int("history_max_chars", 6000),
         )
+
+    def _context_budget(self) -> int:
+        return max(1, self._int("model_context_tokens", 32000))
+
+    def _fit_active_state(
+        self,
+        *,
+        history: list[str],
+        sender_name: str,
+        sender_id: str,
+        text: str,
+        status: ProactiveStatus,
+        summoned: bool,
+        questions: Mapping[str, Mapping[str, Any]],
+    ) -> str:
+        """Trim the oldest proactive history until the full Jev request fits."""
+
+        budget = self._context_budget()
+
+        def make_state(lines: list[str]) -> str:
+            return (
+                f"[Decision Policy]\n{self._policy()}\n\n"
+                "[Conversation]\n"
+                f"{chr(10).join(lines) or '(none)'}\n\n"
+                f"[Current Message]\n{sender_name} ({sender_id}): {text}\n"
+                f"[Interaction State]\n{status.value}\n"
+                f"Directly summoned: {str(summoned).lower()}"
+            )
+
+        while history:
+            state = make_state(history)
+            if estimate_request_tokens(state, questions) < budget:
+                return state
+            history.pop(0)
+
+        state = make_state(history)
+        if estimate_request_tokens(state, questions) < budget:
+            return state
+        # An unusually large current message or custom policy can exceed the
+        # budget even without history. Preserve the tail, which contains the
+        # current message and interaction state, as a final safety fallback.
+        return fit_request_state(state, questions, budget)
+
+    def _decision_batches(
+        self,
+        req: ProviderRequest,
+        ordinary: list[Any],
+        handoffs: list[Any],
+        questions: Mapping[str, Mapping[str, Any]],
+        question_to_tool: Mapping[str, str],
+        question_to_handoff: Mapping[str, str],
+    ) -> list[tuple[str, dict[str, dict[str, Any]]]]:
+        """Split candidate judgments only when the complete Jev request is oversized."""
+
+        full_state = self._state_for_request(req, ordinary, handoffs)
+        budget = self._context_budget()
+        total_tokens = estimate_request_tokens(full_state, questions)
+        if total_tokens < budget:
+            return [(full_state, dict(questions))]
+
+        entries: list[tuple[str, Any, str]] = []
+        for tool in ordinary:
+            name = str(getattr(tool, "name", ""))
+            qid = next((key for key, value in question_to_tool.items() if value == name), "")
+            if qid:
+                entries.append(("tool", tool, qid))
+        for tool in handoffs:
+            name = str(getattr(tool, "name", ""))
+            qid = next((key for key, value in question_to_handoff.items() if value == name), "")
+            if qid:
+                entries.append(("handoff", tool, qid))
+        if not entries:
+            return [(full_state, dict(questions))]
+
+        batch_count = min(len(entries), max(2, math.ceil(total_tokens / budget)))
+        buckets: list[list[tuple[str, Any, str]]] = [[] for _ in range(batch_count)]
+        loads = [0] * batch_count
+        weighted_entries = sorted(
+            entries,
+            key=lambda entry: estimate_request_tokens(
+                f"{getattr(entry[1], 'name', '')}\n{getattr(entry[1], 'description', '')}",
+                {entry[2]: questions[entry[2]]},
+            ),
+            reverse=True,
+        )
+        for entry in weighted_entries:
+            weight = estimate_request_tokens(
+                f"{getattr(entry[1], 'name', '')}\n{getattr(entry[1], 'description', '')}",
+                {entry[2]: questions[entry[2]]},
+            )
+            target = min(range(batch_count), key=loads.__getitem__)
+            buckets[target].append(entry)
+            loads[target] += weight
+
+        def render(bucket: list[tuple[str, Any, str]]) -> tuple[str, dict[str, dict[str, Any]]]:
+            bucket_tools = [tool for kind, tool, _ in bucket if kind == "tool"]
+            bucket_handoffs = [tool for kind, tool, _ in bucket if kind == "handoff"]
+            bucket_questions = {qid: dict(questions[qid]) for _, _, qid in bucket}
+            return (
+                self._state_for_request(req, bucket_tools, bucket_handoffs),
+                bucket_questions,
+            )
+
+        rendered = [render(bucket) for bucket in buckets if bucket]
+        # The initial count follows ceil(total/budget). Fixed prompt overhead is
+        # duplicated in each request, so add batches if a particular bucket is
+        # still too large. This keeps every request strictly below the limit.
+        while True:
+            oversized = next(
+                (
+                    index
+                    for index, (state, batch_questions) in enumerate(rendered)
+                    if estimate_request_tokens(state, batch_questions) >= budget
+                ),
+                None,
+            )
+            if oversized is None or len(rendered) >= len(entries):
+                break
+            bucket = buckets[oversized]
+            if len(bucket) <= 1:
+                break
+            midpoint = max(1, len(bucket) // 2)
+            buckets[oversized : oversized + 1] = [bucket[:midpoint], bucket[midpoint:]]
+            rendered = [render(item) for item in buckets if item]
+        return [
+            (fit_request_state(state, batch_questions, budget), batch_questions)
+            for state, batch_questions in rendered
+        ]
 
     async def _evaluate(
         self,
@@ -372,9 +502,21 @@ class DecisionPlugin(Star):
             req.func_tool.tools = outcome.selected
             return
 
-        state = self._state_for_request(req, ordinary, handoffs)
         try:
-            result = await self._evaluate(state=state, questions=questions)
+            batches = self._decision_batches(
+                req,
+                ordinary,
+                handoffs,
+                questions,
+                question_to_tool,
+                subagent_question_to_name,
+            )
+            results = await asyncio.gather(
+                *(
+                    self._evaluate(state=state, questions=batch_questions)
+                    for state, batch_questions in batches
+                )
+            )
         except Exception as exc:
             # Tool filtering is deliberately fail-open: leave the original
             # request untouched. Respect an explicit decision-tool opt-out.
@@ -389,6 +531,7 @@ class DecisionPlugin(Star):
 
         noul_answers = {
             qid: answer
+            for result in results
             for qid, answer in result.answers.items()
             if qid in question_to_tool or qid in subagent_question_to_name
         }
@@ -662,14 +805,6 @@ class DecisionPlugin(Star):
                 scores: dict[str, float] = {}
                 aggregate = 1.0
             else:
-                state = (
-                    f"[Decision Policy]\n{self._policy()}\n\n"
-                    "[Conversation]\n"
-                    f"{chr(10).join(history) or '(none)'}\n\n"
-                    f"[Current Message]\n{sender_name} ({sender_id}): {text}\n"
-                    f"[Interaction State]\n{status.value}\n"
-                    f"Directly summoned: {str(summoned).lower()}"
-                )
                 questions = {
                     "is_addressing_bot": {
                         "type": "noul",
@@ -692,6 +827,15 @@ class DecisionPlugin(Star):
                         "instructions": "Would replying continue the current conversation naturally?",
                     },
                 }
+                state = self._fit_active_state(
+                    history=history,
+                    sender_name=sender_name,
+                    sender_id=sender_id,
+                    text=text,
+                    status=status,
+                    summoned=summoned,
+                    questions=questions,
+                )
                 try:
                     result = await self._evaluate(state=state, questions=questions)
                 except Exception as exc:
@@ -862,7 +1006,6 @@ class DecisionPlugin(Star):
                     "name": name,
                     "description": short_description(
                         getattr(tool, "description", ""),
-                        self._int("tool_description_max_chars", 240),
                     ),
                     "handoff": is_handoff_tool(tool),
                     "active": tool_is_active(tool),
@@ -880,7 +1023,6 @@ class DecisionPlugin(Star):
                     "name": name,
                     "description": short_description(
                         getattr(tool, "description", "") or "AstrBot 内置工具",
-                        self._int("tool_description_max_chars", 240),
                     ),
                     "handoff": False,
                     "active": tool_is_active(tool),
@@ -929,7 +1071,6 @@ class DecisionPlugin(Star):
                 "main_llm_post_prompt": self._main_llm_post_prompt(),
                 "tool_filter_enabled": self._bool("tool_filter_enabled", True),
                 "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
-                "description_max_chars": self._int("tool_description_max_chars", 240),
             }
         )
 

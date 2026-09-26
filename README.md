@@ -18,11 +18,11 @@ AstrBot 智能决策引擎。插件在 AstrBot 主 LLM 请求前调用一个 Dec
        └─ AstrBot 主 Agent / Tool Loop / SubAgent / Provider
 ```
 
-插件配置中有两套可编辑提示词：`jev_pre_prompt` 发送给 Jev/Decision Model，`main_llm_post_prompt` 在 Jev 判断完成后追加到主 LLM 的 system prompt。后置提示词支持 `{tools}` 和 `{subagents}` 占位符；渲染只替换这两个占位符，不会破坏用户提示词中的其它大括号。Jev 不会收到 AstrBot 主 LLM 的完整 `system_prompt`。状态只包含当前请求、截断后的最近上下文、Tool 名称和简短描述、SubAgent 概览；不会发送 Tool 参数 JSON Schema。
+插件配置中有两套可编辑提示词：`jev_pre_prompt` 发送给 Jev/Decision Model，`main_llm_post_prompt` 在 Jev 判断完成后追加到主 LLM 的 system prompt。后置提示词支持 `{tools}` 和 `{subagents}` 占位符；渲染只替换这两个占位符，不会破坏用户提示词中的其它大括号。Jev 不会收到 AstrBot 主 LLM 的完整 `system_prompt`。状态只包含当前请求、截断后的最近上下文、Tool 名称和完整描述、SubAgent 概览；不会发送 Tool 参数 JSON Schema。
 
 ## Tools 与 SubAgents 的过滤和推荐
 
-普通 Tool 和每个 SubAgent 都有独立的 Noul 判断，尽量放在一个 SystemOne 请求中。候选只发送 `name + description`，不使用 Choice 选择一个唯一赢家。达到 `tool_noul_threshold` 的候选会进入主 LLM system prompt 中的推荐提示，因此推荐结果可以是 0 个、1 个或多个。两个过滤开关只控制候选是否从本轮 ToolSet 中移除，不会关闭 Jev 判断或推荐：
+普通 Tool 和每个 SubAgent 都有独立的 Noul 判断，优先放在一个 SystemOne 请求中。候选只发送 `name + description`，不再限制单个 Tool 描述长度；插件根据全局 `model_context_tokens` 统计完整请求的估算 Token 数，超限时按总量平均拆成多次请求并合并结果。不使用 Choice 选择一个唯一赢家。达到 `tool_noul_threshold` 的候选会进入主 LLM system prompt 中的推荐提示，因此推荐结果可以是 0 个、1 个或多个。两个过滤开关只控制候选是否从本轮 ToolSet 中移除，不会关闭 Jev 判断或推荐：
 
 - `过滤普通 Tools` 默认开启。开启时主 LLM 只能看到 Jev 判断达到阈值的普通 Tool；关闭时所有普通 Tool 都保留，但推荐提示仍只列出 Jev 选中的 Tool。
 - `过滤 SubAgents` 默认关闭。关闭时所有 SubAgent 都保留，但推荐提示仍只列出 Jev 选中的 SubAgent；开启时主 LLM 只能看到 Jev 判断达到阈值的 SubAgent。
@@ -72,7 +72,7 @@ AstrBot 要求 `>=4.28.1`。将运行时文件放入 `data/plugins/astrbot_plugi
 6. 在插件详情页 `settings` 中分别勾选普通 Tool 的 `始终保留` 和 `推荐给主 LLM`
 7. 如需主动回复，先填写 `proactive_whitelist`（群聊 ID 或私聊用户 ID），关闭 AstrBot 自带 `provider_ltm_settings.active_reply`，再开启插件 `proactive_reply_enabled`
 
-其余配置包括默认 5 秒超时、最大重试 1 次、重试间隔 0 秒、两套可编辑提示词、Tool 描述截断、历史消息限制、Always Keep、主动回复冷却/窗口和调试日志，均定义在 `_conf_schema.json`。通用配置页用 `[全局设置]`、`[Tools 与 SubAgent]`、`[主动对话]` 副标题区分适用范围；两套提示词、两个过滤开关和两个 Always Keep 列表使用隐藏 Schema 字段保存，只在插件详情页的 `settings` 页面编辑。运行时配置由 AstrBot 保存到 `data/config/astrbot_plugin_decision_config.json`。
+其余配置包括默认 5 秒超时、最大重试 1 次、重试间隔 0 秒、默认 32000 Token 上下文上限、两套可编辑提示词、历史消息限制、Always Keep、主动回复冷却/窗口和调试日志，均定义在 `_conf_schema.json`。通用配置页用 `[全局设置]`、`[Tools 与 SubAgent]`、`[主动对话]` 副标题区分适用范围；两套提示词、两个过滤开关和两个 Always Keep 列表使用隐藏 Schema 字段保存，只在插件详情页的 `settings` 页面编辑。运行时配置由 AstrBot 保存到 `data/config/astrbot_plugin_decision_config.json`。
 
 管理员诊断命令：
 

@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 
-def _clean_text(value: Any, limit: int) -> str:
+def _clean_text(value: Any, limit: int | None) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
@@ -24,7 +24,7 @@ def _clean_text(value: Any, limit: int) -> str:
     else:
         text = str(value)
     text = " ".join(text.split())
-    return text[: max(0, limit)]
+    return text if limit is None else text[: max(0, int(limit))]
 
 
 def context_lines(
@@ -57,8 +57,11 @@ def context_lines(
     return result
 
 
-def short_description(description: Any, max_chars: int) -> str:
-    return _clean_text(description, max(1, max_chars)) or "(no description)"
+def short_description(description: Any, max_chars: int | None = None) -> str:
+    return (
+        _clean_text(description, None if max_chars is None else max(1, max_chars))
+        or "(no description)"
+    )
 
 
 def build_decision_state(
@@ -98,7 +101,7 @@ def build_decision_state(
     return "\n\n".join(sections)
 
 
-def tool_summary(tool: Any, max_chars: int) -> dict[str, str]:
+def tool_summary(tool: Any, max_chars: int | None = None) -> dict[str, str]:
     return {
         "name": str(getattr(tool, "name", "")),
         "description": short_description(getattr(tool, "description", ""), max_chars),

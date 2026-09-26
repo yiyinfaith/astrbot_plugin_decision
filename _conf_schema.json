@@ -45,6 +45,12 @@
     "hint": "默认 0 秒，立即重试；主动对话连续失败时也使用此值作为基础退避间隔。",
     "default": 0.0
   },
+  "model_context_tokens": {
+    "type": "int",
+    "description": "[全局设置] Jev 模型上下文长度上限（Token；Tools、SubAgent、主动对话共用）",
+    "hint": "默认 32000。主动对话超限时裁剪最旧历史；Tools/SubAgent 超限时自动拆分为多次判断。",
+    "default": 32000
+  },
   "history_max_messages": {
     "type": "int",
     "description": "[全局设置] 发送给 Decision Model 的最近上下文消息数",
@@ -102,11 +108,6 @@
     "type": "float",
     "description": "[Tools 与 SubAgent] 过滤开关开启时，普通 Tool 或 SubAgent Noul 达到此概率才保留；无论开关状态都会用于推荐",
     "default": 0.2
-  },
-  "tool_description_max_chars": {
-    "type": "int",
-    "description": "[Tools 与 SubAgent] 发送给 Decision Model 的单个 Tool 描述最大字符数",
-    "default": 240
   },
   "always_keep_tools": {
     "type": "list",

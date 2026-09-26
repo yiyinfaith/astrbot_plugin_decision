@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from decision.context import build_decision_state, context_lines
+from decision.context import build_decision_state, context_lines, tool_summary
 from decision.context import question_id as make_question_id
 from decision.models import DecisionProviderError, DecisionValidationError, parse_systemone_response
 from decision.proactive import (
@@ -28,6 +28,7 @@ from decision.routing import (
     recommendations_from_noul,
     render_routing_prompt,
 )
+from decision.tokens import estimate_request_tokens, estimate_tokens, fit_request_state
 
 
 class FakeResponse:
@@ -666,6 +667,8 @@ def test_public_schema_hides_custom_page_prompts_and_page_switches():
     assert "analysis_on_mention_only" not in schema
     assert schema["retry_backoff_seconds"]["default"] == 0.0
     assert "Tools、SubAgent、主动对话共用" in schema["retries"]["description"]
+    assert schema["model_context_tokens"]["default"] == 32000
+    assert "tool_description_max_chars" not in schema
     assert schema["provider"]["description"].startswith("[全局设置]")
     assert schema["history_max_messages"]["description"].startswith("[全局设置]")
     assert schema["history_max_chars"]["description"].startswith("[全局设置]")
@@ -718,6 +721,20 @@ def test_context_limits_history_and_truncates_tool_results():
     )
     assert not any(line.endswith("current") for line in lines)
     assert len(next(line for line in lines if line.startswith("tool:"))) <= 506
+
+
+def test_token_budget_helpers_keep_requests_strictly_under_limit():
+    questions = {"q": {"type": "noul", "instructions": "判断"}}
+    state = "旧消息\n" * 200 + "当前消息"
+    assert estimate_tokens("中文") >= 2
+    fitted = fit_request_state(state, questions, 64)
+    assert estimate_request_tokens(fitted, questions) < 64
+    assert fitted.endswith("当前消息")
+
+
+def test_tool_summary_does_not_apply_a_per_tool_description_cap():
+    tool = SimpleNamespace(name="large", description="x" * 1000)
+    assert len(tool_summary(tool)["description"]) == 1000
 
 
 def test_question_id_is_stable_and_collision_resistant():
