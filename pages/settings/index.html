@@ -16,7 +16,7 @@
       button.secondary { background: color-mix(in srgb, CanvasText 15%, Canvas); color: CanvasText; }
       #status { min-height: 22px; }
       .list { display: grid; gap: 8px; }
-      label.tool { display: grid; grid-template-columns: minmax(180px, 210px) 1fr; gap: 14px; padding: 12px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 10px; }
+      label.tool { display: grid; grid-template-columns: minmax(180px, 210px) minmax(0, 1fr) minmax(150px, auto); gap: 14px; padding: 12px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 10px; align-items: start; }
       label.tool:hover { border-color: #6366f1; }
       .controls { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 8px 12px; }
       .check-option { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
@@ -25,6 +25,7 @@
       .tool-info { min-width: 0; }
       .name { font-weight: 650; }
       .desc { display: block; margin-top: 4px; font-size: 13px; opacity: .72; }
+      .origin { justify-self: end; text-align: right; font-size: 12px; opacity: .72; white-space: nowrap; }
       .tag { display: inline-block; margin-left: 6px; padding: 2px 6px; border-radius: 999px; font-size: 11px; background: color-mix(in srgb, #6366f1 24%, Canvas); }
       .prompts { display: grid; gap: 14px; margin: 22px 0; }
       .prompt-field { display: grid; gap: 6px; }
@@ -36,6 +37,10 @@
       .switch-option span { display: grid; gap: 3px; }
       .switch-option small { opacity: .72; }
       textarea { width: 100%; min-height: 150px; box-sizing: border-box; resize: vertical; padding: 10px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, CanvasText 30%, transparent); background: Canvas; color: CanvasText; font: 13px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+      @media (max-width: 760px) {
+        label.tool { grid-template-columns: 1fr; gap: 8px; }
+        .origin { justify-self: start; text-align: left; }
+      }
     </style>
   </head>
   <body>
@@ -125,10 +130,13 @@
           controls.append(keepLabel, recommendLabel);
           const text = document.createElement("span");
           text.className = "tool-info";
-          text.innerHTML = `<span class="name"></span>${tool.handoff ? '<span class="tag">SubAgent · 自动判断</span>' : ''}${builtInDecisionTool ? '<span class="tag">内置决策工具</span>' : ''}<span class="desc"></span>`;
+          text.innerHTML = `<span class="name"></span>${tool.handoff ? '<span class="tag">SubAgent · 自动判断</span>' : ''}${builtInDecisionTool ? '<span class="tag">Astrbot内置工具</span>' : ''}<span class="desc"></span>`;
           text.querySelector(".name").textContent = tool.name;
           text.querySelector(".desc").textContent = tool.description + (tool.active ? "" : "（未激活）");
-          label.append(controls, text);
+          const origin = document.createElement("span");
+          origin.className = "origin";
+          origin.textContent = tool.origin_display || "未知来源";
+          label.append(controls, text, origin);
           list.append(label);
         }
         if (!list.children.length) list.textContent = "没有匹配的工具";

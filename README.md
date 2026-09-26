@@ -31,7 +31,7 @@ AstrBot 智能决策引擎。插件在 AstrBot 主 LLM 请求前调用一个 Dec
 
 若服务端返回当前已知的“混合题型 usage”400，Provider 会按 Noul、Choice、Score 题型拆成最多三路；同一题型（包括大量 Noul）仍保持单请求。
 
-Always Keep 页面位于插件详情页的 `settings` Plugin Page。页面通过 AstrBot 官方 `window.AstrBotPluginPage` bridge 调用插件 Web API，读取并展示当前工具管理器中的全部插件/MCP Tool，同时调用 AstrBot 的 `iter_builtin_tools()` 展示原生内置 Tool。列表支持搜索、勾选和保存。每个普通 Tool 有两个独立选项：`始终保留` 和 `推荐给主 LLM`。第二项只有在第一项勾选后才可用；因此可以让一个 Tool 始终留在本轮 ToolSet 中，但不主动推荐它。Always Keep 只在本轮原本允许的 `req.func_tool` 中生效，因此不会突破 Persona 的 Tool 权限。SubAgent 的推荐由 Jev 逐个判断，页面不提供手工推荐勾选；内置 `jev_decide` 和 AstrBot 原生 Tool 首次打开页面时默认勾选始终保留、默认不勾选推荐，也可以像其它 Tool 一样取消勾选并保存。
+Always Keep 页面位于插件详情页的 `settings` Plugin Page。页面通过 AstrBot 官方 `window.AstrBotPluginPage` bridge 调用插件 Web API，读取并展示当前工具管理器中的全部插件/MCP Tool，同时调用 AstrBot 的 `iter_builtin_tools()` 展示原生内置 Tool。每个工具右侧会显示来源插件；同一来源的工具会排列在一起，`Astrbot内置工具` 默认排在列表底部。列表支持搜索、勾选和保存。每个普通 Tool 有两个独立选项：`始终保留` 和 `推荐给主 LLM`。第二项只有在第一项勾选后才可用；因此可以让一个 Tool 始终留在本轮 ToolSet 中，但不主动推荐它。Always Keep 只在本轮原本允许的 `req.func_tool` 中生效，因此不会突破 Persona 的 Tool 权限。SubAgent 的推荐由 Jev 逐个判断，页面不提供手工推荐勾选；内置 `jev_decide` 和 AstrBot 原生 Tool 首次打开页面时默认勾选始终保留、默认不勾选推荐，也可以像其它 Tool 一样取消勾选并保存。
 
 普通 Tool 和 SubAgent 的推荐会在同一个可配置提示中分开列出。插件把这段提示追加到本次请求已有的 `req.system_prompt` 末尾，因此 AstrBot 原人格和其它插件已经追加的系统提示词都会保留；插件不会覆盖、清空或重建其它内容。提示明确允许主 LLM 选择零个、一个或多个候选；主 LLM 仍然可以忽略推荐并自行决定调用方式。
 

@@ -210,6 +210,31 @@ class DecisionPlugin(Star):
             if str(getattr(tool, "name", "")).strip()
         }
 
+    def _tool_origin(self, tool: Any, *, builtin: bool = False) -> str:
+        """Resolve the human-readable owner shown in the settings page."""
+
+        if builtin or getattr(tool, "name", None) == DECISION_TOOL_NAME:
+            return "Astrbot内置工具"
+        mcp_server = str(getattr(tool, "mcp_server_name", "") or "").strip()
+        if mcp_server:
+            return f"MCP · {mcp_server}"
+        module_path = str(getattr(tool, "handler_module_path", "") or "").strip()
+        if module_path:
+            getter = getattr(self.context, "get_registered_star", None)
+            if callable(getter):
+                try:
+                    star = getter(module_path)
+                except (AttributeError, KeyError, TypeError, ValueError):
+                    star = None
+                if star is not None:
+                    return str(
+                        getattr(star, "display_name", None)
+                        or getattr(star, "name", None)
+                        or module_path
+                    )
+            return module_path
+        return "未知来源"
+
     def _state_for_request(
         self,
         req: ProviderRequest,
@@ -825,6 +850,7 @@ class DecisionPlugin(Star):
                     "handoff": is_handoff_tool(tool),
                     "active": tool_is_active(tool),
                     "builtin": name == DECISION_TOOL_NAME,
+                    "origin_display": self._tool_origin(tool),
                 }
             )
         for tool in self._builtin_tool_objects():
@@ -842,6 +868,7 @@ class DecisionPlugin(Star):
                     "handoff": False,
                     "active": tool_is_active(tool),
                     "builtin": True,
+                    "origin_display": "Astrbot内置工具",
                 }
             )
         if DECISION_TOOL_NAME not in seen_names:
@@ -853,8 +880,16 @@ class DecisionPlugin(Star):
                     "handoff": False,
                     "active": True,
                     "builtin": True,
+                    "origin_display": "Astrbot内置工具",
                 },
             )
+        tools.sort(
+            key=lambda item: (
+                bool(item.get("builtin")),
+                str(item.get("origin_display", "")).casefold(),
+                str(item.get("name", "")).casefold(),
+            )
+        )
         return json_response({"tools": tools})
 
     async def page_settings(self):

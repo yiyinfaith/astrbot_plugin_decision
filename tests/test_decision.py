@@ -627,6 +627,8 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     assert "推荐给主 LLM" in page
     assert "jev_decide" not in page
     assert "tool.builtin === true" in page
+    assert "Astrbot内置工具" in page
+    assert "origin_display" in page
 
 
 def test_proactive_schema_contains_direct_prefix_and_state_controls_only():
