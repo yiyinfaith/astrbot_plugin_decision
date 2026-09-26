@@ -486,7 +486,9 @@ class DecisionPlugin(Star):
             return True
         if event.get_extra("handlers_parsed_params", {}):
             return True
-        if str(event.get_sender_id() or "") == str(event.get_self_id() or ""):
+        sender_id = str(event.get_sender_id() or "")
+        self_id = str(event.get_self_id() or "")
+        if sender_id and self_id and sender_id == self_id:
             return True
         # AstrBot has already decided this is a wake/command event; allow its
         # native pipeline to handle it and do not issue a second Jev request.
@@ -670,7 +672,10 @@ class DecisionPlugin(Star):
             return
         text = str(getattr(response, "completion_text", "") or "").strip()
         session = str(event.unified_msg_origin)
-        self.proactive.mark_reply_success(session)
+        # The response hook also sees ordinary user-addressed Agent replies;
+        # only a slot reserved by our proactive path may update its state.
+        if self.proactive.has_pending_reply(session):
+            self.proactive.mark_reply_success(session)
         if text:
             self.proactive.add(
                 session,

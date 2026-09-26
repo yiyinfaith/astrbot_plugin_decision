@@ -658,3 +658,9 @@ def test_proactive_state_session_limit_does_not_grow_without_bound():
     state.add("two", ProactiveRecord("b", "2", "x"))
     state.add("three", ProactiveRecord("c", "3", "x"))
     assert len(state.sessions) <= 2
+
+
+def test_normal_llm_response_does_not_create_proactive_state():
+    state = ProactiveState()
+    assert not state.has_pending_reply("ordinary")
+    assert "ordinary" not in state.sessions

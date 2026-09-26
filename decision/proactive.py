@@ -294,5 +294,9 @@ class ProactiveState:
         current.consecutive_failures = 0
         self.set_status(session, ProactiveStatus.SUMMONED)
 
+    def has_pending_reply(self, session: str) -> bool:
+        current = self.sessions.get(str(session))
+        return bool(current and current.pending_reply)
+
     def mark_reply_finished(self, session: str) -> None:
         self._session(session).pending_reply = False
