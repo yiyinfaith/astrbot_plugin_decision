@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
     <title>Decision Engine 设置</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <script src="https://glass.goose.gs.cn/liquid-glass.js"></script>
@@ -32,6 +33,37 @@
           radial-gradient(circle at 8% 0%, rgba(63, 126, 255, .24), transparent 34%),
           radial-gradient(circle at 92% 10%, rgba(144, 91, 255, .18), transparent 28%),
           linear-gradient(145deg, #080d18 0%, #0d1728 55%, #0a1020 100%);
+        overflow-x: hidden;
+      }
+      body::before, body::after {
+        content: "";
+        position: fixed;
+        z-index: -1;
+        width: 46vw;
+        height: 46vw;
+        min-width: 360px;
+        min-height: 360px;
+        border-radius: 50%;
+        pointer-events: none;
+        filter: blur(24px);
+        opacity: .58;
+        mix-blend-mode: screen;
+        animation: ambient-drift 18s ease-in-out infinite alternate;
+      }
+      body::before {
+        top: -18vw;
+        left: -12vw;
+        background: radial-gradient(circle at 52% 52%, rgba(76, 167, 255, .42), rgba(37, 73, 180, .08) 58%, transparent 72%);
+      }
+      body::after {
+        right: -15vw;
+        bottom: -20vw;
+        background: radial-gradient(circle at 45% 45%, rgba(183, 110, 255, .34), rgba(48, 84, 198, .08) 58%, transparent 72%);
+        animation-delay: -7s;
+      }
+      @keyframes ambient-drift {
+        from { transform: translate3d(-2%, -1%, 0) scale(1); }
+        to { transform: translate3d(5%, 4%, 0) scale(1.08); }
       }
       button, input, textarea { font: inherit; }
       button { cursor: pointer; }
@@ -41,9 +73,35 @@
         overflow: hidden;
         border: 1px solid var(--line);
         border-radius: 30px;
-        background: var(--panel);
-        box-shadow: 0 26px 80px rgba(0, 0, 0, .28), inset 0 1px rgba(255, 255, 255, .08);
-        backdrop-filter: blur(24px) saturate(135%);
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, .115), rgba(255, 255, 255, .025) 38%, rgba(86, 132, 255, .065)),
+          rgba(14, 25, 48, .48);
+        box-shadow:
+          0 28px 90px rgba(0, 0, 0, .36),
+          inset 0 1px 0 rgba(255, 255, 255, .22),
+          inset 0 -1px 0 rgba(101, 153, 255, .12),
+          0 0 0 1px rgba(115, 170, 255, .04);
+        backdrop-filter: blur(30px) saturate(165%);
+        -webkit-backdrop-filter: blur(30px) saturate(165%);
+      }
+      .hero::before, .glass-card::before, .tabbar::before, .save-bar::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background:
+          linear-gradient(118deg, rgba(255, 255, 255, .16), transparent 22%, transparent 62%, rgba(138, 173, 255, .09)),
+          radial-gradient(circle at 12% 0%, rgba(255, 255, 255, .11), transparent 30%);
+        opacity: .72;
+      }
+      .hero::after, .glass-card::after, .tabbar::after, .save-bar::after {
+        content: "";
+        position: absolute;
+        inset: 1px;
+        border-radius: inherit;
+        pointer-events: none;
+        border: 1px solid rgba(255, 255, 255, .055);
+        box-shadow: inset 0 0 24px rgba(103, 161, 255, .035);
       }
       .hero { min-height: 226px; padding: 34px 38px; }
       .glass-backdrop { position: absolute; inset: 0; opacity: .46; pointer-events: none; }
@@ -55,10 +113,10 @@
       .status-pill { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; border-radius: 999px; background: rgba(10, 19, 35, .82); border: 1px solid var(--line); color: #c9d8ef; font-size: 12px; }
       .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 13px var(--green); }
       .status-dot.off { background: #8996aa; box-shadow: none; }
-      .tabbar { position: relative; min-height: 104px; margin: 22px 0; padding: 12px; border-radius: 24px; overflow: hidden; border: 1px solid var(--line); background: rgba(17, 28, 48, .72); }
+      .tabbar { position: relative; min-height: 104px; margin: 22px 0; padding: 12px; border-radius: 24px; overflow: hidden; border: 1px solid var(--line); background: linear-gradient(135deg, rgba(255,255,255,.095), rgba(80,130,255,.045) 45%, rgba(16,25,51,.46)); box-shadow: 0 22px 70px rgba(0,0,0,.28), inset 0 1px rgba(255,255,255,.16); backdrop-filter: blur(26px) saturate(165%); -webkit-backdrop-filter: blur(26px) saturate(165%); }
       .tab-glass { position: absolute; inset: 0; opacity: .5; pointer-events: none; }
       .tab-buttons { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; height: 78px; }
-      .tab-button { border: 1px solid transparent; border-radius: 17px; color: #aab9d0; background: rgba(19, 31, 52, .95); transition: .2s ease; }
+      .tab-button { border: 1px solid rgba(159, 201, 255, .08); border-radius: 17px; color: #aab9d0; background: rgba(19, 31, 52, .78); box-shadow: inset 0 1px rgba(255,255,255,.045); transition: .2s ease; }
       .tab-button:hover { background: #21375a; color: white; }
       .tab-button.active { color: white; border-color: rgba(132, 183, 255, .7); background: linear-gradient(135deg, #246dcc, #5147b9); box-shadow: 0 10px 24px rgba(41, 106, 220, .28); }
       .tab-button strong { display: block; font-size: 14px; }
@@ -114,7 +172,7 @@
       .tool-count { color: #7f90aa; font-size: 11px; }
       .empty { padding: 28px; text-align: center; color: var(--muted); }
       .prompt-grid { display: grid; gap: 18px; }
-      .save-bar { position: fixed; z-index: 10; right: 24px; bottom: 22px; display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 16px; border: 1px solid rgba(160, 202, 255, .3); border-radius: 18px; background: rgba(13, 25, 45, .94); box-shadow: 0 18px 55px rgba(0,0,0,.4); }
+      .save-bar { position: fixed; z-index: 10; right: 24px; bottom: 22px; display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 16px; border: 1px solid rgba(160, 202, 255, .3); border-radius: 18px; background: linear-gradient(135deg, rgba(255,255,255,.12), rgba(25,42,78,.72)); box-shadow: 0 18px 55px rgba(0,0,0,.4), inset 0 1px rgba(255,255,255,.18); backdrop-filter: blur(24px) saturate(160%); -webkit-backdrop-filter: blur(24px) saturate(160%); }
       .save-status { color: #9fb3cf; font-size: 12px; }
       .save-status.ok { color: #71e1b6; }
       .save-status.error { color: #ff9cab; }
@@ -213,6 +271,24 @@
         async apiGet(path) { return path === 'tools' ? {tools: []} : {}; },
         async apiPost() { return {saved: true}; }
       };
+      const DEFAULT_JEV_PROMPT = `你是一个只负责结构化判断的 Decision Model。
+请严格根据当前场景、用户请求和候选能力逐项判断。
+不要生成最终回答，不要执行工具，不要发明候选名称。`;
+      const DEFAULT_MAIN_PROMPT = `<decision_routing_hint>
+当前场景需要根据用户请求选择合适的能力。
+推荐你优先考虑使用以下 Tools：{tools}
+如果确有必要委派，推荐你考虑以下 SubAgents：{subagents}
+
+以上是 Decision Engine 根据当前场景给出的推荐；你仍需自行判断是否调用、调用哪些参数，以及是否委派。
+推荐列表可以为空，也可以同时包含多个候选。
+</decision_routing_hint>`;
+      function payloadOf(value) {
+        if (value && typeof value === 'object' && value.data && typeof value.data === 'object') {
+          return value.data;
+        }
+        return value && typeof value === 'object' ? value : {};
+      }
+      function hasOwn(value, key) { return Object.prototype.hasOwnProperty.call(value, key); }
       const defaults = {
         proactive_whitelist: [], direct_reply_prefixes: ['/', '@'], force_reply_when_summoned: true,
         proactive_alias: 'AI|助手', proactive_score_threshold: .68, addressing_threshold: .7,
@@ -223,7 +299,7 @@
         dense_conversation_threshold: 30, dense_conversation_window_seconds: 600, min_participant_count: 2
       };
       createApp({
-        data() { return { loading: true, saving: false, activeTab: 'routing', toolSearch: '', statusText: '加载中…', saveState: '', tools: [], selectedKeep: [], selectedRecommend: [], toolsEnabledValue: true, proactiveEnabledValue: false, tabs: [{id:'routing',label:'路由策略',caption:'Tools 与 SubAgents'},{id:'proactive',label:'主动对话',caption:'判断与节流'},{id:'tools',label:'工具管理',caption:'保留与推荐'}], form: { tool_filter_enabled: true, subagent_filter_enabled: false, tool_noul_threshold: .2, jev_pre_prompt: '', main_llm_post_prompt: '', proactive: {...defaults} } }; },
+        data() { return { loading: true, saving: false, activeTab: 'routing', toolSearch: '', statusText: '加载中…', saveState: '', tools: [], selectedKeep: [], selectedRecommend: [], toolsEnabledValue: true, proactiveEnabledValue: false, tabs: [{id:'routing',label:'路由策略',caption:'Tools 与 SubAgents'},{id:'proactive',label:'主动对话',caption:'判断与节流'},{id:'tools',label:'工具管理',caption:'保留与推荐'}], form: { tool_filter_enabled: true, subagent_filter_enabled: false, tool_noul_threshold: .2, jev_pre_prompt: DEFAULT_JEV_PROMPT, main_llm_post_prompt: DEFAULT_MAIN_PROMPT, proactive: {...defaults} } }; },
         computed: {
           toolsEnabled() { return this.toolsEnabledValue; },
           proactiveEnabled() { return this.proactiveEnabledValue; },
@@ -238,7 +314,7 @@
           selectVisible() { for (const tool of this.visibleTools) if (tool.active && !this.isKept(tool.name)) this.selectedKeep.push(tool.name); this.selectedKeep = [...new Set(this.selectedKeep)]; },
           clearVisible() { const names = new Set(this.visibleTools.map(t => t.name)); this.selectedKeep = this.selectedKeep.filter(n => !names.has(n)); this.selectedRecommend = this.selectedRecommend.filter(n => !names.has(n)); },
           async save() { this.saving = true; this.saveState = ''; this.statusText = '保存中…'; try { const proactive = {...this.form.proactive, proactive_whitelist: String(this.form.proactive.proactive_whitelist || '').split(/\n|,/).map(s=>s.trim()).filter(Boolean), direct_reply_prefixes: String(this.form.proactive.direct_reply_prefixes || '').split(/\n|[,，]/).map(s=>s.trim()).filter(Boolean)}; await bridge.apiPost('settings/save', {always_keep_tools: this.selectedKeep, always_keep_recommend_tools: this.selectedRecommend, jev_pre_prompt: this.form.jev_pre_prompt, main_llm_post_prompt: this.form.main_llm_post_prompt, tool_filter_enabled: this.form.tool_filter_enabled, subagent_filter_enabled: this.form.subagent_filter_enabled, tool_noul_threshold: Number(this.form.tool_noul_threshold), proactive}); this.statusText = '已保存'; this.saveState = 'ok'; } catch (e) { this.statusText = `保存失败：${e.message || e}`; this.saveState = 'error'; } finally { this.saving = false; } },
-          async load() { try { await bridge.ready(); const [toolData, settings] = await Promise.all([bridge.apiGet('tools'), bridge.apiGet('settings')]); this.tools = toolData.tools || []; this.selectedKeep = settings.always_keep_tools || []; this.selectedRecommend = settings.always_keep_recommend_tools || []; this.form.tool_filter_enabled = settings.tool_filter_enabled !== false; this.form.subagent_filter_enabled = settings.subagent_filter_enabled === true; this.form.tool_noul_threshold = settings.tool_noul_threshold ?? .2; this.form.jev_pre_prompt = settings.jev_pre_prompt || ''; this.form.main_llm_post_prompt = settings.main_llm_post_prompt || ''; this.form.proactive = {...defaults, ...(settings.proactive || {})}; this.form.proactive.proactive_whitelist = (settings.proactive?.proactive_whitelist || []).join('\n'); this.form.proactive.direct_reply_prefixes = (settings.proactive?.direct_reply_prefixes || ['/', '@']).join(', '); this.toolsEnabledValue = settings.tools_subagents_decision_enabled !== false; this.proactiveEnabledValue = settings.proactive_reply_enabled === true; this.statusText = '已加载'; } catch (e) { this.statusText = `加载失败：${e.message || e}`; this.saveState = 'error'; } finally { this.loading = false; } }
+          async load() { try { await bridge.ready(); const [rawToolData, rawSettings] = await Promise.all([bridge.apiGet('tools'), bridge.apiGet('settings')]); const toolData = payloadOf(rawToolData); const settings = payloadOf(rawSettings); this.tools = Array.isArray(toolData.tools) ? toolData.tools : []; this.selectedKeep = Array.isArray(settings.always_keep_tools) ? settings.always_keep_tools : []; this.selectedRecommend = Array.isArray(settings.always_keep_recommend_tools) ? settings.always_keep_recommend_tools : []; this.form.tool_filter_enabled = settings.tool_filter_enabled !== false; this.form.subagent_filter_enabled = settings.subagent_filter_enabled === true; this.form.tool_noul_threshold = settings.tool_noul_threshold ?? .2; this.form.jev_pre_prompt = hasOwn(settings, 'jev_pre_prompt') ? String(settings.jev_pre_prompt ?? '') : DEFAULT_JEV_PROMPT; this.form.main_llm_post_prompt = hasOwn(settings, 'main_llm_post_prompt') ? String(settings.main_llm_post_prompt ?? '') : DEFAULT_MAIN_PROMPT; this.form.proactive = {...defaults, ...(settings.proactive || {})}; this.form.proactive.proactive_whitelist = (settings.proactive?.proactive_whitelist || []).join('\n'); this.form.proactive.direct_reply_prefixes = (settings.proactive?.direct_reply_prefixes || ['/', '@']).join(', '); this.toolsEnabledValue = settings.tools_subagents_decision_enabled !== false; this.proactiveEnabledValue = settings.proactive_reply_enabled === true; this.statusText = `已加载 ${this.tools.length} 个工具`; } catch (e) { this.statusText = `加载失败：${e.message || e}`; this.saveState = 'error'; } finally { this.loading = false; } }
         },
         mounted() { this.load(); nextTick(() => requestAnimationFrame(() => { const nav = document.getElementById('glassNav'); if (nav?.setTabs) nav.setTabs([[{label:'路由策略'},{label:'主动对话'},{label:'工具管理'}]]); })); }
       }).mount('#app');

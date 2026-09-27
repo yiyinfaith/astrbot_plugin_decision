@@ -734,6 +734,9 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     assert "https://glass.goose.gs.cn/liquid-glass.js" in page
     assert "setTabs" in page
     assert "background: linear-gradient" in page
+    assert "只负责结构化判断的 Decision Model" in page
+    assert "当前场景需要根据用户请求选择合适的能力" in page
+    assert "payloadOf" in page
 
 
 def test_proactive_details_are_page_only_and_excluded_from_public_schema():
