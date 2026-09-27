@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
+import os
+import tempfile
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from astrbot import logger
@@ -89,6 +93,13 @@ class DecisionPlugin(Star):
         super().__init__(context)
         self.context = context
         self.config = config
+        self._settings_path = self._get_settings_path(config)
+        self._detail_settings = self._load_detail_settings()
+        # AstrBot's schema-backed config intentionally removes unknown keys on
+        # reload.  Keep WebUI-only settings in a separate data file, while
+        # mirroring them into the live config so existing runtime code can use
+        # the same accessors without placing them in the plugin directory.
+        self.config.update(self._detail_settings)
         self.provider: SystemOneProvider | None = None
         self._ready = False
         self._active_reply_warning_emitted = False
@@ -131,6 +142,51 @@ class DecisionPlugin(Star):
             ["POST"],
             "Save Decision Engine page settings",
         )
+
+    @staticmethod
+    def _get_settings_path(config: AstrBotConfig) -> Path:
+        config_path = getattr(config, "config_path", "")
+        if config_path:
+            return Path(str(config_path)).resolve().with_name(f"{PLUGIN_NAME}_settings.json")
+        return Path("data") / "config" / f"{PLUGIN_NAME}_settings.json"
+
+    def _load_detail_settings(self) -> dict[str, Any]:
+        try:
+            if not self._settings_path.is_file():
+                return {}
+            with self._settings_path.open(encoding="utf-8-sig") as file:
+                value = json.load(file)
+            return dict(value) if isinstance(value, Mapping) else {}
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "Decision Engine could not read WebUI settings; defaults will be used: %s",
+                _safe_error(exc),
+            )
+            return {}
+
+    def _save_detail_settings(self, values: Mapping[str, Any]) -> None:
+        payload = dict(values)
+        self._settings_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(
+            dir=str(self._settings_path.parent),
+            prefix=f".{self._settings_path.name}.",
+            suffix=".tmp",
+        )
+        committed = False
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                json.dump(payload, file, ensure_ascii=False, indent=2)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary, self._settings_path)
+            committed = True
+        finally:
+            if not committed:
+                try:
+                    os.unlink(temporary)
+                except FileNotFoundError:
+                    pass
+        self._detail_settings = payload
 
     async def initialize(self) -> None:
         provider_name = str(self.config.get("provider", "systemone_jev"))
@@ -553,6 +609,12 @@ class DecisionPlugin(Star):
                 question_to_handoff=subagent_question_to_name,
                 filter_ordinary=tool_filter_enabled,
                 filter_handoffs=subagent_filter_enabled,
+            )
+            add_routing_hint(
+                req,
+                template=self._main_llm_post_prompt(),
+                recommended_tools=outcome.recommended_tools,
+                recommended_subagents=[],
             )
             req.func_tool.tools = outcome.selected
             self._log_routing_outcome(outcome)
@@ -1253,9 +1315,28 @@ class DecisionPlugin(Star):
             self.config["tool_noul_threshold"] = min(1.0, max(0.0, float(tool_noul_threshold)))
         for key, value in cleaned_proactive.items():
             self.config[key] = value
-        save = getattr(self.config, "save_config", None)
-        if callable(save):
-            save()
+        self.proactive.reconfigure(
+            self._int("proactive_history_max_messages", 12),
+            self._int("proactive_max_sessions", 500),
+        )
+        detail_values = {
+            "always_keep_tools": cleaned,
+            "always_keep_recommend_tools": cleaned_recommend,
+            "always_keep_tools_customized": True,
+            "tool_filter_enabled": self._bool("tool_filter_enabled", True),
+            "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
+            "tool_noul_threshold": self._float("tool_noul_threshold", 0.2),
+            "jev_pre_prompt": self._policy(),
+            "main_llm_post_prompt": self._main_llm_post_prompt(),
+            **{
+                key: self.config.get(key, default)
+                for key, default in PROACTIVE_PAGE_DEFAULTS.items()
+            },
+        }
+        # Detailed WebUI settings must survive plugin updates.  AstrBot's
+        # schema config remains reserved for the public global fields and is
+        # therefore deliberately not saved here.
+        self._save_detail_settings(detail_values)
         return json_response(
             {
                 "saved": True,

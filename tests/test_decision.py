@@ -763,6 +763,7 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     assert "payloadOf" in page
     assert "waitForBridge" in page
     assert "fallbackBridge" in page
+    assert "JSON.parse(JSON.stringify(body))" in page
 
 
 def test_proactive_details_are_page_only_and_excluded_from_public_schema():
@@ -846,6 +847,17 @@ def test_proactive_history_records_bot_and_user_roles():
     state.add("g", ProactiveRecord("Alice", "1", "hello"))
     state.add("g", ProactiveRecord("bot", "0", "reply", True))
     assert state.history_lines("g", 200) == ["[Alice]: hello", "[bot]: reply"]
+
+
+def test_proactive_reconfigure_applies_live_history_and_session_limits():
+    state = ProactiveState(max_messages=5, max_sessions=3)
+    for index in range(5):
+        state.add("g", ProactiveRecord("user", str(index), str(index)))
+    state.reconfigure(max_messages=2, max_sessions=1)
+    assert state.history_lines("g", 200) == ["[user]: 3", "[user]: 4"]
+    state.add("other", ProactiveRecord("user", "x", "x"))
+    state.add("third", ProactiveRecord("user", "y", "y"))
+    assert len(state.sessions) <= 1
 
 
 def test_proactive_cooldown_and_window():

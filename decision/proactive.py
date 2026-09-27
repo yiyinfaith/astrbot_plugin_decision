@@ -162,6 +162,17 @@ class ProactiveState:
             self._access.pop(key, None)
             self._locks.pop(key, None)
 
+    def reconfigure(self, max_messages: int, max_sessions: int) -> None:
+        """Apply WebUI history/session limits to the live state immediately."""
+
+        self.max_messages = max(2, int(max_messages))
+        self.max_sessions = max(1, int(max_sessions))
+        for key, session in list(self.sessions.items()):
+            if session.history.maxlen != self.max_messages:
+                session.history = deque(session.history, maxlen=self.max_messages)
+                self.history[key] = session.history
+        self._prune_sessions()
+
     def lock_for(self, session: str) -> asyncio.Lock:
         key = str(session)
         lock = self._locks.get(key)

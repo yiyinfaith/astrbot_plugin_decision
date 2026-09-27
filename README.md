@@ -11,11 +11,12 @@ AstrBot 原生插件配置页只保留 13 项：
 
 过滤阈值、Always Keep、两套提示词、主动对话白名单和主动对话的全部节流/状态参数，都在插件详情页的 WebUI 中配置。WebUI 使用 Vue 3 CDN 和 GooseHyperGlassCDN 的 `liquid-glass` 组件，玻璃层只负责环境光与层次；带文字的按钮使用不透明实色背景，保证可读性。
 
-配置由 AstrBot 写入：
+配置由 AstrBot 写入数据目录：
 
-`data/config/astrbot_plugin_decision_config.json`
+- `data/config/astrbot_plugin_decision_config.json`：原生配置页中的全局服务参数和两个总开关；
+- `data/config/astrbot_plugin_decision_settings.json`：WebUI 中的过滤策略、提示词、工具选择和主动对话详细设置。
 
-插件目录只保存代码、Schema、页面和静态资源。更新插件不会覆盖配置。
+插件目录只保存代码、Schema、页面和静态资源。更新插件不会覆盖这两个配置文件。
 
 ## Tools 与 SubAgents
 
