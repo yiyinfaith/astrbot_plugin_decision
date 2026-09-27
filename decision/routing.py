@@ -27,6 +27,7 @@ class RoutingOutcome:
     handoffs: list[Any]
     decision_tool: Any | None
     recommended_tools: list[str] = field(default_factory=list)
+    recommended_subagents: list[str] = field(default_factory=list)
 
 
 def choose_tools(

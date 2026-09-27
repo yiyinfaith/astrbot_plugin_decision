@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import aiohttp
@@ -33,6 +33,7 @@ class SystemOneProvider(DecisionProvider):
         timeout_sec: float = 5,
         retries: int = 1,
         retry_backoff_sec: float = 0,
+        retry_logger: Callable[[int, int, str, float], None] | None = None,
         chunk_size: int = 32,
         session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -43,6 +44,7 @@ class SystemOneProvider(DecisionProvider):
         self.timeout_sec = max(1.0, float(timeout_sec))
         self.retries = max(0, int(retries))
         self.retry_backoff_sec = max(0.0, float(retry_backoff_sec))
+        self.retry_logger = retry_logger
         self.chunk_size = max(2, int(chunk_size))
         self._session = session
         self._owns_session = session is None
@@ -283,6 +285,13 @@ class SystemOneProvider(DecisionProvider):
                     raise
                 # The interval is shared by Tools/SubAgents and proactive
                 # decisions. The caller's timeout still bounds each attempt.
+                if self.retry_logger is not None:
+                    self.retry_logger(
+                        attempt + 1,
+                        self.retries,
+                        str(exc),
+                        self.retry_backoff_sec,
+                    )
                 await asyncio.sleep(self.retry_backoff_sec)
         raise DecisionProviderError("SystemOne request failed") from last_error
 

@@ -126,6 +126,7 @@ class DecisionPlugin(Star):
             timeout_sec=self._float("timeout_sec", 5.0),
             retries=self._int("retries", 1),
             retry_backoff_sec=self._float("retry_backoff_seconds", 0.0),
+            retry_logger=self._log_provider_retry,
         )
         # Create the reusable session during plugin initialization. A missing key
         # is reported only as a configuration warning and does not break AstrBot.
@@ -140,6 +141,17 @@ class DecisionPlugin(Star):
             logger.warning(
                 "Decision Engine API key is empty; tool filtering and proactive decisions are disabled."
             )
+
+    def _log_provider_retry(
+        self, retry_number: int, max_retries: int, reason: str, backoff_seconds: float
+    ) -> None:
+        logger.warning(
+            "Decision Engine Jev 请求失败，将进行第 %d/%d 次重试；间隔 %.2f 秒：%s",
+            retry_number,
+            max_retries,
+            backoff_seconds,
+            _safe_error(RuntimeError(reason)),
+        )
 
     async def terminate(self) -> None:
         if self.provider is not None:
@@ -408,6 +420,25 @@ class DecisionPlugin(Star):
             self._last_call_latency_ms = (time.perf_counter() - started) * 1000
             raise
 
+    def _log_routing_outcome(self, outcome: Any) -> None:
+        selected_tools = [
+            str(getattr(tool, "name", ""))
+            for tool in outcome.selected
+            if getattr(tool, "name", None) and not is_handoff_tool(tool)
+        ]
+        selected_subagents = [
+            str(getattr(tool, "name", ""))
+            for tool in outcome.selected
+            if getattr(tool, "name", None) and is_handoff_tool(tool)
+        ]
+        logger.info(
+            "Decision Engine 共筛选出如下工具：Tools=%s；SubAgents=%s；推荐 Tools=%s；推荐 SubAgents=%s",
+            ", ".join(selected_tools) or "无",
+            ", ".join(selected_subagents) or "无",
+            ", ".join(outcome.recommended_tools) or "无",
+            ", ".join(getattr(outcome, "recommended_subagents", [])) or "无",
+        )
+
     @filter.on_llm_request(priority=1000)
     async def filter_tools_before_llm(
         self,
@@ -500,6 +531,7 @@ class DecisionPlugin(Star):
                 filter_handoffs=subagent_filter_enabled,
             )
             req.func_tool.tools = outcome.selected
+            self._log_routing_outcome(outcome)
             return
 
         try:
@@ -561,18 +593,8 @@ class DecisionPlugin(Star):
             recommended_subagents=recommended_subagents,
         )
         req.func_tool.tools = outcome.selected
-        if self._bool("debug_log", False):
-            selected_names = [str(getattr(tool, "name", "")) for tool in outcome.selected]
-            logger.debug(
-                "Decision routing: input_tools=%d selected=%d always_keep=%d always_keep_recommend=%d subagents=%d recommended_tools=%s recommended_subagents=%s",
-                len(original),
-                len(selected_names),
-                len(always_keep),
-                len(always_keep_recommend),
-                len(handoffs),
-                ",".join(recommended_tools) or "none",
-                ",".join(recommended_subagents) or "none",
-            )
+        outcome.recommended_subagents = recommended_subagents
+        self._log_routing_outcome(outcome)
 
     async def _run_decision_tool(
         self,
@@ -761,6 +783,7 @@ class DecisionPlugin(Star):
         if self._direct_reply_requested(event):
             event.is_at_or_wake_command = True
             self.proactive.set_status(str(event.unified_msg_origin), ProactiveStatus.SUMMONED)
+            logger.info("Decision Engine 因为命中直接回复前缀或 @ 机器人，所以主动对话。")
             return
 
         if not self.provider or not self._ready:
@@ -804,6 +827,7 @@ class DecisionPlugin(Star):
                 should_reply = True
                 scores: dict[str, float] = {}
                 aggregate = 1.0
+                logger.info("Decision Engine 因为明确 @ 或回复机器人且启用强制回复，所以主动对话。")
             else:
                 questions = {
                     "is_addressing_bot": {
@@ -844,7 +868,7 @@ class DecisionPlugin(Star):
                         success=False,
                         no_reply_cooldown=self._float("retry_backoff_seconds", 0.0),
                     )
-                    logger.debug(
+                    logger.warning(
                         "Decision Engine proactive check closed after failure: %s", _safe_error(exc)
                     )
                     return
@@ -873,6 +897,13 @@ class DecisionPlugin(Star):
                         )
                     )
                 )
+                logger.info(
+                    "Decision Engine 因为 Jev 综合分 %.3f（指向 %.3f，介入 %.3f），所以%s。",
+                    aggregate,
+                    addressing,
+                    interject,
+                    "主动对话" if should_reply else "不主动对话",
+                )
             self.proactive.mark_analysis(
                 session,
                 success=True,
@@ -887,6 +918,7 @@ class DecisionPlugin(Star):
                 window_seconds=self._float("reply_window_seconds", 600),
                 max_replies=self._int("max_replies_per_window", 2),
             ):
+                logger.info("Decision Engine 因为主动回复冷却或窗口次数限制，所以不主动对话。")
                 return
 
             try:

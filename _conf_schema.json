@@ -61,16 +61,6 @@
     "description": "[全局设置] 发送给 Decision Model 的上下文最大字符数",
     "default": 6000
   },
-  "debug_log": {
-    "type": "bool",
-    "description": "[全局设置] 输出工具筛选摘要和非敏感调试日志",
-    "default": false
-  },
-  "log_decision_latency": {
-    "type": "bool",
-    "description": "[全局设置] 记录决策延迟摘要",
-    "default": true
-  },
   "tools_subagents_decision_enabled": {
     "type": "bool",
     "description": "[Tools 与 SubAgent] 启用 Tools 与 SubAgent 决策（不影响主动对话）",

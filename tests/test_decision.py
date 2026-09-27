@@ -334,6 +334,29 @@ async def test_provider_uses_configured_retry_backoff(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_provider_notifies_retry_logger():
+    questions = {"q": {"type": "noul", "instructions": "x"}}
+    session = FakeSession(
+        [
+            FakeResponse(500, {"error": "temporary"}),
+            FakeResponse(payload=answer_payload(questions)),
+        ]
+    )
+    retries = []
+    provider = SystemOneProvider(
+        base_url="https://example.invalid",
+        path="/v1/systemone",
+        api_key="key",
+        model="jev-latest",
+        retries=1,
+        retry_logger=lambda *values: retries.append(values),
+        session=session,
+    )
+    await provider.evaluate(state="state", questions=questions)
+    assert retries == [(1, 1, "SystemOne server error (500)", 0.0)]
+
+
+@pytest.mark.asyncio
 async def test_provider_chunks_only_after_explicit_question_limit():
     questions = {f"q_{index}": {"type": "noul", "instructions": "x"} for index in range(5)}
     chunks = [
@@ -669,6 +692,8 @@ def test_public_schema_hides_custom_page_prompts_and_page_switches():
     assert "Tools、SubAgent、主动对话共用" in schema["retries"]["description"]
     assert schema["model_context_tokens"]["default"] == 32000
     assert "tool_description_max_chars" not in schema
+    assert "debug_log" not in schema
+    assert "log_decision_latency" not in schema
     assert schema["provider"]["description"].startswith("[全局设置]")
     assert schema["history_max_messages"]["description"].startswith("[全局设置]")
     assert schema["history_max_chars"]["description"].startswith("[全局设置]")
