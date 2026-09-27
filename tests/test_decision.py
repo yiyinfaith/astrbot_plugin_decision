@@ -826,6 +826,15 @@ def test_proactive_cooldown_and_window():
     assert not state.allow_reply("disabled", cooldown_seconds=0, window_seconds=600, max_replies=0)
 
 
+def test_proactive_analysis_cooldown_does_not_drop_new_history():
+    state = ProactiveState(max_messages=4)
+    state.add("g", ProactiveRecord("Alice", "1", "first"))
+    state.mark_analysis("g", success=True, no_reply_cooldown=60)
+    assert not state.can_analyze("g")
+    state.add("g", ProactiveRecord("Bob", "2", "during cooldown"))
+    assert state.history_lines("g", 200)[-1] == "[Bob]: during cooldown"
+
+
 def test_direct_prefix_matching_reserves_at_for_real_message_components():
     assert normalize_prefixes(["/", "@", "", "/"]) == ["/", "@"]
     assert text_matches_prefix("/hello", ["/", "@"])

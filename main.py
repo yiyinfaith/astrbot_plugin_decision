@@ -831,10 +831,12 @@ class DecisionPlugin(Star):
         explicit_summon = not parse_failed and not at_all and (at_self or reply_self)
         summoned = explicit_summon or self._proactive_summoned(event)
         async with self.proactive.lock_for(session):
-            if not self.proactive.can_analyze(session):
-                return
             history = self.proactive.history_lines(session, self._int("history_max_chars", 6000))
             self.proactive.add(session, ProactiveRecord(sender_name, sender_id, text))
+            # Keep every allowlisted message in the bounded session history,
+            # while the analysis cooldown suppresses only the Jev request.
+            if not self.proactive.can_analyze(session):
+                return
             status = self.proactive.observe_message(
                 session,
                 text=text,
