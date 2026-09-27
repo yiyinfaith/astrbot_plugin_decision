@@ -266,11 +266,23 @@
       const { createApp, nextTick } = Vue;
       // AstrBot injects the real bridge.  The fallback keeps the page usable
       // in a static preview and avoids a noisy console error before injection.
-      const bridge = window.AstrBotPluginPage || {
+      const fallbackBridge = {
         async ready() {},
         async apiGet(path) { return path === 'tools' ? {tools: []} : {}; },
         async apiPost() { return {saved: true}; }
       };
+      // AstrBot injects the bridge SDK into the page after the plugin's own
+      // scripts.  Resolve it at call time instead of capturing the fallback
+      // during initial evaluation, otherwise the first load is permanently
+      // stuck with an empty tool list.
+      async function waitForBridge(timeoutMs = 5000) {
+        const started = Date.now();
+        while (!window.AstrBotPluginPage && Date.now() - started < timeoutMs) {
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        if (!window.AstrBotPluginPage) throw new Error('AstrBot 页面桥接未加载，请重新打开插件页面');
+        return window.AstrBotPluginPage;
+      }
       const DEFAULT_JEV_PROMPT = `你是一个只负责结构化判断的 Decision Model。
 请严格根据当前场景、用户请求和候选能力逐项判断。
 不要生成最终回答，不要执行工具，不要发明候选名称。`;
@@ -283,10 +295,35 @@
 推荐列表可以为空，也可以同时包含多个候选。
 </decision_routing_hint>`;
       function payloadOf(value) {
-        if (value && typeof value === 'object' && value.data && typeof value.data === 'object') {
-          return value.data;
+        // The bridge normally removes AstrBot's {status, data} envelope, but
+        // older dashboard builds and reverse proxies may leave one or more
+        // envelopes in place.  Some deployments also serialize JSON once.
+        // Unwrap those forms without treating a valid empty tools array as an
+        // error.
+        let current = value;
+        for (let depth = 0; depth < 6; depth += 1) {
+          if (typeof current === 'string') {
+            try { current = JSON.parse(current); continue; } catch { return {}; }
+          }
+          if (!current || typeof current !== 'object') return {};
+          if (Array.isArray(current.tools) || Object.prototype.hasOwnProperty.call(current, 'jev_pre_prompt')) return current;
+          if (current.data && typeof current.data === 'object') { current = current.data; continue; }
+          if (current.result && typeof current.result === 'object') { current = current.result; continue; }
+          return current;
         }
-        return value && typeof value === 'object' ? value : {};
+        return current && typeof current === 'object' ? current : {};
+      }
+      function normalizeTools(value) {
+        const data = payloadOf(value);
+        const list = Array.isArray(data.tools) ? data.tools : [];
+        return list.filter(item => item && typeof item === 'object' && String(item.name || '').trim()).map(item => ({
+          name: String(item.name || '').trim(),
+          description: String(item.description || '(无描述)'),
+          handoff: item.handoff === true,
+          active: item.active !== false,
+          builtin: item.builtin === true,
+          origin_display: String(item.origin_display || (item.builtin ? 'Astrbot内置工具' : '未知来源'))
+        }));
       }
       function hasOwn(value, key) { return Object.prototype.hasOwnProperty.call(value, key); }
       const defaults = {
@@ -313,8 +350,8 @@
           toggleRecommend(tool) { this.selectedRecommend = this.isRecommended(tool.name) ? this.selectedRecommend.filter(n => n !== tool.name) : [...this.selectedRecommend, tool.name]; },
           selectVisible() { for (const tool of this.visibleTools) if (tool.active && !this.isKept(tool.name)) this.selectedKeep.push(tool.name); this.selectedKeep = [...new Set(this.selectedKeep)]; },
           clearVisible() { const names = new Set(this.visibleTools.map(t => t.name)); this.selectedKeep = this.selectedKeep.filter(n => !names.has(n)); this.selectedRecommend = this.selectedRecommend.filter(n => !names.has(n)); },
-          async save() { this.saving = true; this.saveState = ''; this.statusText = '保存中…'; try { const proactive = {...this.form.proactive, proactive_whitelist: String(this.form.proactive.proactive_whitelist || '').split(/\n|,/).map(s=>s.trim()).filter(Boolean), direct_reply_prefixes: String(this.form.proactive.direct_reply_prefixes || '').split(/\n|[,，]/).map(s=>s.trim()).filter(Boolean)}; await bridge.apiPost('settings/save', {always_keep_tools: this.selectedKeep, always_keep_recommend_tools: this.selectedRecommend, jev_pre_prompt: this.form.jev_pre_prompt, main_llm_post_prompt: this.form.main_llm_post_prompt, tool_filter_enabled: this.form.tool_filter_enabled, subagent_filter_enabled: this.form.subagent_filter_enabled, tool_noul_threshold: Number(this.form.tool_noul_threshold), proactive}); this.statusText = '已保存'; this.saveState = 'ok'; } catch (e) { this.statusText = `保存失败：${e.message || e}`; this.saveState = 'error'; } finally { this.saving = false; } },
-          async load() { try { await bridge.ready(); const [rawToolData, rawSettings] = await Promise.all([bridge.apiGet('tools'), bridge.apiGet('settings')]); const toolData = payloadOf(rawToolData); const settings = payloadOf(rawSettings); this.tools = Array.isArray(toolData.tools) ? toolData.tools : []; this.selectedKeep = Array.isArray(settings.always_keep_tools) ? settings.always_keep_tools : []; this.selectedRecommend = Array.isArray(settings.always_keep_recommend_tools) ? settings.always_keep_recommend_tools : []; this.form.tool_filter_enabled = settings.tool_filter_enabled !== false; this.form.subagent_filter_enabled = settings.subagent_filter_enabled === true; this.form.tool_noul_threshold = settings.tool_noul_threshold ?? .2; this.form.jev_pre_prompt = hasOwn(settings, 'jev_pre_prompt') ? String(settings.jev_pre_prompt ?? '') : DEFAULT_JEV_PROMPT; this.form.main_llm_post_prompt = hasOwn(settings, 'main_llm_post_prompt') ? String(settings.main_llm_post_prompt ?? '') : DEFAULT_MAIN_PROMPT; this.form.proactive = {...defaults, ...(settings.proactive || {})}; this.form.proactive.proactive_whitelist = (settings.proactive?.proactive_whitelist || []).join('\n'); this.form.proactive.direct_reply_prefixes = (settings.proactive?.direct_reply_prefixes || ['/', '@']).join(', '); this.toolsEnabledValue = settings.tools_subagents_decision_enabled !== false; this.proactiveEnabledValue = settings.proactive_reply_enabled === true; this.statusText = `已加载 ${this.tools.length} 个工具`; } catch (e) { this.statusText = `加载失败：${e.message || e}`; this.saveState = 'error'; } finally { this.loading = false; } }
+          async save() { this.saving = true; this.saveState = ''; this.statusText = '保存中…'; try { const activeBridge = await waitForBridge(); const numberOr = (value, fallback) => { const n = Number(value); return Number.isFinite(n) ? n : fallback; }; const proactive = {...this.form.proactive, proactive_whitelist: String(this.form.proactive.proactive_whitelist || '').split(/\n|,/).map(s=>s.trim()).filter(Boolean), direct_reply_prefixes: String(this.form.proactive.direct_reply_prefixes || '').split(/\n|[,，]/).map(s=>s.trim()).filter(Boolean)}; for (const key of Object.keys(defaults)) if (typeof defaults[key] === 'number') proactive[key] = numberOr(proactive[key], defaults[key]); const body = {always_keep_tools: this.selectedKeep, always_keep_recommend_tools: this.selectedRecommend, jev_pre_prompt: String(this.form.jev_pre_prompt ?? ''), main_llm_post_prompt: String(this.form.main_llm_post_prompt ?? ''), tool_filter_enabled: this.form.tool_filter_enabled === true, subagent_filter_enabled: this.form.subagent_filter_enabled === true, tool_noul_threshold: numberOr(this.form.tool_noul_threshold, .2), proactive}; const result = payloadOf(await activeBridge.apiPost('settings/save', body)); if (Array.isArray(result.always_keep_tools)) this.selectedKeep = result.always_keep_tools; if (Array.isArray(result.always_keep_recommend_tools)) this.selectedRecommend = result.always_keep_recommend_tools; this.statusText = '已保存'; this.saveState = 'ok'; } catch (e) { this.statusText = `保存失败：${e.message || e}`; this.saveState = 'error'; } finally { this.saving = false; } },
+          async load() { try { const activeBridge = await waitForBridge(); await activeBridge.ready(); const [rawToolData, rawSettings] = await Promise.all([activeBridge.apiGet('tools'), activeBridge.apiGet('settings')]); const toolData = payloadOf(rawToolData); const settings = payloadOf(rawSettings); this.tools = normalizeTools(toolData); this.selectedKeep = Array.isArray(settings.always_keep_tools) ? settings.always_keep_tools.map(String) : []; this.selectedRecommend = Array.isArray(settings.always_keep_recommend_tools) ? settings.always_keep_recommend_tools.map(String) : []; this.form.tool_filter_enabled = settings.tool_filter_enabled !== false; this.form.subagent_filter_enabled = settings.subagent_filter_enabled === true; this.form.tool_noul_threshold = Number.isFinite(Number(settings.tool_noul_threshold)) ? Number(settings.tool_noul_threshold) : .2; this.form.jev_pre_prompt = hasOwn(settings, 'jev_pre_prompt') ? String(settings.jev_pre_prompt ?? '') : DEFAULT_JEV_PROMPT; this.form.main_llm_post_prompt = hasOwn(settings, 'main_llm_post_prompt') ? String(settings.main_llm_post_prompt ?? '') : DEFAULT_MAIN_PROMPT; this.form.proactive = {...defaults, ...(settings.proactive || {})}; this.form.proactive.proactive_whitelist = (settings.proactive?.proactive_whitelist || []).join('\n'); this.form.proactive.direct_reply_prefixes = (settings.proactive?.direct_reply_prefixes || ['/', '@']).join(', '); this.toolsEnabledValue = settings.tools_subagents_decision_enabled !== false; this.proactiveEnabledValue = settings.proactive_reply_enabled === true; this.statusText = `已加载 ${this.tools.length} 个工具`; } catch (e) { this.statusText = `加载失败：${e.message || e}`; this.saveState = 'error'; } finally { this.loading = false; } }
         },
         mounted() { this.load(); nextTick(() => requestAnimationFrame(() => { const nav = document.getElementById('glassNav'); if (nav?.setTabs) nav.setTabs([[{label:'路由策略'},{label:'主动对话'},{label:'工具管理'}]]); })); }
       }).mount('#app');

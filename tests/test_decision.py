@@ -483,6 +483,20 @@ def test_routing_always_keep_handoff_and_decision_tool():
     assert outcome.recommended_tools == ["keep"]
 
 
+def test_routing_never_readds_inactive_always_kept_tool():
+    inactive = SimpleNamespace(name="inactive", description="offline", active=False)
+    outcome = choose_tools(
+        [inactive],
+        {},
+        {},
+        threshold=0.2,
+        always_keep={"inactive"},
+        decision_tool=None,
+        filter_ordinary=False,
+    )
+    assert outcome.selected == []
+
+
 def test_each_noul_can_recommend_zero_one_or_many_subagents():
     answers = {
         "a": {"noul": 0.1},
@@ -570,7 +584,7 @@ def test_filter_switches_keep_all_or_filter_each_candidate_independently():
     assert filter_both.recommended_tools == ["ordinary"]
 
 
-def test_always_keep_without_recommendation_stays_silent_even_when_jev_selects_it():
+def test_jev_selection_recommends_kept_tool_but_manual_only_keep_stays_silent():
     keep = SimpleNamespace(name="keep", description="keep", active=True)
     decision = SimpleNamespace(name="jev_decide", description="decision")
     outcome = choose_tools(
@@ -583,7 +597,17 @@ def test_always_keep_without_recommendation_stays_silent_even_when_jev_selects_i
         always_keep_recommend=set(),
     )
     assert [tool.name for tool in outcome.selected] == ["keep", "jev_decide"]
-    assert outcome.recommended_tools == []
+    assert outcome.recommended_tools == ["keep"]
+    manual_only = choose_tools(
+        [keep],
+        {},
+        {},
+        threshold=0.2,
+        always_keep={"keep", "jev_decide"},
+        decision_tool=decision,
+        always_keep_recommend=set(),
+    )
+    assert manual_only.recommended_tools == []
 
     opt_out = choose_tools(
         [keep],
@@ -737,6 +761,8 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     assert "只负责结构化判断的 Decision Model" in page
     assert "当前场景需要根据用户请求选择合适的能力" in page
     assert "payloadOf" in page
+    assert "waitForBridge" in page
+    assert "fallbackBridge" in page
 
 
 def test_proactive_details_are_page_only_and_excluded_from_public_schema():

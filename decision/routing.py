@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from .context import is_handoff_tool
+from .context import is_handoff_tool, tool_is_active
 
 DECISION_TOOL_NAME = "jev_decide"
 DEFAULT_MAIN_LLM_POST_PROMPT = """<decision_routing_hint>
@@ -61,6 +61,11 @@ def choose_tools(
         if not name or name in seen:
             continue
         seen.add(name)
+        # An inactive registration is not callable in the current request.
+        # Keep it visible in the WebUI for diagnosis, but never re-add it via
+        # Always Keep or the fail-open routing path.
+        if not tool_is_active(tool):
+            continue
         if name == DECISION_TOOL_NAME or tool is decision_tool:
             if name in always_keep:
                 final.append(tool)
@@ -99,9 +104,10 @@ def choose_tools(
             keep = True
         if keep:
             final.append(tool)
-        if name in always_keep and name in always_keep_recommend:
-            recommended_tools.append(name)
-        elif selected_by_jev and name not in always_keep:
+        # Jev-selected candidates are always recommendations, including a
+        # tool that is also manually kept.  The manual recommendation switch
+        # only controls a kept tool that Jev did not select.
+        if selected_by_jev or (name in always_keep and name in always_keep_recommend):
             if name not in recommended_tools:
                 recommended_tools.append(name)
 

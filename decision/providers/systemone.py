@@ -146,7 +146,16 @@ class SystemOneProvider(DecisionProvider):
         # can also appear when the homogeneous recovery requests overlap.
         results = []
         for group in groups.values():
-            results.append(await self._evaluate_once(state=state, questions=group, model=model))
+            # A homogeneous group can still exceed the provider's question
+            # limit. Reuse the adaptive splitter so mixed-type recovery does
+            # not reintroduce an oversized request.
+            results.append(
+                await self._evaluate_in_chunks(
+                    state=state,
+                    questions=group,
+                    model=model,
+                )
+            )
         merged: dict[str, dict[str, Any]] = {}
         usage: dict[str, Any] = {}
         latencies: list[float] = []
@@ -195,6 +204,20 @@ class SystemOneProvider(DecisionProvider):
                     latency_ms=sum(latencies) if latencies else None,
                     usage=merged_usage,
                     raw={"answers": merged_answers},
+                )
+            except _MixedQuestionTypeError:
+                # A size fallback can still contain Noul plus Choice/Score.
+                # Split that rejected chunk by primitive type before applying
+                # the adaptive size splitter to each homogeneous group.
+                question_types = {
+                    str(question.get("type", "unknown")) for question in chunk.values()
+                }
+                if len(question_types) <= 1:
+                    raise
+                return await self._evaluate_by_type(
+                    state=state,
+                    questions=chunk,
+                    model=model,
                 )
 
         initial_chunks = [
