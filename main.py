@@ -48,6 +48,27 @@ from .decision.routing import (
 from .decision.tokens import estimate_request_tokens, fit_request_state
 
 PLUGIN_NAME = "astrbot_plugin_decision"
+PROACTIVE_PAGE_DEFAULTS: dict[str, Any] = {
+    "proactive_whitelist": [],
+    "direct_reply_prefixes": ["/", "@"],
+    "force_reply_when_summoned": True,
+    "proactive_alias": "AI|助手",
+    "proactive_score_threshold": 0.68,
+    "addressing_threshold": 0.7,
+    "interject_threshold": 0.85,
+    "cooldown_seconds": 60.0,
+    "reply_window_seconds": 600.0,
+    "max_replies_per_window": 2,
+    "proactive_history_max_messages": 12,
+    "proactive_max_sessions": 500,
+    "no_reply_cooldown_seconds": 3.0,
+    "observation_timeout_seconds": 600.0,
+    "echo_detection_threshold": 3,
+    "echo_detection_window_seconds": 30.0,
+    "dense_conversation_threshold": 30,
+    "dense_conversation_window_seconds": 600.0,
+    "min_participant_count": 2,
+}
 DEFAULT_POLICY = (
     "你是一个只负责结构化判断的 Decision Model。\n"
     "请严格根据当前场景、用户请求和候选能力逐项判断。\n"
@@ -431,7 +452,10 @@ class DecisionPlugin(Star):
             for tool in outcome.selected
             if getattr(tool, "name", None) and is_handoff_tool(tool)
         ]
-        logger.info(
+        # AstrBot's default console handler can hide INFO records.  Keep the
+        # two normal decision summaries at WARNING so operators see them in
+        # the console without enabling a separate debug switch.
+        logger.warning(
             "Decision Engine 共筛选出如下工具：Tools=%s；SubAgents=%s；推荐 Tools=%s；推荐 SubAgents=%s",
             ", ".join(selected_tools) or "无",
             ", ".join(selected_subagents) or "无",
@@ -783,7 +807,7 @@ class DecisionPlugin(Star):
         if self._direct_reply_requested(event):
             event.is_at_or_wake_command = True
             self.proactive.set_status(str(event.unified_msg_origin), ProactiveStatus.SUMMONED)
-            logger.info("Decision Engine 因为命中直接回复前缀或 @ 机器人，所以主动对话。")
+            logger.warning("Decision Engine 因为命中直接回复前缀或 @ 机器人，所以主动对话。")
             return
 
         if not self.provider or not self._ready:
@@ -827,7 +851,9 @@ class DecisionPlugin(Star):
                 should_reply = True
                 scores: dict[str, float] = {}
                 aggregate = 1.0
-                logger.info("Decision Engine 因为明确 @ 或回复机器人且启用强制回复，所以主动对话。")
+                logger.warning(
+                    "Decision Engine 因为明确 @ 或回复机器人且启用强制回复，所以主动对话。"
+                )
             else:
                 questions = {
                     "is_addressing_bot": {
@@ -897,7 +923,7 @@ class DecisionPlugin(Star):
                         )
                     )
                 )
-                logger.info(
+                logger.warning(
                     "Decision Engine 因为 Jev 综合分 %.3f（指向 %.3f，介入 %.3f），所以%s。",
                     aggregate,
                     addressing,
@@ -918,7 +944,7 @@ class DecisionPlugin(Star):
                 window_seconds=self._float("reply_window_seconds", 600),
                 max_replies=self._int("max_replies_per_window", 2),
             ):
-                logger.info("Decision Engine 因为主动回复冷却或窗口次数限制，所以不主动对话。")
+                logger.warning("Decision Engine 因为主动回复冷却或窗口次数限制，所以不主动对话。")
                 return
 
             try:
@@ -1095,6 +1121,20 @@ class DecisionPlugin(Star):
             for item in (self.config.get("always_keep_recommend_tools", []) or [])
             if str(item) in always_keep
         ]
+        proactive = {}
+        for key, default in PROACTIVE_PAGE_DEFAULTS.items():
+            value = self.config.get(key, default)
+            if isinstance(default, list):
+                value = [str(item) for item in value] if isinstance(value, (list, tuple)) else []
+            elif isinstance(default, bool):
+                value = self._bool(key, default)
+            elif isinstance(default, int):
+                value = self._int(key, default)
+            elif isinstance(default, float):
+                value = self._float(key, default)
+            else:
+                value = str(value if value is not None else default)
+            proactive[key] = value
         return json_response(
             {
                 "always_keep_tools": always_keep,
@@ -1103,6 +1143,8 @@ class DecisionPlugin(Star):
                 "main_llm_post_prompt": self._main_llm_post_prompt(),
                 "tool_filter_enabled": self._bool("tool_filter_enabled", True),
                 "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
+                "tool_noul_threshold": self._float("tool_noul_threshold", 0.2),
+                "proactive": proactive,
             }
         )
 
@@ -1126,6 +1168,7 @@ class DecisionPlugin(Star):
         main_llm_post_prompt = payload.get("main_llm_post_prompt")
         tool_filter_enabled = payload.get("tool_filter_enabled")
         subagent_filter_enabled = payload.get("subagent_filter_enabled")
+        tool_noul_threshold = payload.get("tool_noul_threshold")
         if jev_pre_prompt is not None and not isinstance(jev_pre_prompt, str):
             return error_response("jev_pre_prompt must be a string", status_code=400)
         if main_llm_post_prompt is not None and not isinstance(main_llm_post_prompt, str):
@@ -1134,6 +1177,46 @@ class DecisionPlugin(Star):
             return error_response("tool_filter_enabled must be a boolean", status_code=400)
         if subagent_filter_enabled is not None and not isinstance(subagent_filter_enabled, bool):
             return error_response("subagent_filter_enabled must be a boolean", status_code=400)
+        if tool_noul_threshold is not None and (
+            isinstance(tool_noul_threshold, bool)
+            or not isinstance(tool_noul_threshold, (int, float))
+            or not math.isfinite(float(tool_noul_threshold))
+        ):
+            return error_response("tool_noul_threshold must be a number", status_code=400)
+        proactive_payload = payload.get("proactive", {})
+        if not isinstance(proactive_payload, Mapping):
+            return error_response("proactive must be an object", status_code=400)
+        cleaned_proactive: dict[str, Any] = {}
+        for key, default in PROACTIVE_PAGE_DEFAULTS.items():
+            if key not in proactive_payload:
+                continue
+            value = proactive_payload[key]
+            if isinstance(default, list):
+                if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                    return error_response(f"{key} must be a string list", status_code=400)
+                cleaned_proactive[key] = list(
+                    dict.fromkeys(item.strip() for item in value if item.strip())
+                )[:500]
+            elif isinstance(default, bool):
+                if not isinstance(value, bool):
+                    return error_response(f"{key} must be a boolean", status_code=400)
+                cleaned_proactive[key] = value
+            elif isinstance(default, int):
+                if isinstance(value, bool) or not isinstance(value, int):
+                    return error_response(f"{key} must be an integer", status_code=400)
+                cleaned_proactive[key] = value
+            elif isinstance(default, float):
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                ):
+                    return error_response(f"{key} must be a number", status_code=400)
+                cleaned_proactive[key] = float(value)
+            else:
+                if not isinstance(value, str):
+                    return error_response(f"{key} must be a string", status_code=400)
+                cleaned_proactive[key] = value[:1000]
         available = {
             str(getattr(tool, "name", ""))
             for tool in self.context.get_llm_tool_manager().func_list
@@ -1156,14 +1239,18 @@ class DecisionPlugin(Star):
         self.config["always_keep_tools"] = cleaned
         self.config["always_keep_recommend_tools"] = cleaned_recommend
         self.config["always_keep_tools_customized"] = True
-        if jev_pre_prompt is not None:
-            self.config["jev_pre_prompt"] = jev_pre_prompt[:50000]
-        if main_llm_post_prompt is not None:
-            self.config["main_llm_post_prompt"] = main_llm_post_prompt[:50000]
         if tool_filter_enabled is not None:
             self.config["tool_filter_enabled"] = tool_filter_enabled
         if subagent_filter_enabled is not None:
             self.config["subagent_filter_enabled"] = subagent_filter_enabled
+        if jev_pre_prompt is not None:
+            self.config["jev_pre_prompt"] = jev_pre_prompt[:50000]
+        if main_llm_post_prompt is not None:
+            self.config["main_llm_post_prompt"] = main_llm_post_prompt[:50000]
+        if tool_noul_threshold is not None:
+            self.config["tool_noul_threshold"] = min(1.0, max(0.0, float(tool_noul_threshold)))
+        for key, value in cleaned_proactive.items():
+            self.config[key] = value
         save = getattr(self.config, "save_config", None)
         if callable(save):
             save()
@@ -1172,10 +1259,13 @@ class DecisionPlugin(Star):
                 "saved": True,
                 "always_keep_tools": cleaned,
                 "always_keep_recommend_tools": cleaned_recommend,
-                "jev_pre_prompt": self._policy(),
-                "main_llm_post_prompt": self._main_llm_post_prompt(),
                 "tool_filter_enabled": self._bool("tool_filter_enabled", True),
                 "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
+                "tool_noul_threshold": self._float("tool_noul_threshold", 0.2),
+                "proactive": {
+                    key: self.config.get(key, default)
+                    for key, default in PROACTIVE_PAGE_DEFAULTS.items()
+                },
             }
         )
 

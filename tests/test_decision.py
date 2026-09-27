@@ -673,39 +673,50 @@ def test_state_excludes_system_prompt_and_tool_schema():
     assert "parameters" not in state
 
 
-def test_public_schema_hides_custom_page_prompts_and_page_switches():
+def test_public_schema_contains_only_global_settings_and_master_switches():
     schema = json.loads(
         (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
     )
-    assert schema["jev_pre_prompt"]["invisible"] is True
-    assert schema["main_llm_post_prompt"]["invisible"] is True
-    assert schema["tool_filter_enabled"]["invisible"] is True
-    assert schema["tool_filter_enabled"]["default"] is True
-    assert schema["subagent_filter_enabled"]["invisible"] is True
-    assert schema["subagent_filter_enabled"]["default"] is False
+    assert set(schema) == {
+        "provider",
+        "base_url",
+        "systemone_path",
+        "api_key",
+        "model",
+        "timeout_sec",
+        "retries",
+        "retry_backoff_seconds",
+        "model_context_tokens",
+        "history_max_messages",
+        "history_max_chars",
+        "tools_subagents_decision_enabled",
+        "proactive_reply_enabled",
+    }
+    assert all("[" not in item.get("description", "") for item in schema.values())
     assert schema["tools_subagents_decision_enabled"]["default"] is True
-    assert "不影响主动对话" in schema["tools_subagents_decision_enabled"]["description"]
-    assert schema["proactive_whitelist"]["default"] == []
-    assert "白名单" in schema["proactive_whitelist"]["description"]
-    assert "analysis_on_mention_only" not in schema
+    assert schema["tools_subagents_decision_enabled"]["description"] == "Tools/SubAgent 决策"
+    assert "不影响主动对话" in schema["tools_subagents_decision_enabled"]["hint"]
+    assert schema["proactive_reply_enabled"]["default"] is False
+    assert "详细配置在插件 WebUI" in schema["proactive_reply_enabled"]["hint"]
     assert schema["retry_backoff_seconds"]["default"] == 0.0
-    assert "Tools、SubAgent、主动对话共用" in schema["retries"]["description"]
+    assert "默认 1" in schema["retries"]["hint"]
     assert schema["model_context_tokens"]["default"] == 32000
-    assert "tool_description_max_chars" not in schema
-    assert "debug_log" not in schema
-    assert "log_decision_latency" not in schema
-    assert schema["provider"]["description"].startswith("[全局设置]")
-    assert schema["history_max_messages"]["description"].startswith("[全局设置]")
-    assert schema["history_max_chars"]["description"].startswith("[全局设置]")
     assert schema["timeout_sec"]["default"] == 5.0
-    assert schema["always_keep_tools"]["invisible"] is True
-    assert schema["always_keep_tools"]["default"] == ["jev_decide"]
-    assert schema["always_keep_recommend_tools"]["invisible"] is True
-    assert schema["always_keep_tools_customized"]["invisible"] is True
-    assert schema["always_keep_tools_customized"]["default"] is False
-    assert "decision_policy" not in schema
-    assert "subagent_recommendation_enabled" not in schema
-    assert "enable" not in schema
+    detailed_fields = {
+        "jev_pre_prompt",
+        "main_llm_post_prompt",
+        "tool_filter_enabled",
+        "subagent_filter_enabled",
+        "tool_noul_threshold",
+        "always_keep_tools",
+        "always_keep_recommend_tools",
+        "proactive_whitelist",
+        "direct_reply_prefixes",
+        "force_reply_when_summoned",
+        "proactive_score_threshold",
+        "cooldown_seconds",
+    }
+    assert not detailed_fields.intersection(schema)
 
 
 def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
@@ -713,21 +724,34 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
         encoding="utf-8"
     )
     assert "推荐给主 LLM" in page
-    assert "jev_decide" not in page
-    assert "tool.builtin === true" in page
-    assert "origin-builtin" in page
-    assert "#7c3aed" in page
-    assert "origin-plugin" in page
+    assert "tool.builtin" in page
+    assert "builtin" in page
+    assert "#ba96ff" in page
+    assert "#6ce0bf" in page
     assert "origin_display" in page
+    assert "Vue.createApp" not in page
+    assert "createApp" in page
+    assert "https://glass.goose.gs.cn/liquid-glass.js" in page
+    assert "setTabs" in page
+    assert "background: linear-gradient" in page
 
 
-def test_proactive_schema_contains_direct_prefix_and_state_controls_only():
+def test_proactive_details_are_page_only_and_excluded_from_public_schema():
     schema = json.loads(
         (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
     )
-    assert schema["direct_reply_prefixes"]["default"] == ["/", "@"]
-    assert schema["force_reply_when_summoned"]["default"] is True
-    assert schema["proactive_score_threshold"]["default"] == 0.68
+    page = (Path(__file__).resolve().parents[1] / "pages" / "settings" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    for field in (
+        "proactive_whitelist",
+        "direct_reply_prefixes",
+        "force_reply_when_summoned",
+        "proactive_score_threshold",
+        "observation_timeout_seconds",
+    ):
+        assert field in page
+        assert field not in schema
     descriptions = " ".join(item.get("description", "") for item in schema.values())
     for excluded in ("工具调用提示", "安抚机制", "AI人格设定", "接管astrbot原生上下文"):
         assert excluded not in descriptions

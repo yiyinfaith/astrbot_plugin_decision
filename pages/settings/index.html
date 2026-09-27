@@ -3,191 +3,245 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Decision Engine · Tools &amp; SubAgents</title>
+    <title>Decision Engine 设置</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://glass.goose.gs.cn/liquid-glass.js"></script>
     <style>
-      :root { color-scheme: light dark; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      body { margin: 0; padding: 24px; background: Canvas; color: CanvasText; }
-      main { max-width: 920px; margin: 0 auto; }
-      h1 { font-size: 22px; margin: 0 0 8px; }
-      p { color: color-mix(in srgb, CanvasText 70%, transparent); }
-      .bar { display: flex; gap: 10px; flex-wrap: wrap; margin: 20px 0 12px; }
-      input[type="search"] { flex: 1 1 280px; min-width: 220px; padding: 10px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, CanvasText 30%, transparent); background: Canvas; color: CanvasText; }
-      button { border: 0; border-radius: 8px; padding: 10px 16px; cursor: pointer; background: #4f46e5; color: white; font-weight: 600; }
-      button.secondary { background: color-mix(in srgb, CanvasText 15%, Canvas); color: CanvasText; }
-      #status { min-height: 22px; }
-      .list { display: grid; gap: 8px; }
-      label.tool { display: grid; grid-template-columns: minmax(180px, 210px) minmax(0, 1fr); gap: 14px; padding: 12px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 10px; align-items: start; }
-      label.tool:hover { border-color: #6366f1; }
-      .controls { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 8px 12px; }
-      .check-option { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
-      .check-option input { margin: 0; }
-      .check-option small { opacity: .62; }
-      .tool-info { min-width: 0; }
-      .name-row { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
-      .name { font-weight: 650; min-width: 0; overflow-wrap: anywhere; }
-      .desc { display: block; margin-top: 4px; font-size: 13px; opacity: .72; }
-      .origin { margin-left: auto; flex: 0 0 auto; font-size: 11px; font-weight: 500; white-space: nowrap; }
-      .origin-builtin { color: #7c3aed; }
-      .origin-plugin { color: #0f766e; }
-      .tag { display: inline-block; margin-left: 6px; padding: 2px 6px; border-radius: 999px; font-size: 11px; background: color-mix(in srgb, #6366f1 24%, Canvas); }
-      .prompts { display: grid; gap: 14px; margin: 22px 0; }
-      .prompt-field { display: grid; gap: 6px; }
-      .prompt-field label { font-weight: 650; }
-      .prompt-field small { opacity: .72; }
-      .switches { display: grid; gap: 10px; margin: 18px 0 22px; }
-      .switch-option { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 10px; }
-      .switch-option input { margin-top: 3px; accent-color: #4f46e5; }
-      .switch-option span { display: grid; gap: 3px; }
-      .switch-option small { opacity: .72; }
-      textarea { width: 100%; min-height: 150px; box-sizing: border-box; resize: vertical; padding: 10px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, CanvasText 30%, transparent); background: Canvas; color: CanvasText; font: 13px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
-      @media (max-width: 760px) {
-        label.tool { grid-template-columns: 1fr; gap: 8px; }
-        .origin { margin-left: auto; }
+      :root {
+        color-scheme: dark;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+        --bg: #080d18;
+        --panel: rgba(17, 27, 45, .78);
+        --panel-solid: #141f34;
+        --line: rgba(170, 205, 255, .18);
+        --text: #f5f8ff;
+        --muted: #9eacc3;
+        --blue: #3b8cff;
+        --blue-dark: #1e5fca;
+        --purple: #9778ff;
+        --green: #46d7a0;
+        --danger: #ff7789;
+      }
+      * { box-sizing: border-box; }
+      [v-cloak] { display: none; }
+      body {
+        margin: 0;
+        min-width: 320px;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 8% 0%, rgba(63, 126, 255, .24), transparent 34%),
+          radial-gradient(circle at 92% 10%, rgba(144, 91, 255, .18), transparent 28%),
+          linear-gradient(145deg, #080d18 0%, #0d1728 55%, #0a1020 100%);
+      }
+      button, input, textarea { font: inherit; }
+      button { cursor: pointer; }
+      .app-shell { width: min(1180px, 100%); margin: 0 auto; padding: 28px 22px 100px; }
+      .hero, .glass-card {
+        position: relative;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 30px;
+        background: var(--panel);
+        box-shadow: 0 26px 80px rgba(0, 0, 0, .28), inset 0 1px rgba(255, 255, 255, .08);
+        backdrop-filter: blur(24px) saturate(135%);
+      }
+      .hero { min-height: 226px; padding: 34px 38px; }
+      .glass-backdrop { position: absolute; inset: 0; opacity: .46; pointer-events: none; }
+      .hero-content, .card-content { position: relative; z-index: 1; }
+      .eyebrow { color: #9ec5ff; font-size: 12px; font-weight: 750; letter-spacing: .16em; text-transform: uppercase; }
+      h1 { max-width: 740px; margin: 12px 0 10px; font-size: clamp(28px, 4vw, 48px); line-height: 1.08; letter-spacing: -.045em; }
+      .hero p { max-width: 720px; margin: 0; color: #b5c4dc; line-height: 1.7; }
+      .hero-meta { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 24px; }
+      .status-pill { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; border-radius: 999px; background: rgba(10, 19, 35, .82); border: 1px solid var(--line); color: #c9d8ef; font-size: 12px; }
+      .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 13px var(--green); }
+      .status-dot.off { background: #8996aa; box-shadow: none; }
+      .tabbar { position: relative; min-height: 104px; margin: 22px 0; padding: 12px; border-radius: 24px; overflow: hidden; border: 1px solid var(--line); background: rgba(17, 28, 48, .72); }
+      .tab-glass { position: absolute; inset: 0; opacity: .5; pointer-events: none; }
+      .tab-buttons { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; height: 78px; }
+      .tab-button { border: 1px solid transparent; border-radius: 17px; color: #aab9d0; background: rgba(19, 31, 52, .95); transition: .2s ease; }
+      .tab-button:hover { background: #21375a; color: white; }
+      .tab-button.active { color: white; border-color: rgba(132, 183, 255, .7); background: linear-gradient(135deg, #246dcc, #5147b9); box-shadow: 0 10px 24px rgba(41, 106, 220, .28); }
+      .tab-button strong { display: block; font-size: 14px; }
+      .tab-button small { display: block; margin-top: 5px; color: inherit; opacity: .72; font-size: 11px; }
+      .section-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(320px, .95fr); gap: 18px; align-items: start; }
+      .glass-card { padding: 24px; }
+      .card-heading { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; margin-bottom: 20px; }
+      .card-heading h2 { margin: 0; font-size: 19px; letter-spacing: -.02em; }
+      .card-heading p { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+      .section-kicker { color: #82b7ff; font-size: 11px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+      .switch-row { display: flex; justify-content: space-between; gap: 18px; align-items: center; padding: 15px 0; border-bottom: 1px solid rgba(170, 205, 255, .12); }
+      .switch-row:last-child { border-bottom: 0; }
+      .switch-copy strong { display: block; font-size: 14px; }
+      .switch-copy small { display: block; margin-top: 5px; color: var(--muted); line-height: 1.55; }
+      .switch { position: relative; width: 48px; height: 28px; flex: 0 0 auto; }
+      .switch input { opacity: 0; width: 0; height: 0; }
+      .switch-track { position: absolute; inset: 0; border-radius: 20px; background: #334159; transition: .2s; box-shadow: inset 0 0 0 1px rgba(255,255,255,.1); }
+      .switch-track::after { content: ""; position: absolute; top: 4px; left: 4px; width: 20px; height: 20px; border-radius: 50%; background: #f5f8ff; transition: .2s; box-shadow: 0 2px 7px rgba(0,0,0,.35); }
+      .switch input:checked + .switch-track { background: linear-gradient(135deg, #3f9bff, #685bf3); }
+      .switch input:checked + .switch-track::after { transform: translateX(20px); }
+      .field { margin-top: 18px; }
+      .field label { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 8px; color: #d9e6fa; font-size: 13px; font-weight: 700; }
+      .field label span { color: var(--muted); font-weight: 500; }
+      input[type="text"], input[type="number"], input[type="search"], textarea, select {
+        width: 100%; border: 1px solid rgba(168, 204, 255, .2); border-radius: 13px; padding: 11px 13px; color: var(--text); background: rgba(6, 14, 28, .78); outline: none; transition: border .2s, box-shadow .2s;
+      }
+      input:focus, textarea:focus, select:focus { border-color: #5aa6ff; box-shadow: 0 0 0 3px rgba(74, 145, 255, .17); }
+      textarea { min-height: 180px; resize: vertical; line-height: 1.55; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+      .two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+      .hint { margin: 7px 0 0; color: #8291aa; font-size: 11px; line-height: 1.55; }
+      .notice { padding: 13px 15px; border-radius: 14px; color: #c1d9fa; background: rgba(45, 103, 188, .17); border: 1px solid rgba(103, 166, 255, .23); font-size: 12px; line-height: 1.65; }
+      .notice strong { color: #eef6ff; }
+      .tool-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 17px; }
+      .tool-toolbar input { flex: 1 1 220px; }
+      .button { border: 1px solid transparent; border-radius: 12px; padding: 10px 15px; color: white; font-weight: 700; font-size: 12px; }
+      .button.primary { background: linear-gradient(135deg, #287de2, #5a55d9); box-shadow: 0 10px 24px rgba(42, 112, 222, .25); }
+      .button.secondary { background: #253755; border-color: #476181; }
+      .button.ghost { background: #17243a; border-color: #304662; color: #c9d8ef; }
+      .button:disabled { opacity: .5; cursor: wait; }
+      .tool-groups { display: grid; gap: 17px; max-height: 680px; overflow: auto; padding-right: 4px; }
+      .tool-group-title { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; color: #a9c8f6; font-size: 12px; font-weight: 800; }
+      .tool-group-title::before { content: ""; width: 5px; height: 15px; border-radius: 5px; background: var(--purple); }
+      .tool-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; padding: 13px 0; border-bottom: 1px solid rgba(170,205,255,.1); }
+      .tool-row:last-child { border-bottom: 0; }
+      .tool-name { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; font-size: 13px; font-weight: 750; overflow-wrap: anywhere; }
+      .origin { color: #6ce0bf; font-size: 11px; font-weight: 600; }
+      .origin.builtin { color: #ba96ff; }
+      .tool-description { margin-top: 5px; color: #8291aa; font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+      .tool-badge { padding: 3px 7px; border-radius: 999px; color: #d3c6ff; background: rgba(135, 101, 239, .18); font-size: 10px; }
+      .tool-controls { display: flex; flex-wrap: wrap; justify-content: flex-end; align-content: start; gap: 8px; min-width: 200px; }
+      .mini-check { display: inline-flex; align-items: center; gap: 5px; color: #b5c4da; font-size: 11px; white-space: nowrap; }
+      .mini-check input { accent-color: #4e9dff; }
+      .tool-count { color: #7f90aa; font-size: 11px; }
+      .empty { padding: 28px; text-align: center; color: var(--muted); }
+      .prompt-grid { display: grid; gap: 18px; }
+      .save-bar { position: fixed; z-index: 10; right: 24px; bottom: 22px; display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 16px; border: 1px solid rgba(160, 202, 255, .3); border-radius: 18px; background: rgba(13, 25, 45, .94); box-shadow: 0 18px 55px rgba(0,0,0,.4); }
+      .save-status { color: #9fb3cf; font-size: 12px; }
+      .save-status.ok { color: #71e1b6; }
+      .save-status.error { color: #ff9cab; }
+      .footer-note { margin: 22px 2px 0; color: #6f7f98; font-size: 11px; line-height: 1.6; }
+      @media (max-width: 820px) {
+        .app-shell { padding: 15px 12px 100px; }
+        .hero { padding: 26px 23px; border-radius: 24px; }
+        .section-grid { grid-template-columns: 1fr; }
+        .tool-controls { min-width: 0; }
+      }
+      @media (max-width: 560px) {
+        .two-col { grid-template-columns: 1fr; }
+        .tab-buttons { height: 72px; }
+        .tab-button small { display: none; }
+        .tab-button strong { font-size: 12px; }
+        .glass-card { padding: 18px; border-radius: 22px; }
+        .tool-row { grid-template-columns: 1fr; }
+        .tool-controls { justify-content: flex-start; }
+        .save-bar { right: 12px; left: 12px; justify-content: space-between; }
       }
     </style>
   </head>
   <body>
-    <main>
-      <h1>Tools 与 SubAgent 过滤和推荐</h1>
-      <p>Decision Model 会逐个判断普通 Tool 和 SubAgent，并把通过判断的候选推荐给主 LLM。下面的开关分别控制主 LLM 能看到的是全部候选，还是过滤后的候选；推荐提示仍然只列出 Jev 选中的候选。</p>
-      <div class="bar">
-        <input id="search" type="search" placeholder="搜索工具名称或描述" />
-        <button id="selectVisible" class="secondary">全选当前结果</button>
-        <button id="clearVisible" class="secondary">取消当前结果</button>
-        <button id="save">保存</button>
-      </div>
-      <section class="switches">
-        <label class="switch-option">
-          <input id="toolFilterEnabled" type="checkbox" checked />
-          <span><strong>过滤普通 Tools</strong><small>开启后主 LLM 只能看到 Jev 判断通过的普通 Tool；关闭后保留全部普通 Tool，但仍生成推荐。</small></span>
-        </label>
-        <label class="switch-option">
-          <input id="subagentFilterEnabled" type="checkbox" />
-          <span><strong>过滤 SubAgents</strong><small>开启后主 LLM 只能看到 Jev 判断通过的 SubAgent；关闭后保留全部 SubAgent，但仍生成推荐。</small></span>
-        </label>
-      </section>
-      <section class="prompts">
-        <div class="prompt-field">
-          <label for="jevPrePrompt">Jev 判断前提示词</label>
-          <small>发送给 Jev/Decision Model。不会把主 LLM 的人格 system prompt 发送给 Jev。</small>
-          <textarea id="jevPrePrompt" spellcheck="false"></textarea>
+    <div id="app" v-cloak class="app-shell">
+      <header class="hero">
+        <liquid-glass class="glass-backdrop" mode="single-toggle-card" dark wallpaper="gradient"></liquid-glass>
+        <div class="hero-content">
+          <div class="eyebrow">Decision Engine · Jev</div>
+          <h1>让每一次能力调用，都有清晰的判断。</h1>
+          <p>在这里集中管理 Tools、SubAgents 与主动对话。复杂设置都收进插件 WebUI，AstrBot 原生配置页只保留真正的全局开关。</p>
+          <div class="hero-meta">
+            <span class="status-pill"><i class="status-dot" :class="{off: !toolsEnabled}"></i>Tools/SubAgent {{ toolsEnabled ? '已启用' : '已停用' }}</span>
+            <span class="status-pill"><i class="status-dot" :class="{off: !proactiveEnabled}"></i>主动对话 {{ proactiveEnabled ? '已启用' : '已停用' }}</span>
+            <span class="status-pill">{{ tools.length }} 个能力</span>
+          </div>
         </div>
-        <div class="prompt-field">
-          <label for="mainLlmPostPrompt">Jev 判断后注入主 LLM 的提示词</label>
-          <small>会追加到现有 system prompt 末尾；支持 {tools} 和 {subagents}，留空可关闭这段追加。</small>
-          <textarea id="mainLlmPostPrompt" spellcheck="false"></textarea>
-        </div>
-      </section>
-      <div id="status"></div>
-      <div id="list" class="list">加载中…</div>
-    </main>
-    <script type="module">
-      const bridge = window.AstrBotPluginPage;
-      const list = document.getElementById("list");
-      const search = document.getElementById("search");
-      const status = document.getElementById("status");
-      let tools = [];
-      let selectedKeep = new Set();
-      let selectedRecommend = new Set();
-      const jevPrePrompt = document.getElementById("jevPrePrompt");
-      const mainLlmPostPrompt = document.getElementById("mainLlmPostPrompt");
-      const toolFilterEnabled = document.getElementById("toolFilterEnabled");
-      const subagentFilterEnabled = document.getElementById("subagentFilterEnabled");
+      </header>
 
-      function visibleTools() {
-        const query = search.value.trim().toLowerCase();
-        return tools.filter((tool) => !query || `${tool.name} ${tool.description}`.toLowerCase().includes(query));
-      }
-      function render() {
-        list.replaceChildren();
-        for (const tool of visibleTools()) {
-          const label = document.createElement("div");
-          label.className = "tool";
-          const controls = document.createElement("div");
-          controls.className = "controls";
-          const keepLabel = document.createElement("label");
-          keepLabel.className = "check-option";
-          const keepCheckbox = document.createElement("input");
-          keepCheckbox.type = "checkbox";
-          const builtInDecisionTool = tool.builtin === true;
-          keepCheckbox.checked = selectedKeep.has(tool.name);
-          keepCheckbox.disabled = !tool.active;
-          keepCheckbox.addEventListener("change", () => {
-            if (keepCheckbox.checked) selectedKeep.add(tool.name);
-            else {
-              selectedKeep.delete(tool.name);
-              selectedRecommend.delete(tool.name);
-            }
-            render();
-          });
-          keepLabel.append(keepCheckbox, document.createTextNode("始终保留"));
-          const recommendLabel = document.createElement("label");
-          recommendLabel.className = "check-option";
-          const recommendCheckbox = document.createElement("input");
-          recommendCheckbox.type = "checkbox";
-          recommendCheckbox.checked = selectedRecommend.has(tool.name) && selectedKeep.has(tool.name);
-          recommendCheckbox.disabled = !tool.active || tool.handoff || !keepCheckbox.checked;
-          recommendCheckbox.title = tool.handoff ? "SubAgent 由 Jev 逐个判断并自动推荐" : "仅对始终保留的 Tool 生效";
-          recommendCheckbox.addEventListener("change", () => recommendCheckbox.checked ? selectedRecommend.add(tool.name) : selectedRecommend.delete(tool.name));
-          recommendLabel.append(recommendCheckbox, document.createTextNode("推荐给主 LLM"));
-          controls.append(keepLabel, recommendLabel);
-          const text = document.createElement("span");
-          text.className = "tool-info";
-          const nameRow = document.createElement("span");
-          nameRow.className = "name-row";
-          const name = document.createElement("span");
-          name.className = "name";
-          name.textContent = tool.name;
-          nameRow.append(name);
-          if (tool.handoff) {
-            const tag = document.createElement("span");
-            tag.className = "tag";
-            tag.textContent = "SubAgent · 自动判断";
-            nameRow.append(tag);
-          }
-          const origin = document.createElement("span");
-          origin.className = `origin ${builtInDecisionTool ? "origin-builtin" : "origin-plugin"}`;
-          origin.textContent = tool.origin_display || "未知来源";
-          nameRow.append(origin);
-          const desc = document.createElement("span");
-          desc.className = "desc";
-          desc.textContent = tool.description + (tool.active ? "" : "（未激活）");
-          text.append(nameRow, desc);
-          label.append(controls, text);
-          list.append(label);
-        }
-        if (!list.children.length) list.textContent = "没有匹配的工具";
-      }
-      search.addEventListener("input", render);
-      document.getElementById("selectVisible").addEventListener("click", () => { for (const tool of visibleTools()) if (tool.active) selectedKeep.add(tool.name); render(); });
-      document.getElementById("clearVisible").addEventListener("click", () => { for (const tool of visibleTools()) { selectedKeep.delete(tool.name); selectedRecommend.delete(tool.name); } render(); });
-      document.getElementById("save").addEventListener("click", async () => {
-        try {
-          selectedRecommend = new Set([...selectedRecommend].filter((name) => selectedKeep.has(name)));
-          await bridge.apiPost("settings/save", {
-            always_keep_tools: [...selectedKeep],
-            always_keep_recommend_tools: [...selectedRecommend],
-            jev_pre_prompt: jevPrePrompt.value,
-            main_llm_post_prompt: mainLlmPostPrompt.value,
-            tool_filter_enabled: toolFilterEnabled.checked,
-            subagent_filter_enabled: subagentFilterEnabled.checked,
-          });
-          status.textContent = "已保存";
-        }
-        catch (error) { status.textContent = `保存失败：${error.message}`; }
-      });
-      try {
-        await bridge.ready();
-        const [toolData, settings] = await Promise.all([bridge.apiGet("tools"), bridge.apiGet("settings")]);
-        tools = toolData.tools || [];
-        selectedKeep = new Set(settings.always_keep_tools || []);
-        selectedRecommend = new Set(settings.always_keep_recommend_tools || []);
-        jevPrePrompt.value = settings.jev_pre_prompt || "";
-        mainLlmPostPrompt.value = settings.main_llm_post_prompt || "";
-        toolFilterEnabled.checked = settings.tool_filter_enabled !== false;
-        subagentFilterEnabled.checked = settings.subagent_filter_enabled === true;
-        render();
-      } catch (error) { status.textContent = `加载失败：${error.message}`; list.textContent = "无法读取工具列表"; }
+      <nav class="tabbar" aria-label="设置分区">
+        <liquid-glass id="glassNav" class="tab-glass" mode="single-bottom-tabs" dark wallpaper="gradient"></liquid-glass>
+        <div class="tab-buttons">
+          <button v-for="tab in tabs" :key="tab.id" class="tab-button" :class="{active: activeTab === tab.id}" @click="activeTab = tab.id">
+            <strong>{{ tab.label }}</strong><small>{{ tab.caption }}</small>
+          </button>
+        </div>
+      </nav>
+
+      <main>
+        <section v-show="activeTab === 'routing'" class="section-grid">
+          <div class="glass-card">
+            <div class="card-heading"><div><div class="section-kicker">Routing</div><h2>Tools 与 SubAgents</h2><p>决定 Jev 如何筛选能力，以及主 LLM 能看到哪些候选。</p></div></div>
+            <div class="switch-row"><div class="switch-copy"><strong>过滤普通 Tools</strong><small>开启后只保留 Jev 判断通过的普通 Tool；关闭后全部保留，但仍生成推荐。</small></div><label class="switch"><input v-model="form.tool_filter_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+            <div class="switch-row"><div class="switch-copy"><strong>过滤 SubAgents</strong><small>开启后只保留 Jev 判断通过的 SubAgent；默认关闭，关闭时仍会生成推荐。</small></div><label class="switch"><input v-model="form.subagent_filter_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+            <div class="field"><label>判断阈值 <span>{{ Number(form.tool_noul_threshold).toFixed(2) }}</span></label><input v-model.number="form.tool_noul_threshold" type="range" min="0" max="1" step="0.01"></div>
+            <div class="notice" style="margin-top:20px"><strong>Always Keep：</strong>工具保留和“推荐给主 LLM”在“工具管理”分区单独设置。SubAgent 始终由 Jev 逐个判断。</div>
+          </div>
+          <div class="glass-card">
+            <div class="card-heading"><div><div class="section-kicker">Prompts</div><h2>两套提示词</h2><p>提示词保存在 AstrBot 数据目录，不会随着插件更新被覆盖。</p></div></div>
+            <div class="prompt-grid"><div class="field"><label>Jev 判断前提示词</label><textarea v-model="form.jev_pre_prompt" spellcheck="false"></textarea><p class="hint">发送给 Jev，不会包含主 LLM 的人格 system prompt。</p></div><div class="field"><label>判断后注入主 LLM</label><textarea v-model="form.main_llm_post_prompt" spellcheck="false"></textarea><p class="hint">支持 {tools} 和 {subagents} 占位符，会追加到现有 system prompt。</p></div></div>
+          </div>
+        </section>
+
+        <section v-show="activeTab === 'proactive'" class="section-grid">
+          <div class="glass-card">
+            <div class="card-heading"><div><div class="section-kicker">Proactive Chat</div><h2>主动对话策略</h2><p>主动对话总开关在 AstrBot 原生配置页；这里配置它的判断方式。</p></div></div>
+            <div class="notice"><strong>白名单优先。</strong>只有配置的群聊 ID、私聊用户 ID 或完整会话来源会进入主动判断。留空时不会主动回复。</div>
+            <div class="field"><label>白名单 <span>每行一个群聊 ID、用户 ID 或 unified_msg_origin</span></label><textarea v-model="form.proactive.proactive_whitelist" class="list-editor" placeholder="群聊 ID\n私聊用户 ID"></textarea></div>
+            <div class="two-col"><div class="field"><label>直接回复前缀</label><input v-model="form.proactive.direct_reply_prefixes" type="text" placeholder="/、@"></div><div class="field"><label>机器人昵称</label><input v-model="form.proactive.proactive_alias" type="text" placeholder="AI|助手"></div></div>
+            <div class="switch-row"><div class="switch-copy"><strong>@ 或回复机器人时强制回复</strong><small>明确唤醒时跳过主动判断 Jev，直接进入 AstrBot 原生 Agent。</small></div><label class="switch"><input v-model="form.proactive.force_reply_when_summoned" type="checkbox"><span class="switch-track"></span></label></div>
+            <div class="two-col"><div class="field"><label>综合介入阈值</label><input v-model.number="form.proactive.proactive_score_threshold" type="number" min="0" max="1" step="0.01"></div><div class="field"><label>直接指向阈值</label><input v-model.number="form.proactive.addressing_threshold" type="number" min="0" max="1" step="0.01"></div><div class="field"><label>自然介入阈值</label><input v-model.number="form.proactive.interject_threshold" type="number" min="0" max="1" step="0.01"></div><div class="field"><label>判断间隔（秒）</label><input v-model.number="form.proactive.no_reply_cooldown_seconds" type="number" min="0" step="0.1"></div></div>
+          </div>
+          <div class="glass-card">
+            <div class="card-heading"><div><div class="section-kicker">Guardrails</div><h2>冷却与状态</h2><p>控制主动回复频率、历史规模和会话资源。</p></div></div>
+            <div class="two-col"><div class="field"><label>回复冷却（秒）</label><input v-model.number="form.proactive.cooldown_seconds" type="number" min="0" step="1"></div><div class="field"><label>回复窗口（秒）</label><input v-model.number="form.proactive.reply_window_seconds" type="number" min="1" step="1"></div><div class="field"><label>窗口最多回复</label><input v-model.number="form.proactive.max_replies_per_window" type="number" min="0" step="1"></div><div class="field"><label>历史消息数</label><input v-model.number="form.proactive.proactive_history_max_messages" type="number" min="2" step="1"></div><div class="field"><label>最多会话数</label><input v-model.number="form.proactive.proactive_max_sessions" type="number" min="1" step="1"></div><div class="field"><label>观测超时（秒）</label><input v-model.number="form.proactive.observation_timeout_seconds" type="number" min="1" step="1"></div></div>
+            <div class="field"><label>复读检测：条数 / 窗口秒数</label><div class="two-col"><input v-model.number="form.proactive.echo_detection_threshold" type="number" min="2" step="1"><input v-model.number="form.proactive.echo_detection_window_seconds" type="number" min="1" step="1"></div></div>
+            <div class="field"><label>密集对话：消息数 / 窗口秒数 / 最少参与人数</label><div class="two-col"><input v-model.number="form.proactive.dense_conversation_threshold" type="number" min="1" step="1"><input v-model.number="form.proactive.dense_conversation_window_seconds" type="number" min="1" step="1"><input v-model.number="form.proactive.min_participant_count" type="number" min="1" step="1"></div></div>
+          </div>
+        </section>
+
+        <section v-show="activeTab === 'tools'" class="glass-card">
+          <div class="card-heading"><div><div class="section-kicker">Tool Library</div><h2>工具管理</h2><p>同一来源的能力会归在一起。始终保留的工具仍会进入本轮 ToolSet；推荐选项只对普通 Tool 生效。</p></div><span class="tool-count">{{ visibleTools.length }} / {{ tools.length }}</span></div>
+          <div class="tool-toolbar"><input v-model="toolSearch" type="search" placeholder="搜索工具名、来源或描述"><button class="button secondary" @click="selectVisible">全选结果</button><button class="button ghost" @click="clearVisible">清空结果</button></div>
+          <div class="tool-groups"><div v-for="group in groupedTools" :key="group.origin" class="tool-group"><div class="tool-group-title">{{ group.origin }} <span class="tool-count">{{ group.items.length }}</span></div><div v-for="tool in group.items" :key="tool.name" class="tool-row"><div><div class="tool-name">{{ tool.name }} <span v-if="tool.handoff" class="tool-badge">SubAgent · Jev 自动判断</span><span class="origin" :class="{builtin: tool.builtin}">{{ tool.origin_display }}</span></div><div class="tool-description">{{ tool.description }}<span v-if="!tool.active">（未激活）</span></div></div><div class="tool-controls"><label class="mini-check"><input type="checkbox" :checked="isKept(tool.name)" :disabled="!tool.active" @change="toggleKeep(tool)">始终保留</label><label class="mini-check"><input type="checkbox" :checked="isRecommended(tool.name)" :disabled="!tool.active || tool.handoff || !isKept(tool.name)" @change="toggleRecommend(tool)">推荐给主 LLM</label></div></div></div><div v-if="!groupedTools.length" class="empty">没有匹配的工具</div></div>
+        </section>
+      </main>
+
+      <p class="footer-note">全局服务参数仍由 AstrBot 原生配置页管理；本页保存的详细策略写入 AstrBot 数据目录。按钮使用实色底保证文字清晰，玻璃层只承担环境光和层次感。</p>
+      <div class="save-bar"><span class="save-status" :class="saveState">{{ statusText }}</span><button class="button primary" :disabled="loading || saving" @click="save">{{ saving ? '保存中…' : '保存全部设置' }}</button></div>
+    </div>
+    <script>
+      const { createApp, nextTick } = Vue;
+      // AstrBot injects the real bridge.  The fallback keeps the page usable
+      // in a static preview and avoids a noisy console error before injection.
+      const bridge = window.AstrBotPluginPage || {
+        async ready() {},
+        async apiGet(path) { return path === 'tools' ? {tools: []} : {}; },
+        async apiPost() { return {saved: true}; }
+      };
+      const defaults = {
+        proactive_whitelist: [], direct_reply_prefixes: ['/', '@'], force_reply_when_summoned: true,
+        proactive_alias: 'AI|助手', proactive_score_threshold: .68, addressing_threshold: .7,
+        interject_threshold: .85, cooldown_seconds: 60, reply_window_seconds: 600,
+        max_replies_per_window: 2, proactive_history_max_messages: 12, proactive_max_sessions: 500,
+        no_reply_cooldown_seconds: 3, observation_timeout_seconds: 600,
+        echo_detection_threshold: 3, echo_detection_window_seconds: 30,
+        dense_conversation_threshold: 30, dense_conversation_window_seconds: 600, min_participant_count: 2
+      };
+      createApp({
+        data() { return { loading: true, saving: false, activeTab: 'routing', toolSearch: '', statusText: '加载中…', saveState: '', tools: [], selectedKeep: [], selectedRecommend: [], toolsEnabledValue: true, proactiveEnabledValue: false, tabs: [{id:'routing',label:'路由策略',caption:'Tools 与 SubAgents'},{id:'proactive',label:'主动对话',caption:'判断与节流'},{id:'tools',label:'工具管理',caption:'保留与推荐'}], form: { tool_filter_enabled: true, subagent_filter_enabled: false, tool_noul_threshold: .2, jev_pre_prompt: '', main_llm_post_prompt: '', proactive: {...defaults} } }; },
+        computed: {
+          toolsEnabled() { return this.toolsEnabledValue; },
+          proactiveEnabled() { return this.proactiveEnabledValue; },
+          visibleTools() { const q = this.toolSearch.trim().toLowerCase(); return this.tools.filter(t => !q || `${t.name} ${t.origin_display} ${t.description}`.toLowerCase().includes(q)); },
+          groupedTools() { const map = new Map(); for (const t of this.visibleTools) { const key = t.origin_display || '未知来源'; if (!map.has(key)) map.set(key, []); map.get(key).push(t); } return [...map.entries()].map(([origin,items]) => ({origin,items})); }
+        },
+        methods: {
+          isKept(name) { return this.selectedKeep.includes(name); },
+          isRecommended(name) { return this.selectedRecommend.includes(name); },
+          toggleKeep(tool) { this.selectedKeep = tool.active && !this.isKept(tool.name) ? [...this.selectedKeep, tool.name] : this.selectedKeep.filter(n => n !== tool.name); if (!this.isKept(tool.name)) this.selectedRecommend = this.selectedRecommend.filter(n => n !== tool.name); },
+          toggleRecommend(tool) { this.selectedRecommend = this.isRecommended(tool.name) ? this.selectedRecommend.filter(n => n !== tool.name) : [...this.selectedRecommend, tool.name]; },
+          selectVisible() { for (const tool of this.visibleTools) if (tool.active && !this.isKept(tool.name)) this.selectedKeep.push(tool.name); this.selectedKeep = [...new Set(this.selectedKeep)]; },
+          clearVisible() { const names = new Set(this.visibleTools.map(t => t.name)); this.selectedKeep = this.selectedKeep.filter(n => !names.has(n)); this.selectedRecommend = this.selectedRecommend.filter(n => !names.has(n)); },
+          async save() { this.saving = true; this.saveState = ''; this.statusText = '保存中…'; try { const proactive = {...this.form.proactive, proactive_whitelist: String(this.form.proactive.proactive_whitelist || '').split(/\n|,/).map(s=>s.trim()).filter(Boolean), direct_reply_prefixes: String(this.form.proactive.direct_reply_prefixes || '').split(/\n|[,，]/).map(s=>s.trim()).filter(Boolean)}; await bridge.apiPost('settings/save', {always_keep_tools: this.selectedKeep, always_keep_recommend_tools: this.selectedRecommend, jev_pre_prompt: this.form.jev_pre_prompt, main_llm_post_prompt: this.form.main_llm_post_prompt, tool_filter_enabled: this.form.tool_filter_enabled, subagent_filter_enabled: this.form.subagent_filter_enabled, tool_noul_threshold: Number(this.form.tool_noul_threshold), proactive}); this.statusText = '已保存'; this.saveState = 'ok'; } catch (e) { this.statusText = `保存失败：${e.message || e}`; this.saveState = 'error'; } finally { this.saving = false; } },
+          async load() { try { await bridge.ready(); const [toolData, settings] = await Promise.all([bridge.apiGet('tools'), bridge.apiGet('settings')]); this.tools = toolData.tools || []; this.selectedKeep = settings.always_keep_tools || []; this.selectedRecommend = settings.always_keep_recommend_tools || []; this.form.tool_filter_enabled = settings.tool_filter_enabled !== false; this.form.subagent_filter_enabled = settings.subagent_filter_enabled === true; this.form.tool_noul_threshold = settings.tool_noul_threshold ?? .2; this.form.jev_pre_prompt = settings.jev_pre_prompt || ''; this.form.main_llm_post_prompt = settings.main_llm_post_prompt || ''; this.form.proactive = {...defaults, ...(settings.proactive || {})}; this.form.proactive.proactive_whitelist = (settings.proactive?.proactive_whitelist || []).join('\n'); this.form.proactive.direct_reply_prefixes = (settings.proactive?.direct_reply_prefixes || ['/', '@']).join(', '); this.toolsEnabledValue = settings.tools_subagents_decision_enabled !== false; this.proactiveEnabledValue = settings.proactive_reply_enabled === true; this.statusText = '已加载'; } catch (e) { this.statusText = `加载失败：${e.message || e}`; this.saveState = 'error'; } finally { this.loading = false; } }
+        },
+        mounted() { this.load(); nextTick(() => requestAnimationFrame(() => { const nav = document.getElementById('glassNav'); if (nav?.setTabs) nav.setTabs([[{label:'路由策略'},{label:'主动对话'},{label:'工具管理'}]]); })); }
+      }).mount('#app');
     </script>
   </body>
 </html>
