@@ -17,6 +17,7 @@ AstrBot 原生插件配置页只保留 13 项：
 - `data/config/astrbot_plugin_decision_settings.json`：WebUI 中的过滤策略、提示词、工具选择和主动对话详细设置。
 
 插件目录只保存代码、Schema、页面和静态资源。更新插件不会覆盖这两个配置文件。
+WebUI 设置独立读取、保存，不合并到 AstrBot 的原生配置对象，因此不会在原生配置页以英文键名重复出现。保存失败时保留原文件与当前运行设置；热重载后仍从数据目录恢复设置。
 
 ## Tools 与 SubAgents
 

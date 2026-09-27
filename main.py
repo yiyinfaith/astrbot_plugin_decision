@@ -19,6 +19,7 @@ from astrbot.core.agent.handoff import HandoffTool
 from astrbot.core.agent.tool import FunctionTool, ToolSet
 from astrbot.core.platform import MessageType
 from astrbot.core.star.filter.event_message_type import EventMessageType
+from astrbot.core.utils.astrbot_path import get_astrbot_config_path
 
 from .decision.context import (
     build_decision_state,
@@ -78,6 +79,17 @@ DEFAULT_POLICY = (
     "请严格根据当前场景、用户请求和候选能力逐项判断。\n"
     "不要生成最终回答，不要执行工具，不要发明候选名称。"
 )
+DETAIL_DEFAULTS: dict[str, Any] = {
+    "always_keep_tools": [],
+    "always_keep_recommend_tools": [],
+    "always_keep_tools_customized": False,
+    "tool_filter_enabled": True,
+    "subagent_filter_enabled": False,
+    "tool_noul_threshold": 0.2,
+    "jev_pre_prompt": DEFAULT_POLICY,
+    "main_llm_post_prompt": DEFAULT_MAIN_LLM_POST_PROMPT,
+    **PROACTIVE_PAGE_DEFAULTS,
+}
 
 
 @register(
@@ -95,11 +107,13 @@ class DecisionPlugin(Star):
         self.config = config
         self._settings_path = self._get_settings_path(config)
         self._detail_settings = self._load_detail_settings()
-        # AstrBot's schema-backed config intentionally removes unknown keys on
-        # reload.  Keep WebUI-only settings in a separate data file, while
-        # mirroring them into the live config so existing runtime code can use
-        # the same accessors without placing them in the plugin directory.
-        self.config.update(self._detail_settings)
+        # AstrBot also renders live config keys. Never merge WebUI settings
+        # into this framework-owned object, even only in memory.
+        legacy = {key: config[key] for key in DETAIL_DEFAULTS if key in config}
+        if legacy:
+            self._save_detail_settings({**legacy, **self._detail_settings})
+            for key in legacy:
+                config.pop(key, None)
         self.provider: SystemOneProvider | None = None
         self._ready = False
         self._active_reply_warning_emitted = False
@@ -148,7 +162,7 @@ class DecisionPlugin(Star):
         config_path = getattr(config, "config_path", "")
         if config_path:
             return Path(str(config_path)).resolve().with_name(f"{PLUGIN_NAME}_settings.json")
-        return Path("data") / "config" / f"{PLUGIN_NAME}_settings.json"
+        return Path(get_astrbot_config_path()) / f"{PLUGIN_NAME}_settings.json"
 
     def _load_detail_settings(self) -> dict[str, Any]:
         try:
@@ -156,7 +170,11 @@ class DecisionPlugin(Star):
                 return {}
             with self._settings_path.open(encoding="utf-8-sig") as file:
                 value = json.load(file)
-            return dict(value) if isinstance(value, Mapping) else {}
+            return (
+                {key: value[key] for key in DETAIL_DEFAULTS if key in value}
+                if isinstance(value, Mapping)
+                else {}
+            )
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             logger.warning(
                 "Decision Engine could not read WebUI settings; defaults will be used: %s",
@@ -165,7 +183,7 @@ class DecisionPlugin(Star):
             return {}
 
     def _save_detail_settings(self, values: Mapping[str, Any]) -> None:
-        payload = dict(values)
+        payload = {key: values[key] for key in DETAIL_DEFAULTS if key in values}
         self._settings_path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(
             dir=str(self._settings_path.parent),
@@ -188,18 +206,23 @@ class DecisionPlugin(Star):
                     pass
         self._detail_settings = payload
 
+    def _setting(self, key: str, default: Any = None) -> Any:
+        if key in DETAIL_DEFAULTS:
+            return self._detail_settings.get(key, default)
+        return self.config.get(key, default)
+
     async def initialize(self) -> None:
-        provider_name = str(self.config.get("provider", "systemone_jev"))
+        provider_name = str(self._setting("provider", "systemone_jev"))
         if provider_name != "systemone_jev":
             logger.warning(
                 "Decision Engine provider %s is unavailable; plugin stays fail-open.", provider_name
             )
             return
         self.provider = SystemOneProvider(
-            base_url=str(self.config.get("base_url", "")),
-            path=str(self.config.get("systemone_path", "/v1/systemone")),
-            api_key=str(self.config.get("api_key", "")),
-            model=str(self.config.get("model", "jev-latest")),
+            base_url=str(self._setting("base_url", "")),
+            path=str(self._setting("systemone_path", "/v1/systemone")),
+            api_key=str(self._setting("api_key", "")),
+            model=str(self._setting("model", "jev-latest")),
             timeout_sec=self._float("timeout_sec", 5.0),
             retries=self._int("retries", 1),
             retry_backoff_sec=self._float("retry_backoff_seconds", 0.0),
@@ -238,25 +261,25 @@ class DecisionPlugin(Star):
 
     def _int(self, key: str, default: int) -> int:
         try:
-            return int(self.config.get(key, default))
+            return int(self._setting(key, default))
         except (TypeError, ValueError):
             return default
 
     def _float(self, key: str, default: float) -> float:
         try:
-            return float(self.config.get(key, default))
+            return float(self._setting(key, default))
         except (TypeError, ValueError):
             return default
 
     def _bool(self, key: str, default: bool = False) -> bool:
-        value = self.config.get(key, default)
+        value = self._setting(key, default)
         return value if isinstance(value, bool) else bool(value)
 
     def _policy(self) -> str:
-        return str(self.config.get("jev_pre_prompt", "")).strip() or DEFAULT_POLICY
+        return str(self._setting("jev_pre_prompt", "")).strip() or DEFAULT_POLICY
 
     def _main_llm_post_prompt(self) -> str:
-        configured = self.config.get("main_llm_post_prompt")
+        configured = self._setting("main_llm_post_prompt")
         if configured is None:
             return DEFAULT_MAIN_LLM_POST_PROMPT
         # An explicitly empty value is a supported way to disable this
@@ -488,7 +511,7 @@ class DecisionPlugin(Star):
             result = await self.provider.evaluate(
                 state=state,
                 questions=questions,
-                model=str(self.config.get("model", "jev-latest")),
+                model=str(self._setting("model", "jev-latest")),
             )
             self._last_call_latency_ms = (time.perf_counter() - started) * 1000
             return result
@@ -545,14 +568,14 @@ class DecisionPlugin(Star):
         ]
         always_keep = {
             str(name).strip()
-            for name in (self.config.get("always_keep_tools", []) or [])
+            for name in (self._setting("always_keep_tools", []) or [])
             if str(name).strip()
         }
         if not self._bool("always_keep_tools_customized", False):
             always_keep.update(self._builtin_tool_names())
         always_keep_recommend = {
             str(name).strip()
-            for name in (self.config.get("always_keep_recommend_tools", []) or [])
+            for name in (self._setting("always_keep_recommend_tools", []) or [])
             if str(name).strip()
         } & always_keep
         unknown_always_keep = always_keep - {
@@ -760,7 +783,7 @@ class DecisionPlugin(Star):
     def _direct_reply_requested(self, event: AstrMessageEvent) -> bool:
         """Implement AngelHeart's direct prefix feature without text @ matching."""
 
-        prefixes = normalize_prefixes(self.config.get("direct_reply_prefixes", ["/", "@"]))
+        prefixes = normalize_prefixes(self._setting("direct_reply_prefixes", ["/", "@"]))
         at_self, _, at_all, parse_failed = self._message_address_flags(event)
         if not parse_failed and not at_all and "@" in prefixes and at_self:
             return True
@@ -780,7 +803,7 @@ class DecisionPlugin(Star):
             text = str(event.get_message_str() or "")
         aliases = [
             item.strip()
-            for item in str(self.config.get("proactive_alias", "AI|助手") or "").split("|")
+            for item in str(self._setting("proactive_alias", "AI|助手") or "").split("|")
             if item.strip()
         ]
         return bool(aliases and any(alias in text for alias in aliases))
@@ -793,7 +816,7 @@ class DecisionPlugin(Star):
         accepted, which keeps the common WebUI configuration simple.
         """
 
-        configured = self.config.get("proactive_whitelist", [])
+        configured = self._setting("proactive_whitelist", [])
         if not isinstance(configured, (list, tuple, set)):
             return False
         allowlist = {str(item).strip() for item in configured if str(item).strip()}
@@ -978,12 +1001,12 @@ class DecisionPlugin(Star):
                     len(scores) == len(names)
                     and (
                         aggregate
-                        >= bounded_float(self.config.get("proactive_score_threshold", 0.68), 0.68)
+                        >= bounded_float(self._setting("proactive_score_threshold", 0.68), 0.68)
                         or (
                             addressing
-                            >= bounded_float(self.config.get("addressing_threshold", 0.7), 0.7)
+                            >= bounded_float(self._setting("addressing_threshold", 0.7), 0.7)
                             and interject
-                            >= bounded_float(self.config.get("interject_threshold", 0.85), 0.85)
+                            >= bounded_float(self._setting("interject_threshold", 0.85), 0.85)
                         )
                     )
                 )
@@ -1079,11 +1102,11 @@ class DecisionPlugin(Star):
             output = (
                 f"Tools/SubAgent decision: {'enabled' if self._bool('tools_subagents_decision_enabled', True) else 'disabled'}\n"
                 f"proactive_reply={self._bool('proactive_reply_enabled', False)}\n"
-                f"provider={self.config.get('provider', 'systemone_jev')}\n"
-                f"endpoint={self.config.get('base_url', '')}{self.config.get('systemone_path', '/v1/systemone')}\n"
-                f"model={self.config.get('model', 'jev-latest')}\n"
+                f"provider={self._setting('provider', 'systemone_jev')}\n"
+                f"endpoint={self._setting('base_url', '')}{self._setting('systemone_path', '/v1/systemone')}\n"
+                f"model={self._setting('model', 'jev-latest')}\n"
                 f"tool_filter={self._bool('tool_filter_enabled', True)} subagent_filter={self._bool('subagent_filter_enabled', False)} threshold={self._float('tool_noul_threshold', 0.2):.3f}\n"
-                f"registered_tools={len(tools)} handoffs={handoffs} always_keep={len(self.config.get('always_keep_tools', []) or [])}\n"
+                f"registered_tools={len(tools)} handoffs={handoffs} always_keep={len(self._setting('always_keep_tools', []) or [])}\n"
                 f"calls={self._call_count} failures={self._failure_count} latency_ms={self._last_call_latency_ms or 0:.1f}"
             )
             yield event.plain_result(output)
@@ -1176,18 +1199,18 @@ class DecisionPlugin(Star):
     async def page_settings(self):
         from astrbot.api.web import json_response
 
-        always_keep = [str(item) for item in (self.config.get("always_keep_tools", []) or [])]
+        always_keep = [str(item) for item in (self._setting("always_keep_tools", []) or [])]
         if not self._bool("always_keep_tools_customized", False):
             always_keep.extend(sorted(self._builtin_tool_names()))
         always_keep = list(dict.fromkeys(always_keep))
         always_keep_recommend = [
             str(item)
-            for item in (self.config.get("always_keep_recommend_tools", []) or [])
+            for item in (self._setting("always_keep_recommend_tools", []) or [])
             if str(item) in always_keep
         ]
         proactive = {}
         for key, default in PROACTIVE_PAGE_DEFAULTS.items():
-            value = self.config.get(key, default)
+            value = self._setting(key, default)
             if isinstance(default, list):
                 value = [str(item) for item in value] if isinstance(value, (list, tuple)) else []
             elif isinstance(default, bool):
@@ -1208,6 +1231,10 @@ class DecisionPlugin(Star):
                 "tool_filter_enabled": self._bool("tool_filter_enabled", True),
                 "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
                 "tool_noul_threshold": self._float("tool_noul_threshold", 0.2),
+                "tools_subagents_decision_enabled": self._bool(
+                    "tools_subagents_decision_enabled", True
+                ),
+                "proactive_reply_enabled": self._bool("proactive_reply_enabled", False),
                 "proactive": proactive,
             }
         )
@@ -1300,43 +1327,36 @@ class DecisionPlugin(Star):
                 if item.strip() in cleaned and item.strip() in available
             )
         )[:500]
-        self.config["always_keep_tools"] = cleaned
-        self.config["always_keep_recommend_tools"] = cleaned_recommend
-        self.config["always_keep_tools_customized"] = True
+        detail_values = {
+            key: self._setting(key, default) for key, default in DETAIL_DEFAULTS.items()
+        }
+        detail_values.update(
+            always_keep_tools=cleaned,
+            always_keep_recommend_tools=cleaned_recommend,
+            always_keep_tools_customized=True,
+        )
         if tool_filter_enabled is not None:
-            self.config["tool_filter_enabled"] = tool_filter_enabled
+            detail_values["tool_filter_enabled"] = tool_filter_enabled
         if subagent_filter_enabled is not None:
-            self.config["subagent_filter_enabled"] = subagent_filter_enabled
+            detail_values["subagent_filter_enabled"] = subagent_filter_enabled
         if jev_pre_prompt is not None:
-            self.config["jev_pre_prompt"] = jev_pre_prompt[:50000]
+            detail_values["jev_pre_prompt"] = jev_pre_prompt[:50000]
         if main_llm_post_prompt is not None:
-            self.config["main_llm_post_prompt"] = main_llm_post_prompt[:50000]
+            detail_values["main_llm_post_prompt"] = main_llm_post_prompt[:50000]
         if tool_noul_threshold is not None:
-            self.config["tool_noul_threshold"] = min(1.0, max(0.0, float(tool_noul_threshold)))
-        for key, value in cleaned_proactive.items():
-            self.config[key] = value
+            detail_values["tool_noul_threshold"] = min(1.0, max(0.0, float(tool_noul_threshold)))
+        detail_values.update(cleaned_proactive)
+        # Commit first: a failed disk write must not change the running policy
+        # or prune proactive history while reporting a failed save to the UI.
+        try:
+            self._save_detail_settings(detail_values)
+        except OSError as exc:
+            logger.error("Decision Engine WebUI settings save failed: %s", _safe_error(exc))
+            return error_response("配置写入失败，原设置保持不变", status_code=500)
         self.proactive.reconfigure(
             self._int("proactive_history_max_messages", 12),
             self._int("proactive_max_sessions", 500),
         )
-        detail_values = {
-            "always_keep_tools": cleaned,
-            "always_keep_recommend_tools": cleaned_recommend,
-            "always_keep_tools_customized": True,
-            "tool_filter_enabled": self._bool("tool_filter_enabled", True),
-            "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
-            "tool_noul_threshold": self._float("tool_noul_threshold", 0.2),
-            "jev_pre_prompt": self._policy(),
-            "main_llm_post_prompt": self._main_llm_post_prompt(),
-            **{
-                key: self.config.get(key, default)
-                for key, default in PROACTIVE_PAGE_DEFAULTS.items()
-            },
-        }
-        # Detailed WebUI settings must survive plugin updates.  AstrBot's
-        # schema config remains reserved for the public global fields and is
-        # therefore deliberately not saved here.
-        self._save_detail_settings(detail_values)
         return json_response(
             {
                 "saved": True,
@@ -1346,7 +1366,7 @@ class DecisionPlugin(Star):
                 "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
                 "tool_noul_threshold": self._float("tool_noul_threshold", 0.2),
                 "proactive": {
-                    key: self.config.get(key, default)
+                    key: self._setting(key, default)
                     for key, default in PROACTIVE_PAGE_DEFAULTS.items()
                 },
             }
