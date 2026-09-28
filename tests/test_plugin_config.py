@@ -9,7 +9,7 @@ import logging
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -213,3 +213,75 @@ def test_path_fallback_uses_astrbot_data_directory(host, monkeypatch, tmp_path):
     plugin_directory.mkdir()
     monkeypatch.chdir(plugin_directory)
     assert host.module.DecisionPlugin._get_settings_path({}) == host.path
+
+
+@pytest.mark.asyncio
+async def test_dynamic_subagent_is_listed_saved_and_restored_without_global_registration(host):
+    manager = host.context.get_llm_tool_manager()
+    agent = manager.func_list.pop()
+    host.context.subagent_orchestrator = SimpleNamespace(handoffs=[agent])
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    assert agent not in manager.func_list
+    listed = (await plugin.page_tools())["tools"]
+    agents = [tool for tool in listed if tool["handoff"]]
+    assert [tool["name"] for tool in agents] == [agent.name]
+    assert agents[0]["origin_display"] == "AstrBot SubAgent"
+    host.body.update(
+        always_keep_tools=["jev_decide", agent.name],
+        always_keep_subagents=[agent.name, "jev_decide"],
+        always_keep_recommend_subagents=[agent.name, "jev_decide"],
+    )
+    result = await plugin.page_save_settings()
+    assert result["saved"] is True
+    assert result["always_keep_tools"] == ["jev_decide"]
+    assert result["always_keep_subagents"] == [agent.name]
+    assert result["always_keep_recommend_subagents"] == [agent.name]
+    reloaded = host.module.DecisionPlugin(host.context, host.config)
+    settings = await reloaded.page_settings()
+    assert settings["always_keep_subagents"] == [agent.name]
+    assert settings["always_keep_recommend_subagents"] == [agent.name]
+    assert not set(host.module.DETAIL_DEFAULTS).intersection(host.config)
+
+
+@pytest.mark.asyncio
+async def test_subagent_catalog_deduplicates_and_follows_orchestrator_reloads(host):
+    agent = host.context.get_llm_tool_manager().func_list[0]
+    orchestrator = SimpleNamespace(handoffs=[agent])
+    host.context.subagent_orchestrator = orchestrator
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    assert len([t for t in (await plugin.page_tools())["tools"] if t["handoff"]]) == 1
+    host.context.get_llm_tool_manager().func_list.remove(agent)
+    orchestrator.handoffs = []
+    assert not [t for t in (await plugin.page_tools())["tools"] if t["handoff"]]
+    replacement = host.module.HandoffTool()
+    replacement.name = "transfer_to_new_agent"
+    replacement.description = "new"
+    orchestrator.handoffs = [replacement]
+    assert [t["name"] for t in (await plugin.page_tools())["tools"] if t["handoff"]] == [
+        replacement.name
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recommend", [False, True])
+async def test_saved_dynamic_subagent_reaches_request_routing(host, monkeypatch, recommend):
+    agent = host.context.get_llm_tool_manager().func_list.pop()
+    host.context.subagent_orchestrator = SimpleNamespace(handoffs=[agent])
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    host.body.update(
+        always_keep_tools=[],
+        always_keep_subagents=[agent.name],
+        always_keep_recommend_subagents=[agent.name] if recommend else [],
+        subagent_filter_enabled=True,
+        main_llm_post_prompt="Tools: {tools}; SubAgents: {subagents}",
+    )
+    assert (await plugin.page_save_settings())["saved"] is True
+    toolset = SimpleNamespace(tools=[agent, plugin._decision_tool])
+    toolset.get_tool = lambda name: next((t for t in toolset.tools if t.name == name), None)
+    req = SimpleNamespace(func_tool=toolset, system_prompt="Existing persona")
+    monkeypatch.setattr(plugin, "_decision_batches", Mock(return_value=[("test state", {})]))
+    monkeypatch.setattr(plugin, "_evaluate", AsyncMock(return_value=SimpleNamespace(answers={})))
+    await plugin.filter_tools_before_llm(None, req)
+    assert req.func_tool.tools == [agent]
+    assert req.system_prompt.startswith("Existing persona")
+    assert (agent.name in req.system_prompt) is recommend

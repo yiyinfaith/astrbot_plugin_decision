@@ -97,7 +97,9 @@ def choose_tools(
                 keep = True
             if keep:
                 final.append(tool)
-            if selected_by_jev or name in always_keep_handoffs_recommend:
+            if selected_by_jev or (
+                name in always_keep_handoffs and name in always_keep_handoffs_recommend
+            ):
                 recommended_subagents.append(name)
             continue
         keep = name in always_keep

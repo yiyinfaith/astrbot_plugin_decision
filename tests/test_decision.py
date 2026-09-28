@@ -501,7 +501,7 @@ def test_routing_manual_subagent_keep_and_recommend_are_independent():
         threshold=0.65,
         always_keep=set(),
         decision_tool=None,
-        always_keep_handoffs={"agent_keep"},
+        always_keep_handoffs={"agent_keep", "agent_recommend"},
         always_keep_handoffs_recommend={"agent_recommend"},
         question_to_handoff={
             "keep_q": "agent_keep",
@@ -510,7 +510,11 @@ def test_routing_manual_subagent_keep_and_recommend_are_independent():
         },
         filter_handoffs=True,
     )
-    assert [tool.name for tool in outcome.selected] == ["agent_keep", "agent_jev"]
+    assert [tool.name for tool in outcome.selected] == [
+        "agent_keep",
+        "agent_recommend",
+        "agent_jev",
+    ]
     assert outcome.recommended_subagents == ["agent_recommend", "agent_jev"]
 
 

@@ -48,7 +48,6 @@ from .decision.routing import (
     choose_tools,
     compact_answer,
     decision_tool_parameters,
-    recommendations_from_noul,
 )
 from .decision.tokens import estimate_request_tokens, fit_request_state
 
@@ -329,6 +328,31 @@ class DecisionPlugin(Star):
             if str(getattr(tool, "name", "")).strip()
         }
 
+    def _subagent_tool_objects(self) -> list[Any]:
+        """Return dynamic SubAgent handoffs managed outside ``func_list``.
+
+        AstrBot's dynamic ``SubAgentOrchestrator`` keeps these handoffs in its
+        own ``handoffs`` collection and injects them into each request later;
+        they are intentionally not registered in the global function-tool
+        manager.  The WebUI and save validation must read that collection too.
+        """
+
+        candidates: list[Any] = []
+        manager = self.context.get_llm_tool_manager()
+        candidates.extend(getattr(manager, "func_list", []) or [])
+        orchestrator = getattr(self.context, "subagent_orchestrator", None)
+        candidates.extend(getattr(orchestrator, "handoffs", []) or [])
+        result: list[Any] = []
+        seen: set[str] = set()
+        for tool in candidates:
+            if not is_handoff_tool(tool):
+                continue
+            name = str(getattr(tool, "name", "")).strip()
+            if name and name not in seen:
+                seen.add(name)
+                result.append(tool)
+        return result
+
     def _tool_origin(self, tool: Any, *, builtin: bool = False) -> str:
         """Resolve the human-readable owner shown in the settings page."""
 
@@ -354,6 +378,8 @@ class DecisionPlugin(Star):
                             or module_path
                         )
             return module_path
+        if is_handoff_tool(tool):
+            return "AstrBot SubAgent"
         return "未知来源"
 
     def _state_for_request(
@@ -652,7 +678,7 @@ class DecisionPlugin(Star):
                 req,
                 template=self._main_llm_post_prompt(),
                 recommended_tools=outcome.recommended_tools,
-                recommended_subagents=[],
+                recommended_subagents=outcome.recommended_subagents,
             )
             req.func_tool.tools = outcome.selected
             self._log_routing_outcome(outcome)
@@ -708,22 +734,7 @@ class DecisionPlugin(Star):
             filter_ordinary=tool_filter_enabled,
             filter_handoffs=subagent_filter_enabled,
         )
-        threshold = min(
-            1.0,
-            max(0.0, self._float("tool_noul_threshold", DEFAULT_TOOL_NOUL_THRESHOLD)),
-        )
-        recommended_subagents = list(
-            dict.fromkeys(
-                [
-                    *outcome.recommended_subagents,
-                    *recommendations_from_noul(
-                        noul_answers,
-                        subagent_question_to_name,
-                        threshold=threshold,
-                    ),
-                ]
-            )
-        )
+        recommended_subagents = outcome.recommended_subagents
         recommended_tools = outcome.recommended_tools
         add_routing_hint(
             req,
@@ -1171,7 +1182,10 @@ class DecisionPlugin(Star):
 
         tools = []
         seen_names: set[str] = set()
-        for tool in self.context.get_llm_tool_manager().func_list:
+        for tool in [
+            *self.context.get_llm_tool_manager().func_list,
+            *self._subagent_tool_objects(),
+        ]:
             name = str(getattr(tool, "name", ""))
             if not name or name in seen_names:
                 continue
@@ -1382,9 +1396,7 @@ class DecisionPlugin(Star):
             )
         )[:500]
         available_subagents = {
-            str(getattr(tool, "name", ""))
-            for tool in self.context.get_llm_tool_manager().func_list
-            if getattr(tool, "name", None) and is_handoff_tool(tool)
+            str(getattr(tool, "name", "")) for tool in self._subagent_tool_objects()
         }
         cleaned_subagents = list(
             dict.fromkeys(
