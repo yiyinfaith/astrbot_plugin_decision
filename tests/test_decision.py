@@ -764,6 +764,8 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     assert "waitForBridge" in page
     assert "fallbackBridge" in page
     assert "JSON.parse(JSON.stringify(body))" in page
+    assert "TOOL_THRESHOLD_DEFAULT = .65" in page
+    assert "数值越高越严格" in page
 
 
 def test_proactive_details_are_page_only_and_excluded_from_public_schema():

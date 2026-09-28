@@ -53,6 +53,7 @@ from .decision.routing import (
 from .decision.tokens import estimate_request_tokens, fit_request_state
 
 PLUGIN_NAME = "astrbot_plugin_decision"
+DEFAULT_TOOL_NOUL_THRESHOLD = 0.65
 PROACTIVE_PAGE_DEFAULTS: dict[str, Any] = {
     "proactive_whitelist": [],
     "direct_reply_prefixes": ["/", "@"],
@@ -85,7 +86,7 @@ DETAIL_DEFAULTS: dict[str, Any] = {
     "always_keep_tools_customized": False,
     "tool_filter_enabled": True,
     "subagent_filter_enabled": False,
-    "tool_noul_threshold": 0.2,
+    "tool_noul_threshold": DEFAULT_TOOL_NOUL_THRESHOLD,
     "jev_pre_prompt": DEFAULT_POLICY,
     "main_llm_post_prompt": DEFAULT_MAIN_LLM_POST_PROMPT,
     **PROACTIVE_PAGE_DEFAULTS,
@@ -625,7 +626,7 @@ class DecisionPlugin(Star):
                 original,
                 {},
                 {},
-                threshold=self._float("tool_noul_threshold", 0.2),
+                threshold=self._float("tool_noul_threshold", DEFAULT_TOOL_NOUL_THRESHOLD),
                 always_keep=always_keep,
                 decision_tool=decision_tool,
                 always_keep_recommend=always_keep_recommend,
@@ -680,7 +681,10 @@ class DecisionPlugin(Star):
             original,
             noul_answers,
             question_to_tool,
-            threshold=min(1.0, max(0.0, self._float("tool_noul_threshold", 0.2))),
+            threshold=min(
+                1.0,
+                max(0.0, self._float("tool_noul_threshold", DEFAULT_TOOL_NOUL_THRESHOLD)),
+            ),
             always_keep=always_keep,
             decision_tool=decision_tool,
             always_keep_recommend=always_keep_recommend,
@@ -688,7 +692,10 @@ class DecisionPlugin(Star):
             filter_ordinary=tool_filter_enabled,
             filter_handoffs=subagent_filter_enabled,
         )
-        threshold = min(1.0, max(0.0, self._float("tool_noul_threshold", 0.2)))
+        threshold = min(
+            1.0,
+            max(0.0, self._float("tool_noul_threshold", DEFAULT_TOOL_NOUL_THRESHOLD)),
+        )
         recommended_subagents = recommendations_from_noul(
             noul_answers,
             subagent_question_to_name,
@@ -1105,7 +1112,7 @@ class DecisionPlugin(Star):
                 f"provider={self._setting('provider', 'systemone_jev')}\n"
                 f"endpoint={self._setting('base_url', '')}{self._setting('systemone_path', '/v1/systemone')}\n"
                 f"model={self._setting('model', 'jev-latest')}\n"
-                f"tool_filter={self._bool('tool_filter_enabled', True)} subagent_filter={self._bool('subagent_filter_enabled', False)} threshold={self._float('tool_noul_threshold', 0.2):.3f}\n"
+                f"tool_filter={self._bool('tool_filter_enabled', True)} subagent_filter={self._bool('subagent_filter_enabled', False)} threshold={self._float('tool_noul_threshold', DEFAULT_TOOL_NOUL_THRESHOLD):.3f}\n"
                 f"registered_tools={len(tools)} handoffs={handoffs} always_keep={len(self._setting('always_keep_tools', []) or [])}\n"
                 f"calls={self._call_count} failures={self._failure_count} latency_ms={self._last_call_latency_ms or 0:.1f}"
             )
@@ -1230,7 +1237,9 @@ class DecisionPlugin(Star):
                 "main_llm_post_prompt": self._main_llm_post_prompt(),
                 "tool_filter_enabled": self._bool("tool_filter_enabled", True),
                 "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
-                "tool_noul_threshold": self._float("tool_noul_threshold", 0.2),
+                "tool_noul_threshold": self._float(
+                    "tool_noul_threshold", DEFAULT_TOOL_NOUL_THRESHOLD
+                ),
                 "tools_subagents_decision_enabled": self._bool(
                     "tools_subagents_decision_enabled", True
                 ),
@@ -1364,7 +1373,9 @@ class DecisionPlugin(Star):
                 "always_keep_recommend_tools": cleaned_recommend,
                 "tool_filter_enabled": self._bool("tool_filter_enabled", True),
                 "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
-                "tool_noul_threshold": self._float("tool_noul_threshold", 0.2),
+                "tool_noul_threshold": self._float(
+                    "tool_noul_threshold", DEFAULT_TOOL_NOUL_THRESHOLD
+                ),
                 "proactive": {
                     key: self._setting(key, default)
                     for key, default in PROACTIVE_PAGE_DEFAULTS.items()
