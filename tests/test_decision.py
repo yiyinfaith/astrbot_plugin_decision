@@ -483,6 +483,37 @@ def test_routing_always_keep_handoff_and_decision_tool():
     assert outcome.recommended_tools == ["keep"]
 
 
+def test_routing_manual_subagent_keep_and_recommend_are_independent():
+    agent_keep = type("HandoffTool", (), {"name": "agent_keep", "description": "keep"})()
+    agent_recommend = type(
+        "HandoffTool", (), {"name": "agent_recommend", "description": "recommend"}
+    )()
+    agent_jev = type("HandoffTool", (), {"name": "agent_jev", "description": "jev"})()
+    answers = {
+        "keep_q": {"noul": 0.1},
+        "recommend_q": {"noul": 0.1},
+        "jev_q": {"noul": 0.9},
+    }
+    outcome = choose_tools(
+        [agent_keep, agent_recommend, agent_jev],
+        answers,
+        {},
+        threshold=0.65,
+        always_keep=set(),
+        decision_tool=None,
+        always_keep_handoffs={"agent_keep"},
+        always_keep_handoffs_recommend={"agent_recommend"},
+        question_to_handoff={
+            "keep_q": "agent_keep",
+            "recommend_q": "agent_recommend",
+            "jev_q": "agent_jev",
+        },
+        filter_handoffs=True,
+    )
+    assert [tool.name for tool in outcome.selected] == ["agent_keep", "agent_jev"]
+    assert outcome.recommended_subagents == ["agent_recommend", "agent_jev"]
+
+
 def test_routing_never_readds_inactive_always_kept_tool():
     inactive = SimpleNamespace(name="inactive", description="offline", active=False)
     outcome = choose_tools(
@@ -734,6 +765,8 @@ def test_public_schema_contains_only_global_settings_and_master_switches():
         "tool_noul_threshold",
         "always_keep_tools",
         "always_keep_recommend_tools",
+        "always_keep_subagents",
+        "always_keep_recommend_subagents",
         "proactive_whitelist",
         "direct_reply_prefixes",
         "force_reply_when_summoned",
@@ -766,6 +799,8 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     assert "JSON.parse(JSON.stringify(body))" in page
     assert "TOOL_THRESHOLD_DEFAULT = .65" in page
     assert "数值越高越严格" in page
+    assert "always_keep_subagents" in page
+    assert "always_keep_recommend_subagents" in page
 
 
 def test_proactive_details_are_page_only_and_excluded_from_public_schema():

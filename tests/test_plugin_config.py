@@ -83,7 +83,10 @@ def host(monkeypatch, tmp_path):
     spec.loader.exec_module(integration)
     schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
     config = Config({key: copy.deepcopy(value["default"]) for key, value in schema.items()})
-    manager = SimpleNamespace(func_list=[], iter_builtin_tools=lambda: [])
+    handoff = sys.modules["astrbot.core.agent.handoff"].HandoffTool()
+    handoff.name = "agent_alpha"
+    handoff.description = "alpha"
+    manager = SimpleNamespace(func_list=[handoff], iter_builtin_tools=lambda: [])
     context = SimpleNamespace(
         add_llm_tools=lambda tool: manager.func_list.append(tool),
         register_web_api=Mock(),
@@ -125,6 +128,8 @@ async def test_save_reload_keeps_native_config_clean_and_webui_settings_intact(h
     host.body.update(
         always_keep_tools=["jev_decide"],
         always_keep_recommend_tools=[],
+        always_keep_subagents=["agent_alpha"],
+        always_keep_recommend_subagents=[],
         jev_pre_prompt="custom policy",
         main_llm_post_prompt="",
         tool_filter_enabled=False,
@@ -147,6 +152,7 @@ async def test_save_reload_keeps_native_config_clean_and_webui_settings_intact(h
     assert settings["proactive"]["proactive_whitelist"] == ["12345"]
     assert settings["proactive"]["cooldown_seconds"] == 25.0
     assert settings["always_keep_tools"] == ["jev_decide"]
+    assert settings["always_keep_subagents"] == ["agent_alpha"]
     assert host.config == original
 
 

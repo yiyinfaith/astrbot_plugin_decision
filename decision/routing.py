@@ -39,6 +39,8 @@ def choose_tools(
     always_keep: set[str],
     decision_tool: Any | None,
     always_keep_recommend: set[str] | None = None,
+    always_keep_handoffs: set[str] | None = None,
+    always_keep_handoffs_recommend: set[str] | None = None,
     question_to_handoff: Mapping[str, str] | None = None,
     filter_ordinary: bool = True,
     filter_handoffs: bool = False,
@@ -54,7 +56,10 @@ def choose_tools(
     final: list[Any] = []
     handoffs: list[Any] = []
     recommended_tools: list[str] = []
+    recommended_subagents: list[str] = []
     always_keep_recommend = always_keep_recommend or set()
+    always_keep_handoffs = always_keep_handoffs or set()
+    always_keep_handoffs_recommend = always_keep_handoffs_recommend or set()
     seen: set[str] = set()
     for tool in original_tools:
         name = str(getattr(tool, "name", ""))
@@ -74,21 +79,26 @@ def choose_tools(
             continue
         if is_handoff_tool(tool):
             handoffs.append(tool)
-            keep = True
-            if filter_handoffs:
-                matching_ids = [
-                    qid
-                    for qid, handoff_name in (question_to_handoff or {}).items()
-                    if handoff_name == name
-                ]
-                keep = any(
-                    isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
-                    and not isinstance(noul_answers.get(qid, {}).get("noul"), bool)
-                    and noul_answers[qid]["noul"] >= threshold
-                    for qid in matching_ids
-                )
+            keep = name in always_keep_handoffs
+            matching_ids = [
+                qid
+                for qid, handoff_name in (question_to_handoff or {}).items()
+                if handoff_name == name
+            ]
+            selected_by_jev = any(
+                isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
+                and not isinstance(noul_answers.get(qid, {}).get("noul"), bool)
+                and noul_answers[qid]["noul"] >= threshold
+                for qid in matching_ids
+            )
+            if not keep and filter_handoffs:
+                keep = selected_by_jev
+            elif not keep:
+                keep = True
             if keep:
                 final.append(tool)
+            if selected_by_jev or name in always_keep_handoffs_recommend:
+                recommended_subagents.append(name)
             continue
         keep = name in always_keep
         matching_ids = [qid for qid, tool_name in question_to_tool.items() if tool_name == name]
@@ -127,6 +137,7 @@ def choose_tools(
         handoffs=handoffs,
         decision_tool=decision_tool,
         recommended_tools=recommended_tools,
+        recommended_subagents=recommended_subagents,
     )
 
 

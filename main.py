@@ -83,6 +83,8 @@ DEFAULT_POLICY = (
 DETAIL_DEFAULTS: dict[str, Any] = {
     "always_keep_tools": [],
     "always_keep_recommend_tools": [],
+    "always_keep_subagents": [],
+    "always_keep_recommend_subagents": [],
     "always_keep_tools_customized": False,
     "tool_filter_enabled": True,
     "subagent_filter_enabled": False,
@@ -579,6 +581,16 @@ class DecisionPlugin(Star):
             for name in (self._setting("always_keep_recommend_tools", []) or [])
             if str(name).strip()
         } & always_keep
+        always_keep_subagents = {
+            str(name).strip()
+            for name in (self._setting("always_keep_subagents", []) or [])
+            if str(name).strip()
+        }
+        always_keep_recommend_subagents = {
+            str(name).strip()
+            for name in (self._setting("always_keep_recommend_subagents", []) or [])
+            if str(name).strip()
+        } & always_keep_subagents
         unknown_always_keep = always_keep - {
             str(getattr(tool, "name", "")) for tool in original if getattr(tool, "name", None)
         }
@@ -630,6 +642,8 @@ class DecisionPlugin(Star):
                 always_keep=always_keep,
                 decision_tool=decision_tool,
                 always_keep_recommend=always_keep_recommend,
+                always_keep_handoffs=always_keep_subagents,
+                always_keep_handoffs_recommend=always_keep_recommend_subagents,
                 question_to_handoff=subagent_question_to_name,
                 filter_ordinary=tool_filter_enabled,
                 filter_handoffs=subagent_filter_enabled,
@@ -688,6 +702,8 @@ class DecisionPlugin(Star):
             always_keep=always_keep,
             decision_tool=decision_tool,
             always_keep_recommend=always_keep_recommend,
+            always_keep_handoffs=always_keep_subagents,
+            always_keep_handoffs_recommend=always_keep_recommend_subagents,
             question_to_handoff=subagent_question_to_name,
             filter_ordinary=tool_filter_enabled,
             filter_handoffs=subagent_filter_enabled,
@@ -696,10 +712,17 @@ class DecisionPlugin(Star):
             1.0,
             max(0.0, self._float("tool_noul_threshold", DEFAULT_TOOL_NOUL_THRESHOLD)),
         )
-        recommended_subagents = recommendations_from_noul(
-            noul_answers,
-            subagent_question_to_name,
-            threshold=threshold,
+        recommended_subagents = list(
+            dict.fromkeys(
+                [
+                    *outcome.recommended_subagents,
+                    *recommendations_from_noul(
+                        noul_answers,
+                        subagent_question_to_name,
+                        threshold=threshold,
+                    ),
+                ]
+            )
         )
         recommended_tools = outcome.recommended_tools
         add_routing_hint(
@@ -1215,6 +1238,14 @@ class DecisionPlugin(Star):
             for item in (self._setting("always_keep_recommend_tools", []) or [])
             if str(item) in always_keep
         ]
+        always_keep_subagents = [
+            str(item) for item in (self._setting("always_keep_subagents", []) or [])
+        ]
+        always_keep_recommend_subagents = [
+            str(item)
+            for item in (self._setting("always_keep_recommend_subagents", []) or [])
+            if str(item) in always_keep_subagents
+        ]
         proactive = {}
         for key, default in PROACTIVE_PAGE_DEFAULTS.items():
             value = self._setting(key, default)
@@ -1233,6 +1264,8 @@ class DecisionPlugin(Star):
             {
                 "always_keep_tools": always_keep,
                 "always_keep_recommend_tools": always_keep_recommend,
+                "always_keep_subagents": always_keep_subagents,
+                "always_keep_recommend_subagents": always_keep_recommend_subagents,
                 "jev_pre_prompt": self._policy(),
                 "main_llm_post_prompt": self._main_llm_post_prompt(),
                 "tool_filter_enabled": self._bool("tool_filter_enabled", True),
@@ -1256,6 +1289,8 @@ class DecisionPlugin(Star):
             return error_response("request body must be an object", status_code=400)
         values = payload.get("always_keep_tools")
         recommendation_values = payload.get("always_keep_recommend_tools", [])
+        subagent_values = payload.get("always_keep_subagents", [])
+        subagent_recommendation_values = payload.get("always_keep_recommend_subagents", [])
         if not isinstance(values, list) or any(not isinstance(item, str) for item in values):
             return error_response("always_keep_tools must be a string list", status_code=400)
         if not isinstance(recommendation_values, list) or any(
@@ -1263,6 +1298,16 @@ class DecisionPlugin(Star):
         ):
             return error_response(
                 "always_keep_recommend_tools must be a string list", status_code=400
+            )
+        if not isinstance(subagent_values, list) or any(
+            not isinstance(item, str) for item in subagent_values
+        ):
+            return error_response("always_keep_subagents must be a string list", status_code=400)
+        if not isinstance(subagent_recommendation_values, list) or any(
+            not isinstance(item, str) for item in subagent_recommendation_values
+        ):
+            return error_response(
+                "always_keep_recommend_subagents must be a string list", status_code=400
             )
         jev_pre_prompt = payload.get("jev_pre_prompt")
         main_llm_post_prompt = payload.get("main_llm_post_prompt")
@@ -1320,7 +1365,7 @@ class DecisionPlugin(Star):
         available = {
             str(getattr(tool, "name", ""))
             for tool in self.context.get_llm_tool_manager().func_list
-            if getattr(tool, "name", None)
+            if getattr(tool, "name", None) and not is_handoff_tool(tool)
         }
         available.add(DECISION_TOOL_NAME)
         available.update(self._builtin_tool_names())
@@ -1336,12 +1381,33 @@ class DecisionPlugin(Star):
                 if item.strip() in cleaned and item.strip() in available
             )
         )[:500]
+        available_subagents = {
+            str(getattr(tool, "name", ""))
+            for tool in self.context.get_llm_tool_manager().func_list
+            if getattr(tool, "name", None) and is_handoff_tool(tool)
+        }
+        cleaned_subagents = list(
+            dict.fromkeys(
+                item.strip()
+                for item in subagent_values
+                if item.strip() and item.strip() in available_subagents
+            )
+        )[:500]
+        cleaned_recommend_subagents = list(
+            dict.fromkeys(
+                item.strip()
+                for item in subagent_recommendation_values
+                if item.strip() in cleaned_subagents
+            )
+        )[:500]
         detail_values = {
             key: self._setting(key, default) for key, default in DETAIL_DEFAULTS.items()
         }
         detail_values.update(
             always_keep_tools=cleaned,
             always_keep_recommend_tools=cleaned_recommend,
+            always_keep_subagents=cleaned_subagents,
+            always_keep_recommend_subagents=cleaned_recommend_subagents,
             always_keep_tools_customized=True,
         )
         if tool_filter_enabled is not None:
@@ -1371,6 +1437,8 @@ class DecisionPlugin(Star):
                 "saved": True,
                 "always_keep_tools": cleaned,
                 "always_keep_recommend_tools": cleaned_recommend,
+                "always_keep_subagents": cleaned_subagents,
+                "always_keep_recommend_subagents": cleaned_recommend_subagents,
                 "tool_filter_enabled": self._bool("tool_filter_enabled", True),
                 "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
                 "tool_noul_threshold": self._float(
