@@ -792,14 +792,14 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     assert "origin_display" in page
     assert "Vue.createApp" not in page
     assert "createApp" in page
-    assert "https://glass.goose.gs.cn/liquid-glass.js" in page
+    assert "https://glass.goose.cc.cd/liquid-glass.js" in page
     assert "setTabs" in page
     assert "background: linear-gradient" in page
     assert "只负责结构化判断的 Decision Model" in page
     assert "当前场景需要根据用户请求选择合适的能力" in page
     assert "payloadOf" in page
     assert "waitForBridge" in page
-    assert "fallbackBridge" in page
+    assert "fallbackBridge" not in page
     assert "JSON.parse(JSON.stringify(body))" in page
     assert "TOOL_THRESHOLD_DEFAULT = .65" in page
     assert "数值越高越严格" in page

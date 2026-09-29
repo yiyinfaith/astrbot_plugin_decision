@@ -19,6 +19,8 @@ AstrBot 原生插件配置页只保留 13 项：
 插件目录只保存代码、Schema、页面和静态资源。更新插件不会覆盖这两个配置文件。
 WebUI 设置独立读取、保存，不合并到 AstrBot 的原生配置对象，因此不会在原生配置页以英文键名重复出现。保存失败时保留原文件与当前运行设置；热重载后仍从数据目录恢复设置。
 
+页面中的工具目录会兼容 AstrBot 不同版本返回的列表或映射集合，并实时读取动态 SubAgent handoff。液态玻璃层使用 Goose 的 `toggle-card`、`single-bottom-tabs` 和 `slider-card` 组件；真实按钮、原生范围滑块和键盘焦点始终保留为可访问回退，即使 WebGL 或 CDN 不可用也不会阻止查看和保存。
+
 ## Tools 与 SubAgents
 
 ```text

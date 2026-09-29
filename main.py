@@ -113,9 +113,20 @@ class DecisionPlugin(Star):
         # into this framework-owned object, even only in memory.
         legacy = {key: config[key] for key in DETAIL_DEFAULTS if key in config}
         if legacy:
-            self._save_detail_settings({**legacy, **self._detail_settings})
-            for key in legacy:
-                config.pop(key, None)
+            try:
+                self._save_detail_settings({**legacy, **self._detail_settings})
+            except OSError as exc:
+                # Do not remove framework-owned values until the durable
+                # migration succeeds.  Keeping them in memory preserves the
+                # user's policy for this run and allows a later retry.
+                self._detail_settings = {**legacy, **self._detail_settings}
+                logger.error(
+                    "Decision Engine could not migrate legacy settings; native values were kept: %s",
+                    _safe_error(exc),
+                )
+            else:
+                for key in legacy:
+                    config.pop(key, None)
         self.provider: SystemOneProvider | None = None
         self._ready = False
         self._active_reply_warning_emitted = False
@@ -316,9 +327,21 @@ class DecisionPlugin(Star):
         if not callable(iterator):
             return []
         try:
-            return list(iterator())
+            values = iterator()
+            return list(values.values()) if isinstance(values, Mapping) else list(values)
         except (KeyError, RuntimeError, TypeError, ValueError):
             logger.debug("Decision Engine could not enumerate AstrBot builtin tools.")
+            return []
+
+    def _manager_tool_objects(self) -> list[Any]:
+        """Normalize AstrBot tool-manager collections across supported versions."""
+
+        try:
+            manager = self.context.get_llm_tool_manager()
+            values = getattr(manager, "func_list", []) or []
+            return list(values.values()) if isinstance(values, Mapping) else list(values)
+        except (AttributeError, KeyError, RuntimeError, TypeError, ValueError):
+            logger.debug("Decision Engine could not enumerate registered tools.")
             return []
 
     def _builtin_tool_names(self) -> set[str]:
@@ -338,10 +361,10 @@ class DecisionPlugin(Star):
         """
 
         candidates: list[Any] = []
-        manager = self.context.get_llm_tool_manager()
-        candidates.extend(getattr(manager, "func_list", []) or [])
+        candidates.extend(self._manager_tool_objects())
         orchestrator = getattr(self.context, "subagent_orchestrator", None)
-        candidates.extend(getattr(orchestrator, "handoffs", []) or [])
+        handoffs = getattr(orchestrator, "handoffs", []) or []
+        candidates.extend(handoffs.values() if isinstance(handoffs, Mapping) else handoffs)
         result: list[Any] = []
         seen: set[str] = set()
         for tool in candidates:
@@ -602,6 +625,10 @@ class DecisionPlugin(Star):
         }
         if not self._bool("always_keep_tools_customized", False):
             always_keep.update(self._builtin_tool_names())
+            # jev_decide is registered by this plugin rather than AstrBot's
+            # builtin manager, but it is still a builtin Decision Engine tool
+            # and must start in the WebUI's Always Keep selection.
+            always_keep.add(DECISION_TOOL_NAME)
         always_keep_recommend = {
             str(name).strip()
             for name in (self._setting("always_keep_recommend_tools", []) or [])
@@ -1138,7 +1165,7 @@ class DecisionPlugin(Star):
         parts = text.split(maxsplit=1)
         action = parts[1].strip().lower() if len(parts) > 1 else "status"
         if action == "status":
-            tools = self.context.get_llm_tool_manager().func_list
+            tools = self._manager_tool_objects()
             handoffs = sum(isinstance(item, HandoffTool) for item in tools)
             output = (
                 f"Tools/SubAgent decision: {'enabled' if self._bool('tools_subagents_decision_enabled', True) else 'disabled'}\n"
@@ -1168,7 +1195,7 @@ class DecisionPlugin(Star):
             except Exception as exc:
                 yield event.plain_result(f"SystemOne failed: {_safe_error(exc)}")
         elif action == "tools":
-            tools = self.context.get_llm_tool_manager().func_list
+            tools = self._manager_tool_objects()
             names = [str(getattr(item, "name", "")) for item in tools]
             shown = names[:80]
             suffix = f"\n... 共 {len(names)} 个" if len(names) > len(shown) else ""
@@ -1182,10 +1209,8 @@ class DecisionPlugin(Star):
 
         tools = []
         seen_names: set[str] = set()
-        for tool in [
-            *self.context.get_llm_tool_manager().func_list,
-            *self._subagent_tool_objects(),
-        ]:
+        builtin_names = self._builtin_tool_names() | {DECISION_TOOL_NAME}
+        for tool in [*self._manager_tool_objects(), *self._subagent_tool_objects()]:
             name = str(getattr(tool, "name", ""))
             if not name or name in seen_names:
                 continue
@@ -1198,8 +1223,8 @@ class DecisionPlugin(Star):
                     ),
                     "handoff": is_handoff_tool(tool),
                     "active": tool_is_active(tool),
-                    "builtin": name == DECISION_TOOL_NAME,
-                    "origin_display": self._tool_origin(tool),
+                    "builtin": name in builtin_names,
+                    "origin_display": self._tool_origin(tool, builtin=name in builtin_names),
                 }
             )
         for tool in self._builtin_tool_objects():
@@ -1246,6 +1271,7 @@ class DecisionPlugin(Star):
         always_keep = [str(item) for item in (self._setting("always_keep_tools", []) or [])]
         if not self._bool("always_keep_tools_customized", False):
             always_keep.extend(sorted(self._builtin_tool_names()))
+            always_keep.append(DECISION_TOOL_NAME)
         always_keep = list(dict.fromkeys(always_keep))
         always_keep_recommend = [
             str(item)
@@ -1378,7 +1404,7 @@ class DecisionPlugin(Star):
                 cleaned_proactive[key] = value[:1000]
         available = {
             str(getattr(tool, "name", ""))
-            for tool in self.context.get_llm_tool_manager().func_list
+            for tool in self._manager_tool_objects()
             if getattr(tool, "name", None) and not is_handoff_tool(tool)
         }
         available.add(DECISION_TOOL_NAME)

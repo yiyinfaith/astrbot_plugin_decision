@@ -208,6 +208,40 @@ def test_legacy_live_detail_keys_are_preserved_then_removed_from_native_config(h
     assert json.loads(host.path.read_text(encoding="utf-8"))["proactive_whitelist"] == ["group-1"]
 
 
+def test_legacy_migration_keeps_native_values_when_disk_write_fails(host, monkeypatch):
+    host.config.update(jev_pre_prompt="legacy policy", proactive_whitelist=["group-1"])
+
+    def deny_replace(*args):
+        raise PermissionError("simulated migration failure")
+
+    monkeypatch.setattr(host.module.os, "replace", deny_replace)
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+
+    assert host.config["jev_pre_prompt"] == "legacy policy"
+    assert host.config["proactive_whitelist"] == ["group-1"]
+    assert plugin._setting("jev_pre_prompt") == "legacy policy"
+
+
+@pytest.mark.asyncio
+async def test_mapping_tool_manager_is_supported_by_page_and_save(host):
+    manager = host.context.get_llm_tool_manager()
+    agent = manager.func_list[0]
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    manager.func_list = {agent.name: agent, "jev_decide": plugin._decision_tool}
+
+    listed = (await plugin.page_tools())["tools"]
+    assert [tool["name"] for tool in listed if tool["handoff"]] == [agent.name]
+
+    host.body.update(
+        always_keep_tools=["jev_decide"],
+        always_keep_subagents=[agent.name],
+        always_keep_recommend_subagents=[agent.name],
+    )
+    result = await plugin.page_save_settings()
+    assert result["saved"] is True
+    assert result["always_keep_subagents"] == [agent.name]
+
+
 def test_path_fallback_uses_astrbot_data_directory(host, monkeypatch, tmp_path):
     plugin_directory = tmp_path / "plugin_installation"
     plugin_directory.mkdir()

@@ -6,7 +6,7 @@
     <link rel="icon" href="data:," />
     <title>Decision Engine 设置</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-    <script src="https://glass.goose.gs.cn/liquid-glass.js"></script>
+    <script defer src="https://glass.goose.cc.cd/liquid-glass.js"></script>
     <style>
       :root {
         color-scheme: dark;
@@ -103,8 +103,18 @@
         border: 1px solid rgba(255, 255, 255, .055);
         box-shadow: inset 0 0 24px rgba(103, 161, 255, .035);
       }
-      .hero { min-height: 226px; padding: 34px 38px; }
-      .glass-backdrop { position: absolute; inset: 0; opacity: .46; pointer-events: none; }
+      .hero { min-height: 226px; padding: 34px 38px; isolation: isolate; }
+      .glass-card { isolation: isolate; }
+      .hero > *, .glass-card > *, .save-bar > * { position: relative; z-index: 1; }
+      .hero { background: radial-gradient(ellipse at 100% 0%, rgba(139,112,255,.3), transparent 60%), linear-gradient(115deg, rgba(101,167,235,.25), rgba(16,29,56,.55)); }
+      .hero h1 { max-width: none; font-size: clamp(26px, 3.4vw, 40px); line-height: 1.3; text-wrap: balance; }
+      .glass-backdrop { position: absolute; inset: 0 0 0 auto; width: min(43%, 410px); height: 100%; opacity: .42; pointer-events: none; z-index: 0; }
+      .threshold-glass { display: block; width: 100%; height: 112px; border-radius: 20px; }
+      .native-threshold { width: 100%; accent-color: #5b91ff; }
+      .native-threshold.glass-overlay { position: relative; z-index: 2; height: 112px; margin-top: -112px; opacity: .001; cursor: pointer; }
+      .native-threshold.glass-overlay:focus-visible { opacity: .22; }
+      button:focus-visible, .switch:focus-within { outline: 2px solid #a6d4ff; outline-offset: 4px; }
+      @media (prefers-reduced-motion: reduce) { body::before, body::after { animation: none; } * { transition: none !important; } }
       .hero-content, .card-content { position: relative; z-index: 1; }
       .eyebrow { color: #9ec5ff; font-size: 12px; font-weight: 750; letter-spacing: .16em; text-transform: uppercase; }
       h1 { max-width: 740px; margin: 12px 0 10px; font-size: clamp(28px, 4vw, 48px); line-height: 1.08; letter-spacing: -.045em; }
@@ -114,7 +124,7 @@
       .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 13px var(--green); }
       .status-dot.off { background: #8996aa; box-shadow: none; }
       .tabbar { position: relative; min-height: 104px; margin: 22px 0; padding: 12px; border-radius: 24px; overflow: hidden; border: 1px solid var(--line); background: linear-gradient(135deg, rgba(255,255,255,.095), rgba(80,130,255,.045) 45%, rgba(16,25,51,.46)); box-shadow: 0 22px 70px rgba(0,0,0,.28), inset 0 1px rgba(255,255,255,.16); backdrop-filter: blur(26px) saturate(165%); -webkit-backdrop-filter: blur(26px) saturate(165%); }
-      .tab-glass { position: absolute; inset: 0; opacity: .5; pointer-events: none; }
+      .tab-glass { display: block; width: 100%; height: 104px; border-radius: 18px; background: #16243b; }
       .tab-buttons { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; height: 78px; }
       .tab-button { border: 1px solid rgba(159, 201, 255, .08); border-radius: 17px; color: #aab9d0; background: rgba(19, 31, 52, .78); box-shadow: inset 0 1px rgba(255,255,255,.045); transition: .2s ease; }
       .tab-button:hover { background: #21375a; color: white; }
@@ -163,7 +173,7 @@
       .tool-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; padding: 13px 0; border-bottom: 1px solid rgba(170,205,255,.1); }
       .tool-row:last-child { border-bottom: 0; }
       .tool-name { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; font-size: 13px; font-weight: 750; overflow-wrap: anywhere; }
-      .origin { color: #6ce0bf; font-size: 11px; font-weight: 600; }
+      .origin { margin-left: auto; text-align: right; color: #6ce0bf; font-size: 11px; font-weight: 600; }
       .origin.builtin { color: #ba96ff; }
       .tool-description { margin-top: 5px; color: #8291aa; font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
       .tool-badge { padding: 3px 7px; border-radius: 999px; color: #d3c6ff; background: rgba(135, 101, 239, .18); font-size: 10px; }
@@ -204,11 +214,11 @@
   <body>
     <div id="app" v-cloak class="app-shell">
       <header class="hero">
-        <liquid-glass class="glass-backdrop" mode="single-toggle-card" dark wallpaper="gradient"></liquid-glass>
+        <liquid-glass class="glass-backdrop" v-show="glassReady" mode="toggle-card" dark wallpaper="gradient" dpr="1.5" aria-hidden="true"></liquid-glass>
         <div class="hero-content">
           <div class="eyebrow">Decision Engine · Jev</div>
-          <h1>让每一次能力调用，都有清晰的判断。</h1>
-          <p>在这里集中管理 Tools、SubAgents 与主动对话。复杂设置都收进插件 WebUI，AstrBot 原生配置页只保留真正的全局开关。</p>
+          <h1>让能力恰好出现，让对话自然发生。</h1>
+          <p>用 Jev 判断当前需要的工具与子代理，为每一次主动回复留出恰当的时机。</p>
           <div class="hero-meta">
             <span class="status-pill"><i class="status-dot" :class="{off: !toolsEnabled}"></i>Tools/SubAgent {{ toolsEnabled ? '已启用' : '已停用' }}</span>
             <span class="status-pill"><i class="status-dot" :class="{off: !proactiveEnabled}"></i>主动对话 {{ proactiveEnabled ? '已启用' : '已停用' }}</span>
@@ -218,9 +228,9 @@
       </header>
 
       <nav class="tabbar" aria-label="设置分区">
-        <liquid-glass id="glassNav" class="tab-glass" mode="single-bottom-tabs" dark wallpaper="gradient"></liquid-glass>
-        <div class="tab-buttons">
-          <button v-for="tab in tabs" :key="tab.id" class="tab-button" :class="{active: activeTab === tab.id}" @click="activeTab = tab.id">
+        <liquid-glass id="glassNav" v-show="glassReady" class="tab-glass" mode="single-bottom-tabs" dark wallpaper="gradient" dpr="1.5" aria-hidden="true"></liquid-glass>
+        <div class="tab-buttons" role="tablist" aria-label="设置分区">
+          <button v-for="tab in tabs" :key="tab.id" class="tab-button" role="tab" :aria-selected="activeTab === tab.id" :class="{active: activeTab === tab.id}" @click="activeTab = tab.id">
             <strong>{{ tab.label }}</strong><small>{{ tab.caption }}</small>
           </button>
         </div>
@@ -232,7 +242,7 @@
             <div class="card-heading"><div><div class="section-kicker">Routing</div><h2>Tools 与 SubAgents</h2><p>决定 Jev 如何筛选能力，以及主 LLM 能看到哪些候选。</p></div></div>
             <div class="switch-row"><div class="switch-copy"><strong>过滤普通 Tools</strong><small>开启后只保留 Jev 判断通过的普通 Tool；关闭后全部保留，但仍生成推荐。</small></div><label class="switch"><input v-model="form.tool_filter_enabled" type="checkbox"><span class="switch-track"></span></label></div>
             <div class="switch-row"><div class="switch-copy"><strong>过滤 SubAgents</strong><small>开启后只保留 Jev 判断通过的 SubAgent；默认关闭，关闭时仍会生成推荐。</small></div><label class="switch"><input v-model="form.subagent_filter_enabled" type="checkbox"><span class="switch-track"></span></label></div>
-            <div class="field"><label>判断阈值 <span>{{ Number(form.tool_noul_threshold).toFixed(2) }}</span></label><input v-model.number="form.tool_noul_threshold" type="range" min="0" max="1" step="0.01"><p class="hint">Jev 分数达到此值才会推荐；数值越高越严格。默认 0.65，适合减少无关候选。</p></div>
+            <div class="field"><label>判断阈值 <span>{{ Number(form.tool_noul_threshold).toFixed(2) }}</span></label><liquid-glass id="thresholdGlass" v-show="glassReady" class="threshold-glass" mode="slider-card" dark dpr="1.5" aria-hidden="true"></liquid-glass><input :class="{'glass-overlay': glassReady}" class="native-threshold" v-model.number="form.tool_noul_threshold" type="range" min="0" max="1" step="0.01" aria-label="判断阈值"><p class="hint">Jev 分数达到此值才会推荐；数值越高越严格。默认 0.65，适合减少无关候选。</p></div>
             <div class="notice" style="margin-top:20px"><strong>Always Keep：</strong>工具保留和“推荐给主 LLM”在“工具管理”分区单独设置。SubAgent 始终由 Jev 逐个判断。</div>
           </div>
           <div class="glass-card">
@@ -266,22 +276,12 @@
         </section>
       </main>
 
-      <p class="footer-note">全局服务参数仍由 AstrBot 原生配置页管理；本页保存的详细策略写入 AstrBot 数据目录。按钮使用实色底保证文字清晰，玻璃层只承担环境光和层次感。</p>
-      <div class="save-bar"><span class="save-status" :class="saveState">{{ statusText }}</span><button class="button primary" :disabled="loading || saving" @click="save">{{ saving ? '保存中…' : '保存全部设置' }}</button></div>
+      <p class="footer-note">全局服务参数仍由 AstrBot 原生配置页管理；本页保存的详细策略写入 AstrBot 数据目录。修改后请点击“保存全部设置”。</p>
+      <div class="save-bar"><span class="save-status" :class="saveState">{{ statusText }}</span><button class="button primary" :disabled="loading || saving || !loaded" @click="save">{{ saving ? '保存中…' : '保存全部设置' }}</button></div>
     </div>
     <script>
       const { createApp, nextTick } = Vue;
-      // AstrBot injects the real bridge.  The fallback keeps the page usable
-      // in a static preview and avoids a noisy console error before injection.
-      const fallbackBridge = {
-        async ready() {},
-        async apiGet(path) { return path === 'tools' ? {tools: []} : {}; },
-        async apiPost() { return {saved: true}; }
-      };
-      // AstrBot injects the bridge SDK into the page after the plugin's own
-      // scripts.  Resolve it at call time instead of capturing the fallback
-      // during initial evaluation, otherwise the first load is permanently
-      // stuck with an empty tool list.
+      // The host injects its SDK after this script. Resolve it when needed.
       async function waitForBridge(timeoutMs = 5000) {
         const started = Date.now();
         while (!window.AstrBotPluginPage && Date.now() - started < timeoutMs) {
@@ -313,6 +313,7 @@
             try { current = JSON.parse(current); continue; } catch { return {}; }
           }
           if (!current || typeof current !== 'object') return {};
+          if (current.status === 'error' || current.error) throw new Error(current.message || current.error || '服务器返回错误');
           if (Array.isArray(current.tools) || Object.prototype.hasOwnProperty.call(current, 'jev_pre_prompt')) return current;
           if (current.data && typeof current.data === 'object') { current = current.data; continue; }
           if (current.result && typeof current.result === 'object') { current = current.result; continue; }
@@ -344,7 +345,7 @@
       };
       const TOOL_THRESHOLD_DEFAULT = .65;
       createApp({
-        data() { return { loading: true, saving: false, activeTab: 'routing', toolSearch: '', statusText: '加载中…', saveState: '', tools: [], selectedKeep: [], selectedRecommend: [], selectedKeepSubagents: [], selectedRecommendSubagents: [], toolsEnabledValue: true, proactiveEnabledValue: false, tabs: [{id:'routing',label:'路由策略',caption:'Tools 与 SubAgents'},{id:'proactive',label:'主动对话',caption:'判断与节流'},{id:'tools',label:'工具管理',caption:'保留与推荐'}], form: { tool_filter_enabled: true, subagent_filter_enabled: false, tool_noul_threshold: TOOL_THRESHOLD_DEFAULT, jev_pre_prompt: DEFAULT_JEV_PROMPT, main_llm_post_prompt: DEFAULT_MAIN_PROMPT, proactive: {...defaults} } }; },
+        data() { return { loading: true, loaded: false, glassReady: false, saving: false, activeTab: 'routing', toolSearch: '', statusText: '加载中…', saveState: '', tools: [], selectedKeep: [], selectedRecommend: [], selectedKeepSubagents: [], selectedRecommendSubagents: [], toolsEnabledValue: true, proactiveEnabledValue: false, tabs: [{id:'routing',label:'路由策略',caption:'Tools 与 SubAgents'},{id:'proactive',label:'主动对话',caption:'判断与节流'},{id:'tools',label:'工具管理',caption:'保留与推荐'}], form: { tool_filter_enabled: true, subagent_filter_enabled: false, tool_noul_threshold: TOOL_THRESHOLD_DEFAULT, jev_pre_prompt: DEFAULT_JEV_PROMPT, main_llm_post_prompt: DEFAULT_MAIN_PROMPT, proactive: {...defaults} } }; },
         computed: {
           toolsEnabled() { return this.toolsEnabledValue; },
           proactiveEnabled() { return this.proactiveEnabledValue; },
@@ -355,6 +356,51 @@
           groupedSubagents() { const map = new Map(); for (const t of this.subagentVisibleTools) { const key = t.origin_display || '未知来源'; if (!map.has(key)) map.set(key, []); map.get(key).push(t); } return [...map.entries()].map(([origin,items]) => ({origin,items})); }
         },
         methods: {
+          syncThresholdGlass() {
+            const el = document.getElementById('thresholdGlass');
+            if (!this.glassReady || !el?.setState) return;
+            el.dataset.syncing = '1';
+            try { el.setState({sliderValue: Math.round(Math.max(0, Math.min(1, Number(this.form.tool_noul_threshold) || 0)) * 100)}); }
+            finally { delete el.dataset.syncing; }
+          },
+          syncGlassNav() {
+            const el = document.getElementById('glassNav');
+            if (!this.glassReady || !el?.setState) return;
+            el.dataset.syncing = '1';
+            try { el.setState({selectedTab: this.tabs.findIndex(tab => tab.id === this.activeTab)}); }
+            finally { delete el.dataset.syncing; }
+          },
+          async initGlass() {
+            if (!window.customElements) return;
+            const registered = await Promise.race([
+              customElements.whenDefined('liquid-glass').then(() => true),
+              new Promise(resolve => setTimeout(() => resolve(false), 8000))
+            ]);
+            if (!registered) return;
+            const probe = document.createElement('canvas').getContext('webgl2');
+            if (!probe) return;
+            probe.getExtension('WEBGL_lose_context')?.loseContext();
+            const nav = document.getElementById('glassNav');
+            const slider = document.getElementById('thresholdGlass');
+            if (!nav?.setTabs || !slider?.setState) return;
+            nav.setTabs([[
+              {label:'路由策略', icon:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z', viewport:24},
+              {label:'主动对话', icon:'M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z', viewport:24},
+              {label:'工具管理', icon:'M22.7 19l-9.1-9.1a6 6 0 0 0-7.7-7.7l3.8 3.8-3.7 3.7-3.8-3.8a6 6 0 0 0 7.7 7.7l9.1 9.1z', viewport:24}
+            ]]);
+            nav.addEventListener('lg-statechange', e => {
+              const index = e.detail?.selectedTab;
+              if (!nav.dataset.syncing && Number.isInteger(index) && this.tabs[index]) this.activeTab = this.tabs[index].id;
+            });
+            slider.addEventListener('lg-statechange', e => {
+              const value = e.detail?.sliderValue;
+              if (!slider.dataset.syncing && Number.isFinite(value)) this.form.tool_noul_threshold = Math.round(Math.max(0, Math.min(100, value))) / 100;
+            });
+            this.glassReady = true;
+            await nextTick();
+            this.syncThresholdGlass();
+            this.syncGlassNav();
+          },
           keepList(tool) { return tool.handoff ? this.selectedKeepSubagents : this.selectedKeep; },
           recommendList(tool) { return tool.handoff ? this.selectedRecommendSubagents : this.selectedRecommend; },
           isKept(name, handoff = false) { return (handoff ? this.selectedKeepSubagents : this.selectedKeep).includes(name); },
@@ -365,10 +411,14 @@
           clearVisibleTools() { const names = new Set(this.ordinaryVisibleTools.map(t => t.name)); this.selectedKeep = this.selectedKeep.filter(n => !names.has(n)); this.selectedRecommend = this.selectedRecommend.filter(n => !names.has(n)); },
           selectVisibleSubagents() { for (const tool of this.subagentVisibleTools) if (tool.active && !this.isKept(tool.name, true)) this.selectedKeepSubagents.push(tool.name); this.selectedKeepSubagents = [...new Set(this.selectedKeepSubagents)]; },
           clearVisibleSubagents() { const names = new Set(this.subagentVisibleTools.map(t => t.name)); this.selectedKeepSubagents = this.selectedKeepSubagents.filter(n => !names.has(n)); this.selectedRecommendSubagents = this.selectedRecommendSubagents.filter(n => !names.has(n)); },
-          async save() { this.saving = true; this.saveState = ''; this.statusText = '保存中…'; try { const activeBridge = await waitForBridge(); const numberOr = (value, fallback) => { const n = Number(value); return Number.isFinite(n) ? n : fallback; }; const proactive = {...this.form.proactive, proactive_whitelist: String(this.form.proactive.proactive_whitelist || '').split(/\n|,/).map(s=>s.trim()).filter(Boolean), direct_reply_prefixes: String(this.form.proactive.direct_reply_prefixes || '').split(/\n|[,，]/).map(s=>s.trim()).filter(Boolean)}; for (const key of Object.keys(defaults)) if (typeof defaults[key] === 'number') proactive[key] = numberOr(proactive[key], defaults[key]); const body = {always_keep_tools: Array.from(this.selectedKeep, String), always_keep_recommend_tools: Array.from(this.selectedRecommend, String), always_keep_subagents: Array.from(this.selectedKeepSubagents, String), always_keep_recommend_subagents: Array.from(this.selectedRecommendSubagents, String), jev_pre_prompt: String(this.form.jev_pre_prompt ?? ''), main_llm_post_prompt: String(this.form.main_llm_post_prompt ?? ''), tool_filter_enabled: this.form.tool_filter_enabled === true, subagent_filter_enabled: this.form.subagent_filter_enabled === true, tool_noul_threshold: numberOr(this.form.tool_noul_threshold, TOOL_THRESHOLD_DEFAULT), proactive}; const bridgeBody = JSON.parse(JSON.stringify(body)); const result = payloadOf(await activeBridge.apiPost('settings/save', bridgeBody)); if (Array.isArray(result.always_keep_tools)) this.selectedKeep = result.always_keep_tools.map(String); if (Array.isArray(result.always_keep_recommend_tools)) this.selectedRecommend = result.always_keep_recommend_tools.map(String); if (Array.isArray(result.always_keep_subagents)) this.selectedKeepSubagents = result.always_keep_subagents.map(String); if (Array.isArray(result.always_keep_recommend_subagents)) this.selectedRecommendSubagents = result.always_keep_recommend_subagents.map(String); this.statusText = '已保存'; this.saveState = 'ok'; } catch (e) { this.statusText = `保存失败：${e.message || e}`; this.saveState = 'error'; } finally { this.saving = false; } },
-          async load() { try { const activeBridge = await waitForBridge(); await activeBridge.ready(); const [rawToolData, rawSettings] = await Promise.all([activeBridge.apiGet('tools'), activeBridge.apiGet('settings')]); const toolData = payloadOf(rawToolData); const settings = payloadOf(rawSettings); this.tools = normalizeTools(toolData); this.selectedKeep = Array.isArray(settings.always_keep_tools) ? settings.always_keep_tools.map(String) : []; this.selectedRecommend = Array.isArray(settings.always_keep_recommend_tools) ? settings.always_keep_recommend_tools.map(String) : []; this.selectedKeepSubagents = Array.isArray(settings.always_keep_subagents) ? settings.always_keep_subagents.map(String) : []; this.selectedRecommendSubagents = Array.isArray(settings.always_keep_recommend_subagents) ? settings.always_keep_recommend_subagents.map(String) : []; this.form.tool_filter_enabled = settings.tool_filter_enabled !== false; this.form.subagent_filter_enabled = settings.subagent_filter_enabled === true; this.form.tool_noul_threshold = Number.isFinite(Number(settings.tool_noul_threshold)) ? Number(settings.tool_noul_threshold) : TOOL_THRESHOLD_DEFAULT; this.form.jev_pre_prompt = hasOwn(settings, 'jev_pre_prompt') ? String(settings.jev_pre_prompt ?? '') : DEFAULT_JEV_PROMPT; this.form.main_llm_post_prompt = hasOwn(settings, 'main_llm_post_prompt') ? String(settings.main_llm_post_prompt ?? '') : DEFAULT_MAIN_PROMPT; this.form.proactive = {...defaults, ...(settings.proactive || {})}; this.form.proactive.proactive_whitelist = (settings.proactive?.proactive_whitelist || []).join('\n'); this.form.proactive.direct_reply_prefixes = (settings.proactive?.direct_reply_prefixes || ['/', '@']).join(', '); this.toolsEnabledValue = settings.tools_subagents_decision_enabled !== false; this.proactiveEnabledValue = settings.proactive_reply_enabled === true; this.statusText = `已加载 ${this.tools.length} 个工具`; } catch (e) { this.statusText = `加载失败：${e.message || e}`; this.saveState = 'error'; } finally { this.loading = false; } }
+          async save() { if (!this.loaded) { this.statusText = '尚未成功加载，已阻止保存'; this.saveState = 'error'; return; } this.saving = true; this.saveState = ''; this.statusText = '保存中…'; try { const activeBridge = await waitForBridge(); const numberOr = (value, fallback) => { const n = Number(value); return Number.isFinite(n) ? n : fallback; }; const proactive = {...this.form.proactive, proactive_whitelist: String(this.form.proactive.proactive_whitelist || '').split(/\n|,/).map(s=>s.trim()).filter(Boolean), direct_reply_prefixes: String(this.form.proactive.direct_reply_prefixes || '').split(/\n|[,，]/).map(s=>s.trim()).filter(Boolean)}; for (const key of Object.keys(defaults)) if (typeof defaults[key] === 'number') proactive[key] = numberOr(proactive[key], defaults[key]); const body = {always_keep_tools: Array.from(this.selectedKeep, String), always_keep_recommend_tools: Array.from(this.selectedRecommend, String), always_keep_subagents: Array.from(this.selectedKeepSubagents, String), always_keep_recommend_subagents: Array.from(this.selectedRecommendSubagents, String), jev_pre_prompt: String(this.form.jev_pre_prompt ?? ''), main_llm_post_prompt: String(this.form.main_llm_post_prompt ?? ''), tool_filter_enabled: this.form.tool_filter_enabled === true, subagent_filter_enabled: this.form.subagent_filter_enabled === true, tool_noul_threshold: numberOr(this.form.tool_noul_threshold, TOOL_THRESHOLD_DEFAULT), proactive}; const bridgeBody = JSON.parse(JSON.stringify(body)); const result = payloadOf(await activeBridge.apiPost('settings/save', bridgeBody)); if (result.saved !== true) throw new Error('服务器未确认保存成功'); if (Array.isArray(result.always_keep_tools)) this.selectedKeep = result.always_keep_tools.map(String); if (Array.isArray(result.always_keep_recommend_tools)) this.selectedRecommend = result.always_keep_recommend_tools.map(String); if (Array.isArray(result.always_keep_subagents)) this.selectedKeepSubagents = result.always_keep_subagents.map(String); if (Array.isArray(result.always_keep_recommend_subagents)) this.selectedRecommendSubagents = result.always_keep_recommend_subagents.map(String); this.statusText = '已保存'; this.saveState = 'ok'; } catch (e) { this.statusText = `保存失败：${e.message || e}`; this.saveState = 'error'; } finally { this.saving = false; } },
+          async load() { try { const activeBridge = await waitForBridge(); await activeBridge.ready(); const [rawToolData, rawSettings] = await Promise.all([activeBridge.apiGet('tools'), activeBridge.apiGet('settings')]); const toolData = payloadOf(rawToolData); const settings = payloadOf(rawSettings); if (!Array.isArray(toolData.tools) || !settings || typeof settings !== 'object' || Array.isArray(settings) || !Array.isArray(settings.always_keep_tools)) throw new Error('服务器返回的数据格式无效'); this.tools = normalizeTools(toolData); this.selectedKeep = Array.isArray(settings.always_keep_tools) ? settings.always_keep_tools.map(String) : []; this.selectedRecommend = Array.isArray(settings.always_keep_recommend_tools) ? settings.always_keep_recommend_tools.map(String) : []; this.selectedKeepSubagents = Array.isArray(settings.always_keep_subagents) ? settings.always_keep_subagents.map(String) : []; this.selectedRecommendSubagents = Array.isArray(settings.always_keep_recommend_subagents) ? settings.always_keep_recommend_subagents.map(String) : []; this.form.tool_filter_enabled = settings.tool_filter_enabled !== false; this.form.subagent_filter_enabled = settings.subagent_filter_enabled === true; this.form.tool_noul_threshold = Number.isFinite(Number(settings.tool_noul_threshold)) ? Number(settings.tool_noul_threshold) : TOOL_THRESHOLD_DEFAULT; this.form.jev_pre_prompt = hasOwn(settings, 'jev_pre_prompt') ? String(settings.jev_pre_prompt ?? '') : DEFAULT_JEV_PROMPT; this.form.main_llm_post_prompt = hasOwn(settings, 'main_llm_post_prompt') ? String(settings.main_llm_post_prompt ?? '') : DEFAULT_MAIN_PROMPT; this.form.proactive = {...defaults, ...(settings.proactive || {})}; this.form.proactive.proactive_whitelist = (settings.proactive?.proactive_whitelist || []).join('\n'); this.form.proactive.direct_reply_prefixes = (settings.proactive?.direct_reply_prefixes || ['/', '@']).join(', '); this.toolsEnabledValue = settings.tools_subagents_decision_enabled !== false; this.proactiveEnabledValue = settings.proactive_reply_enabled === true; this.loaded = true; this.statusText = `已加载 ${this.tools.length} 个工具`; this.syncThresholdGlass(); } catch (e) { this.statusText = `加载失败：${e.message || e}`; this.saveState = 'error'; } finally { this.loading = false; } }
         },
-        mounted() { this.load(); nextTick(() => requestAnimationFrame(() => { const nav = document.getElementById('glassNav'); if (nav?.setTabs) nav.setTabs([[{label:'路由策略'},{label:'主动对话'},{label:'工具管理'}]]); })); }
+        watch: {
+          'form.tool_noul_threshold'() { this.syncThresholdGlass(); },
+          activeTab() { this.syncGlassNav(); }
+        },
+        mounted() { this.load(); nextTick(() => this.initGlass().catch(() => { this.glassReady = false; })); }
       }).mount('#app');
     </script>
   </body>
