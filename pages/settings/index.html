@@ -240,10 +240,10 @@
         <section v-show="activeTab === 'routing'" class="section-grid">
           <div class="glass-card">
             <div class="card-heading"><div><div class="section-kicker">Routing</div><h2>Tools 与 SubAgents</h2><p>决定 Jev 如何筛选能力，以及主 LLM 能看到哪些候选。</p></div></div>
-            <div class="switch-row"><div class="switch-copy"><strong>过滤普通 Tools</strong><small>开启后只保留 Jev 判断通过的普通 Tool；关闭后全部保留，但仍生成推荐。</small></div><label class="switch"><input v-model="form.tool_filter_enabled" type="checkbox"><span class="switch-track"></span></label></div>
-            <div class="switch-row"><div class="switch-copy"><strong>过滤 SubAgents</strong><small>开启后只保留 Jev 判断通过的 SubAgent；默认关闭，关闭时仍会生成推荐。</small></div><label class="switch"><input v-model="form.subagent_filter_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+            <div class="switch-row"><div class="switch-copy"><strong>过滤普通 Tools</strong><small>开启后调用 Jev 并只保留 Jev 判断通过的普通 Tool；关闭后普通 Tool 全量保留。</small></div><label class="switch"><input v-model="form.tool_filter_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+            <div class="switch-row"><div class="switch-copy"><strong>过滤 SubAgents</strong><small>开启后调用 Jev 并只保留 Jev 判断通过的 SubAgent；关闭后 SubAgent 全量保留。</small></div><label class="switch"><input v-model="form.subagent_filter_enabled" type="checkbox"><span class="switch-track"></span></label></div>
             <div class="field"><label>判断阈值 <span>{{ Number(form.tool_noul_threshold).toFixed(2) }}</span></label><liquid-glass id="thresholdGlass" v-show="glassReady" class="threshold-glass" mode="slider-card" dark dpr="1.5" aria-hidden="true"></liquid-glass><input :class="{'glass-overlay': glassReady}" class="native-threshold" v-model.number="form.tool_noul_threshold" type="range" min="0" max="1" step="0.01" aria-label="判断阈值"><p class="hint">Jev 分数达到此值才会推荐；数值越高越严格。默认 0.65，适合减少无关候选。</p></div>
-            <div class="notice" style="margin-top:20px"><strong>Always Keep：</strong>工具保留和“推荐给主 LLM”在“工具管理”分区单独设置。SubAgent 始终由 Jev 逐个判断。</div>
+            <div class="notice" style="margin-top:20px"><strong>判断范围：</strong>先在 AstrBot 原生配置页保持“Tools/SubAgent 决策”总开关开启。两项过滤都关闭时不请求 Jev，Tools 与 SubAgents 全量保留，推荐提示词只包含手动勾选“推荐给主 LLM”的项目；只开一项时，Jev 只判断对应类别，另一类别全量保留且只使用手动推荐；两项都开时才同时判断 Tools 与 SubAgents。</div>
           </div>
           <div class="glass-card">
             <div class="card-heading"><div><div class="section-kicker">Prompts</div><h2>两套提示词</h2><p>提示词保存在 AstrBot 数据目录，不会随着插件更新被覆盖。</p></div></div>

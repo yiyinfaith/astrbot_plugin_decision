@@ -319,3 +319,85 @@ async def test_saved_dynamic_subagent_reaches_request_routing(host, monkeypatch,
     assert req.func_tool.tools == [agent]
     assert req.system_prompt.startswith("Existing persona")
     assert (agent.name in req.system_prompt) is recommend
+
+
+@pytest.mark.asyncio
+async def test_both_filters_off_skip_jev_keep_all_and_use_manual_recommendations(host, monkeypatch):
+    manager = host.context.get_llm_tool_manager()
+    agent = manager.func_list[0]
+    ordinary = SimpleNamespace(name="ordinary_tool", description="ordinary", active=True)
+    manager.func_list.append(ordinary)
+    host.context.subagent_orchestrator = SimpleNamespace(handoffs=[agent])
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    plugin._detail_settings.update(
+        {
+            "always_keep_tools": [ordinary.name],
+            "always_keep_recommend_tools": [ordinary.name],
+            "always_keep_subagents": [agent.name],
+            "always_keep_recommend_subagents": [agent.name],
+            "always_keep_tools_customized": True,
+            "tool_filter_enabled": False,
+            "subagent_filter_enabled": False,
+            "main_llm_post_prompt": "Tools={tools}; SubAgents={subagents}",
+        }
+    )
+    evaluate = AsyncMock(side_effect=AssertionError("Jev must not be called"))
+    monkeypatch.setattr(plugin, "_evaluate", evaluate)
+    tools = [ordinary, agent, plugin._decision_tool]
+    toolset = SimpleNamespace(tools=tools)
+    toolset.get_tool = lambda name: next(
+        (tool for tool in toolset.tools if tool.name == name), None
+    )
+    req = SimpleNamespace(func_tool=toolset, system_prompt="persona", prompt="", contexts=[])
+
+    await plugin.filter_tools_before_llm(None, req)
+
+    assert req.func_tool.tools == tools
+    assert "Tools=ordinary_tool" in req.system_prompt
+    assert f"SubAgents={agent.name}" in req.system_prompt
+    evaluate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_only_enabled_category_is_sent_to_jev(host, monkeypatch):
+    manager = host.context.get_llm_tool_manager()
+    agent = manager.func_list[0]
+    ordinary = SimpleNamespace(name="ordinary_tool", description="ordinary", active=True)
+    manager.func_list.append(ordinary)
+    host.context.subagent_orchestrator = SimpleNamespace(handoffs=[agent])
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    plugin._detail_settings.update(
+        {
+            "always_keep_tools": [ordinary.name],
+            "always_keep_recommend_tools": [],
+            "always_keep_subagents": [agent.name],
+            "always_keep_recommend_subagents": [agent.name],
+            "always_keep_tools_customized": True,
+            "tool_filter_enabled": True,
+            "subagent_filter_enabled": False,
+            "main_llm_post_prompt": "Tools={tools}; SubAgents={subagents}",
+        }
+    )
+    seen_questions = []
+
+    async def evaluate(*, state, questions):
+        seen_questions.append(questions)
+        return SimpleNamespace(
+            answers={qid: {"noul": 1.0} for qid in questions},
+        )
+
+    monkeypatch.setattr(plugin, "_evaluate", evaluate)
+    tools = [ordinary, agent, plugin._decision_tool]
+    toolset = SimpleNamespace(tools=tools)
+    toolset.get_tool = lambda name: next(
+        (tool for tool in toolset.tools if tool.name == name), None
+    )
+    req = SimpleNamespace(func_tool=toolset, system_prompt="persona", prompt="", contexts=[])
+
+    await plugin.filter_tools_before_llm(None, req)
+
+    assert seen_questions
+    assert all(qid.startswith("tool_") for batch in seen_questions for qid in batch)
+    assert req.func_tool.tools == [ordinary, agent]
+    assert "Tools=ordinary_tool" in req.system_prompt
+    assert f"SubAgents={agent.name}" in req.system_prompt

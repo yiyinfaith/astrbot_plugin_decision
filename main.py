@@ -44,6 +44,7 @@ from .decision.providers.systemone import SystemOneProvider
 from .decision.routing import (
     DECISION_TOOL_NAME,
     DEFAULT_MAIN_LLM_POST_PROMPT,
+    RoutingOutcome,
     add_routing_hint,
     choose_tools,
     compact_answer,
@@ -644,6 +645,38 @@ class DecisionPlugin(Star):
             for name in (self._setting("always_keep_recommend_subagents", []) or [])
             if str(name).strip()
         } & always_keep_subagents
+
+        # With both filters disabled, the user explicitly requested a
+        # zero-cost pass-through mode: do not call Jev at all, keep the full
+        # request toolset, and use only the manually selected recommendations.
+        if not tool_filter_enabled and not subagent_filter_enabled:
+            recommended_tools: list[str] = []
+            recommended_subagents: list[str] = []
+            for tool in original:
+                name = str(getattr(tool, "name", "")).strip()
+                if not name:
+                    continue
+                if is_handoff_tool(tool):
+                    if name in always_keep_recommend_subagents:
+                        recommended_subagents.append(name)
+                elif name in always_keep_recommend:
+                    recommended_tools.append(name)
+            outcome = RoutingOutcome(
+                selected=original,
+                handoffs=handoffs,
+                decision_tool=self._decision_tool,
+                recommended_tools=recommended_tools,
+                recommended_subagents=recommended_subagents,
+            )
+            add_routing_hint(
+                req,
+                template=self._main_llm_post_prompt(),
+                recommended_tools=recommended_tools,
+                recommended_subagents=recommended_subagents,
+            )
+            self._log_routing_outcome(outcome)
+            return
+
         unknown_always_keep = always_keep - {
             str(getattr(tool, "name", "")) for tool in original if getattr(tool, "name", None)
         }
@@ -652,9 +685,14 @@ class DecisionPlugin(Star):
                 "Decision Engine ignored %d Always Keep names not present in this request.",
                 len(unknown_always_keep),
             )
+        # Only the categories whose filters are enabled need Jev questions.
+        # A disabled category is pass-through and can only contribute manual
+        # recommendations from the WebUI settings.
+        decision_ordinary = ordinary if tool_filter_enabled else []
+        decision_handoffs = handoffs if subagent_filter_enabled else []
         question_to_tool: dict[str, str] = {}
         questions: dict[str, dict[str, Any]] = {}
-        for index, tool in enumerate(ordinary):
+        for index, tool in enumerate(decision_ordinary):
             name = str(getattr(tool, "name", ""))
             qid = question_id("tool", name, index)
             question_to_tool[qid] = name
@@ -668,7 +706,7 @@ class DecisionPlugin(Star):
             }
 
         subagent_question_to_name: dict[str, str] = {}
-        for index, tool in enumerate(handoffs):
+        for index, tool in enumerate(decision_handoffs):
             name = str(getattr(tool, "name", ""))
             if not name:
                 continue
@@ -714,8 +752,8 @@ class DecisionPlugin(Star):
         try:
             batches = self._decision_batches(
                 req,
-                ordinary,
-                handoffs,
+                decision_ordinary,
+                decision_handoffs,
                 questions,
                 question_to_tool,
                 subagent_question_to_name,
