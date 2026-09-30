@@ -231,6 +231,9 @@ async def test_mapping_tool_manager_is_supported_by_page_and_save(host):
 
     listed = (await plugin.page_tools())["tools"]
     assert [tool["name"] for tool in listed if tool["handoff"]] == [agent.name]
+    decision = next(tool for tool in listed if tool["name"] == "jev_decide")
+    assert decision["builtin"] is False
+    assert decision["origin_display"] == "AstrBot 智能决策引擎"
 
     host.body.update(
         always_keep_tools=["jev_decide"],

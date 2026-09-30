@@ -53,6 +53,7 @@ from .decision.routing import (
 from .decision.tokens import estimate_request_tokens, fit_request_state
 
 PLUGIN_NAME = "astrbot_plugin_decision"
+PLUGIN_DISPLAY_NAME = "AstrBot 智能决策引擎"
 DEFAULT_TOOL_NOUL_THRESHOLD = 0.65
 PROACTIVE_PAGE_DEFAULTS: dict[str, Any] = {
     "proactive_whitelist": [],
@@ -380,7 +381,9 @@ class DecisionPlugin(Star):
     def _tool_origin(self, tool: Any, *, builtin: bool = False) -> str:
         """Resolve the human-readable owner shown in the settings page."""
 
-        if builtin or getattr(tool, "name", None) == DECISION_TOOL_NAME:
+        if getattr(tool, "name", None) == DECISION_TOOL_NAME:
+            return PLUGIN_DISPLAY_NAME
+        if builtin:
             return "Astrbot内置工具"
         mcp_server = str(getattr(tool, "mcp_server_name", "") or "").strip()
         if mcp_server:
@@ -1247,7 +1250,7 @@ class DecisionPlugin(Star):
 
         tools = []
         seen_names: set[str] = set()
-        builtin_names = self._builtin_tool_names() | {DECISION_TOOL_NAME}
+        builtin_names = self._builtin_tool_names()
         for tool in [*self._manager_tool_objects(), *self._subagent_tool_objects()]:
             name = str(getattr(tool, "name", ""))
             if not name or name in seen_names:
@@ -1290,8 +1293,8 @@ class DecisionPlugin(Star):
                     "description": "调用 Jev/SystemOne 对当前场景执行一次结构化判断；不会执行其他工具。",
                     "handoff": False,
                     "active": True,
-                    "builtin": True,
-                    "origin_display": "Astrbot内置工具",
+                    "builtin": False,
+                    "origin_display": PLUGIN_DISPLAY_NAME,
                 },
             )
         tools.sort(
