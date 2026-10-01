@@ -754,6 +754,29 @@ class DecisionPlugin(Star):
                     for tool in tool_set.tools
                     if getattr(tool, "name", None) != DECISION_TOOL_NAME
                 ]
+            # Manual recommendations do not depend on Jev's availability.
+            # Preserve them in the main LLM system prompt even when the
+            # decision request failed and routing fell back to fail-open.
+            manual_recommended_tools = [
+                str(getattr(tool, "name", ""))
+                for tool in original
+                if getattr(tool, "name", None)
+                and not is_handoff_tool(tool)
+                and str(getattr(tool, "name", "")) in always_keep_recommend
+            ]
+            manual_recommended_subagents = [
+                str(getattr(tool, "name", ""))
+                for tool in original
+                if getattr(tool, "name", None)
+                and is_handoff_tool(tool)
+                and str(getattr(tool, "name", "")) in always_keep_recommend_subagents
+            ]
+            add_routing_hint(
+                req,
+                template=self._main_llm_post_prompt(),
+                recommended_tools=manual_recommended_tools,
+                recommended_subagents=manual_recommended_subagents,
+            )
             return
 
         noul_answers = {

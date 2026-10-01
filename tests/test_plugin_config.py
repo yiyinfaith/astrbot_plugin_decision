@@ -527,3 +527,47 @@ async def test_enabled_tools_and_subagents_share_one_jev_request(host, monkeypat
     assert any(qid.startswith("subagent_") for qid in seen_questions[0])
     assert ordinary.name in req.system_prompt
     assert agent.name in req.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_jev_failure_keeps_manual_recommendations(host, monkeypatch):
+    """A fail-open Jev request must not suppress manual recommendations."""
+
+    manager = host.context.get_llm_tool_manager()
+    agent = manager.func_list[0]
+    ordinary = SimpleNamespace(name="ordinary_tool", description="ordinary", active=True)
+    manager.func_list.append(ordinary)
+    host.context.subagent_orchestrator = SimpleNamespace(handoffs=[agent])
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    plugin._detail_settings.update(
+        {
+            "always_keep_tools": [ordinary.name],
+            "always_keep_recommend_tools": [ordinary.name],
+            "always_keep_subagents": [agent.name],
+            "always_keep_recommend_subagents": [agent.name],
+            "always_keep_tools_customized": True,
+            "tool_filter_enabled": True,
+            "subagent_filter_enabled": True,
+            "tool_decision_enabled": True,
+            "subagent_decision_enabled": True,
+            "main_llm_post_prompt": "Tools={tools}; SubAgents={subagents}",
+        }
+    )
+
+    async def fail(*, state, questions):
+        raise RuntimeError("simulated Jev failure")
+
+    monkeypatch.setattr(plugin, "_evaluate", fail)
+    tools = [ordinary, agent, plugin._decision_tool]
+    toolset = SimpleNamespace(tools=tools)
+    toolset.get_tool = lambda name: next(
+        (tool for tool in toolset.tools if tool.name == name), None
+    )
+    req = SimpleNamespace(func_tool=toolset, system_prompt="persona", prompt="", contexts=[])
+
+    await plugin.filter_tools_before_llm(None, req)
+
+    assert ordinary in req.func_tool.tools
+    assert agent in req.func_tool.tools
+    assert "Tools=ordinary_tool" in req.system_prompt
+    assert f"SubAgents={agent.name}" in req.system_prompt
