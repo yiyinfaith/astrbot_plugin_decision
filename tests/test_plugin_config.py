@@ -132,6 +132,8 @@ async def test_save_reload_keeps_native_config_clean_and_webui_settings_intact(h
         always_keep_recommend_subagents=[],
         jev_pre_prompt="custom policy",
         main_llm_post_prompt="",
+        tool_decision_enabled=False,
+        subagent_decision_enabled=True,
         tool_filter_enabled=False,
         proactive={"proactive_whitelist": ["12345"], "cooldown_seconds": 25.0},
     )
@@ -140,6 +142,8 @@ async def test_save_reload_keeps_native_config_clean_and_webui_settings_intact(h
     assert host.config == original
     assert set(host.config) == set(host.schema)
     assert plugin._bool("tool_filter_enabled", True) is False
+    assert plugin._bool("tool_decision_enabled", True) is False
+    assert plugin._bool("subagent_decision_enabled", False) is True
     assert plugin._main_llm_post_prompt() == ""
     assert host.path.parent == Path(host.config.config_path).parent
     assert not host.path.is_relative_to(ROOT)
@@ -149,6 +153,8 @@ async def test_save_reload_keeps_native_config_clean_and_webui_settings_intact(h
     settings = await reloaded.page_settings()
     assert settings["jev_pre_prompt"] == "custom policy"
     assert settings["main_llm_post_prompt"] == ""
+    assert settings["tool_decision_enabled"] is False
+    assert settings["subagent_decision_enabled"] is True
     assert settings["proactive"]["proactive_whitelist"] == ["12345"]
     assert settings["proactive"]["cooldown_seconds"] == 25.0
     assert settings["always_keep_tools"] == ["jev_decide"]
@@ -341,6 +347,8 @@ async def test_both_filters_off_skip_jev_keep_all_and_use_manual_recommendations
             "always_keep_tools_customized": True,
             "tool_filter_enabled": False,
             "subagent_filter_enabled": False,
+            "tool_decision_enabled": False,
+            "subagent_decision_enabled": False,
             "main_llm_post_prompt": "Tools={tools}; SubAgents={subagents}",
         }
     )
@@ -378,6 +386,8 @@ async def test_only_enabled_category_is_sent_to_jev(host, monkeypatch):
             "always_keep_tools_customized": True,
             "tool_filter_enabled": True,
             "subagent_filter_enabled": False,
+            "tool_decision_enabled": True,
+            "subagent_decision_enabled": False,
             "main_llm_post_prompt": "Tools={tools}; SubAgents={subagents}",
         }
     )
@@ -404,3 +414,116 @@ async def test_only_enabled_category_is_sent_to_jev(host, monkeypatch):
     assert req.func_tool.tools == [ordinary, agent]
     assert "Tools=ordinary_tool" in req.system_prompt
     assert f"SubAgents={agent.name}" in req.system_prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("category", "filter_enabled", "decision_enabled"),
+    [
+        ("tool", True, True),
+        ("tool", False, True),
+        ("tool", True, False),
+        ("tool", False, False),
+        ("subagent", True, True),
+        ("subagent", False, True),
+        ("subagent", True, False),
+        ("subagent", False, False),
+    ],
+)
+async def test_category_decision_and_filter_switch_matrix(
+    host, monkeypatch, category, filter_enabled, decision_enabled
+):
+    """Filtering and judging are independent for each candidate category."""
+
+    manager = host.context.get_llm_tool_manager()
+    agent = manager.func_list[0]
+    ordinary = SimpleNamespace(name="ordinary_tool", description="ordinary", active=True)
+    manager.func_list.append(ordinary)
+    host.context.subagent_orchestrator = SimpleNamespace(handoffs=[agent])
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    plugin._detail_settings.update(
+        {
+            "always_keep_tools": [],
+            "always_keep_recommend_tools": [],
+            "always_keep_subagents": [],
+            "always_keep_recommend_subagents": [],
+            "always_keep_tools_customized": True,
+            "tool_filter_enabled": filter_enabled if category == "tool" else False,
+            "subagent_filter_enabled": filter_enabled if category == "subagent" else False,
+            "tool_decision_enabled": decision_enabled if category == "tool" else False,
+            "subagent_decision_enabled": decision_enabled if category == "subagent" else False,
+            "main_llm_post_prompt": "Tools={tools}; SubAgents={subagents}",
+        }
+    )
+
+    async def evaluate(*, state, questions):
+        return SimpleNamespace(answers={qid: {"noul": 1.0} for qid in questions})
+
+    evaluate = AsyncMock(side_effect=evaluate)
+    monkeypatch.setattr(plugin, "_evaluate", evaluate)
+    tools = [ordinary, agent, plugin._decision_tool]
+    toolset = SimpleNamespace(tools=tools)
+    toolset.get_tool = lambda name: next(
+        (tool for tool in toolset.tools if tool.name == name), None
+    )
+    req = SimpleNamespace(func_tool=toolset, system_prompt="persona", prompt="", contexts=[])
+
+    await plugin.filter_tools_before_llm(None, req)
+
+    candidate = ordinary if category == "tool" else agent
+    candidate_name = candidate.name
+    # A filtered category keeps only manual/Jev selections.  An unfiltered
+    # category keeps every active candidate regardless of its decision switch.
+    assert (candidate in req.func_tool.tools) is (not filter_enabled or decision_enabled)
+    assert (candidate_name in req.system_prompt) is decision_enabled
+    if decision_enabled:
+        evaluate.assert_awaited_once()
+    else:
+        evaluate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_enabled_tools_and_subagents_share_one_jev_request(host, monkeypatch):
+    """Both candidate sets are sent together; batching is only for context overflow."""
+
+    manager = host.context.get_llm_tool_manager()
+    agent = manager.func_list[0]
+    ordinary = SimpleNamespace(name="ordinary_tool", description="ordinary", active=True)
+    manager.func_list.append(ordinary)
+    host.context.subagent_orchestrator = SimpleNamespace(handoffs=[agent])
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    plugin._detail_settings.update(
+        {
+            "always_keep_tools": [],
+            "always_keep_recommend_tools": [],
+            "always_keep_subagents": [],
+            "always_keep_recommend_subagents": [],
+            "always_keep_tools_customized": True,
+            "tool_filter_enabled": False,
+            "subagent_filter_enabled": False,
+            "tool_decision_enabled": True,
+            "subagent_decision_enabled": True,
+            "main_llm_post_prompt": "Tools={tools}; SubAgents={subagents}",
+        }
+    )
+    seen_questions = []
+
+    async def evaluate(*, state, questions):
+        seen_questions.append(questions)
+        return SimpleNamespace(answers={qid: {"noul": 1.0} for qid in questions})
+
+    monkeypatch.setattr(plugin, "_evaluate", evaluate)
+    tools = [ordinary, agent, plugin._decision_tool]
+    toolset = SimpleNamespace(tools=tools)
+    toolset.get_tool = lambda name: next(
+        (tool for tool in toolset.tools if tool.name == name), None
+    )
+    req = SimpleNamespace(func_tool=toolset, system_prompt="persona", prompt="", contexts=[])
+
+    await plugin.filter_tools_before_llm(None, req)
+
+    assert len(seen_questions) == 1
+    assert any(qid.startswith("tool_") for qid in seen_questions[0])
+    assert any(qid.startswith("subagent_") for qid in seen_questions[0])
+    assert ordinary.name in req.system_prompt
+    assert agent.name in req.system_prompt

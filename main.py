@@ -44,7 +44,6 @@ from .decision.providers.systemone import SystemOneProvider
 from .decision.routing import (
     DECISION_TOOL_NAME,
     DEFAULT_MAIN_LLM_POST_PROMPT,
-    RoutingOutcome,
     add_routing_hint,
     choose_tools,
     compact_answer,
@@ -89,6 +88,12 @@ DETAIL_DEFAULTS: dict[str, Any] = {
     "always_keep_tools_customized": False,
     "tool_filter_enabled": True,
     "subagent_filter_enabled": False,
+    # Per-category Jev decision switches.  Filtering and judging are
+    # deliberately independent: a category can be judged only to produce
+    # recommendations while remaining fully visible to the main LLM, or can
+    # be filtered from the manually kept set without making a Jev request.
+    "tool_decision_enabled": True,
+    "subagent_decision_enabled": True,
     "tool_noul_threshold": DEFAULT_TOOL_NOUL_THRESHOLD,
     "jev_pre_prompt": DEFAULT_POLICY,
     "main_llm_post_prompt": DEFAULT_MAIN_LLM_POST_PROMPT,
@@ -611,6 +616,8 @@ class DecisionPlugin(Star):
         tool_set = self._ensure_request_toolset(req)
         tool_filter_enabled = self._bool("tool_filter_enabled", True)
         subagent_filter_enabled = self._bool("subagent_filter_enabled", False)
+        tool_decision_enabled = self._bool("tool_decision_enabled", True)
+        subagent_decision_enabled = self._bool("subagent_decision_enabled", True)
         original = list(tool_set.tools)
         if not original:
             return
@@ -649,37 +656,6 @@ class DecisionPlugin(Star):
             if str(name).strip()
         } & always_keep_subagents
 
-        # With both filters disabled, the user explicitly requested a
-        # zero-cost pass-through mode: do not call Jev at all, keep the full
-        # request toolset, and use only the manually selected recommendations.
-        if not tool_filter_enabled and not subagent_filter_enabled:
-            recommended_tools: list[str] = []
-            recommended_subagents: list[str] = []
-            for tool in original:
-                name = str(getattr(tool, "name", "")).strip()
-                if not name:
-                    continue
-                if is_handoff_tool(tool):
-                    if name in always_keep_recommend_subagents:
-                        recommended_subagents.append(name)
-                elif name in always_keep_recommend:
-                    recommended_tools.append(name)
-            outcome = RoutingOutcome(
-                selected=original,
-                handoffs=handoffs,
-                decision_tool=self._decision_tool,
-                recommended_tools=recommended_tools,
-                recommended_subagents=recommended_subagents,
-            )
-            add_routing_hint(
-                req,
-                template=self._main_llm_post_prompt(),
-                recommended_tools=recommended_tools,
-                recommended_subagents=recommended_subagents,
-            )
-            self._log_routing_outcome(outcome)
-            return
-
         unknown_always_keep = always_keep - {
             str(getattr(tool, "name", "")) for tool in original if getattr(tool, "name", None)
         }
@@ -688,11 +664,12 @@ class DecisionPlugin(Star):
                 "Decision Engine ignored %d Always Keep names not present in this request.",
                 len(unknown_always_keep),
             )
-        # Only the categories whose filters are enabled need Jev questions.
-        # A disabled category is pass-through and can only contribute manual
-        # recommendations from the WebUI settings.
-        decision_ordinary = ordinary if tool_filter_enabled else []
-        decision_handoffs = handoffs if subagent_filter_enabled else []
+        # Only the categories whose decision switches are enabled need Jev
+        # questions.  Filtering is intentionally independent: a judged
+        # category with filtering disabled remains fully visible while its
+        # Jev-selected candidates can still be recommended.
+        decision_ordinary = ordinary if tool_decision_enabled else []
+        decision_handoffs = handoffs if subagent_decision_enabled else []
         question_to_tool: dict[str, str] = {}
         questions: dict[str, dict[str, Any]] = {}
         for index, tool in enumerate(decision_ordinary):
@@ -1214,7 +1191,9 @@ class DecisionPlugin(Star):
                 f"provider={self._setting('provider', 'systemone_jev')}\n"
                 f"endpoint={self._setting('base_url', '')}{self._setting('systemone_path', '/v1/systemone')}\n"
                 f"model={self._setting('model', 'jev-latest')}\n"
-                f"tool_filter={self._bool('tool_filter_enabled', True)} subagent_filter={self._bool('subagent_filter_enabled', False)} threshold={self._float('tool_noul_threshold', DEFAULT_TOOL_NOUL_THRESHOLD):.3f}\n"
+                f"tool_filter={self._bool('tool_filter_enabled', True)} subagent_filter={self._bool('subagent_filter_enabled', False)} "
+                f"tool_decision={self._bool('tool_decision_enabled', True)} subagent_decision={self._bool('subagent_decision_enabled', True)} "
+                f"threshold={self._float('tool_noul_threshold', DEFAULT_TOOL_NOUL_THRESHOLD):.3f}\n"
                 f"registered_tools={len(tools)} handoffs={handoffs} always_keep={len(self._setting('always_keep_tools', []) or [])}\n"
                 f"calls={self._call_count} failures={self._failure_count} latency_ms={self._last_call_latency_ms or 0:.1f}"
             )
@@ -1351,6 +1330,8 @@ class DecisionPlugin(Star):
                 "main_llm_post_prompt": self._main_llm_post_prompt(),
                 "tool_filter_enabled": self._bool("tool_filter_enabled", True),
                 "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
+                "tool_decision_enabled": self._bool("tool_decision_enabled", True),
+                "subagent_decision_enabled": self._bool("subagent_decision_enabled", True),
                 "tool_noul_threshold": self._float(
                     "tool_noul_threshold", DEFAULT_TOOL_NOUL_THRESHOLD
                 ),
@@ -1394,6 +1375,8 @@ class DecisionPlugin(Star):
         main_llm_post_prompt = payload.get("main_llm_post_prompt")
         tool_filter_enabled = payload.get("tool_filter_enabled")
         subagent_filter_enabled = payload.get("subagent_filter_enabled")
+        tool_decision_enabled = payload.get("tool_decision_enabled")
+        subagent_decision_enabled = payload.get("subagent_decision_enabled")
         tool_noul_threshold = payload.get("tool_noul_threshold")
         if jev_pre_prompt is not None and not isinstance(jev_pre_prompt, str):
             return error_response("jev_pre_prompt must be a string", status_code=400)
@@ -1403,6 +1386,12 @@ class DecisionPlugin(Star):
             return error_response("tool_filter_enabled must be a boolean", status_code=400)
         if subagent_filter_enabled is not None and not isinstance(subagent_filter_enabled, bool):
             return error_response("subagent_filter_enabled must be a boolean", status_code=400)
+        if tool_decision_enabled is not None and not isinstance(tool_decision_enabled, bool):
+            return error_response("tool_decision_enabled must be a boolean", status_code=400)
+        if subagent_decision_enabled is not None and not isinstance(
+            subagent_decision_enabled, bool
+        ):
+            return error_response("subagent_decision_enabled must be a boolean", status_code=400)
         if tool_noul_threshold is not None and (
             isinstance(tool_noul_threshold, bool)
             or not isinstance(tool_noul_threshold, (int, float))
@@ -1493,6 +1482,10 @@ class DecisionPlugin(Star):
             detail_values["tool_filter_enabled"] = tool_filter_enabled
         if subagent_filter_enabled is not None:
             detail_values["subagent_filter_enabled"] = subagent_filter_enabled
+        if tool_decision_enabled is not None:
+            detail_values["tool_decision_enabled"] = tool_decision_enabled
+        if subagent_decision_enabled is not None:
+            detail_values["subagent_decision_enabled"] = subagent_decision_enabled
         if jev_pre_prompt is not None:
             detail_values["jev_pre_prompt"] = jev_pre_prompt[:50000]
         if main_llm_post_prompt is not None:
@@ -1520,6 +1513,8 @@ class DecisionPlugin(Star):
                 "always_keep_recommend_subagents": cleaned_recommend_subagents,
                 "tool_filter_enabled": self._bool("tool_filter_enabled", True),
                 "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
+                "tool_decision_enabled": self._bool("tool_decision_enabled", True),
+                "subagent_decision_enabled": self._bool("subagent_decision_enabled", True),
                 "tool_noul_threshold": self._float(
                     "tool_noul_threshold", DEFAULT_TOOL_NOUL_THRESHOLD
                 ),

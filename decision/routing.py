@@ -72,7 +72,11 @@ def choose_tools(
         if not tool_is_active(tool):
             continue
         if name == DECISION_TOOL_NAME or tool is decision_tool:
-            if name in always_keep:
+            # When ordinary Tool filtering is disabled, the category is
+            # explicitly pass-through.  Keep ``jev_decide`` with the rest of
+            # the full tool set even if the manual Always Keep checkbox is
+            # off; filtering it would violate the unfiltered category rule.
+            if name in always_keep or not filter_ordinary:
                 final.append(tool)
             if name in always_keep_recommend and name in always_keep:
                 recommended_tools.append(name)

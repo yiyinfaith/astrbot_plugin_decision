@@ -805,6 +805,10 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     assert "数值越高越严格" in page
     assert "always_keep_subagents" in page
     assert "always_keep_recommend_subagents" in page
+    assert "tool_decision_enabled" in page
+    assert "subagent_decision_enabled" in page
+    assert "routing-rules-table" in page
+    assert "两类能力的 Jev 判断会合并为一次请求" in page
 
 
 def test_proactive_details_are_page_only_and_excluded_from_public_schema():
