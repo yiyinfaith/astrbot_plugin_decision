@@ -239,7 +239,7 @@ async def test_mapping_tool_manager_is_supported_by_page_and_save(host):
     assert [tool["name"] for tool in listed if tool["handoff"]] == [agent.name]
     decision = next(tool for tool in listed if tool["name"] == "jev_decide")
     assert decision["builtin"] is False
-    assert decision["origin_display"] == "AstrBot 智能决策引擎"
+    assert decision["origin_display"] == "jev决策综合插件"
 
     host.body.update(
         always_keep_tools=["jev_decide"],
@@ -571,3 +571,31 @@ async def test_jev_failure_keeps_manual_recommendations(host, monkeypatch):
     assert agent in req.func_tool.tools
     assert "Tools=ordinary_tool" in req.system_prompt
     assert f"SubAgents={agent.name}" in req.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_matched_command_bypasses_jev_routing(host, monkeypatch):
+    """A native or plugin command is handled directly by AstrBot's pipeline."""
+
+    manager = host.context.get_llm_tool_manager()
+    ordinary = SimpleNamespace(name="ordinary_tool", description="ordinary", active=True)
+    manager.func_list.append(ordinary)
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    evaluate = AsyncMock(side_effect=AssertionError("matched commands must not call Jev"))
+    monkeypatch.setattr(plugin, "_evaluate", evaluate)
+    tools = [ordinary, plugin._decision_tool]
+    toolset = SimpleNamespace(tools=tools)
+    req = SimpleNamespace(func_tool=toolset, system_prompt="persona", prompt="/xxx", contexts=[])
+    event = SimpleNamespace(
+        get_extra=lambda key, default=None: (
+            {"command_handler": {"argument": "value"}}
+            if key == "handlers_parsed_params"
+            else default
+        )
+    )
+
+    await plugin.filter_tools_before_llm(event, req)
+
+    assert req.func_tool.tools == tools
+    assert req.system_prompt == "persona"
+    evaluate.assert_not_awaited()

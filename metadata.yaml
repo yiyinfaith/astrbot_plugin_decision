@@ -1,7 +1,7 @@
 name: astrbot_plugin_decision
-display_name: AstrBot 智能决策引擎
-desc: 基于 Jev/SystemOne 等 Decision Model 的 AstrBot Tool 逐个过滤与推荐、SubAgent 逐个推荐、主动回复判断和结构化决策插件。
-short_desc: 在主 LLM 前提供高速结构化决策，减少工具上下文并保留主 Agent 的最终控制权。
+display_name: jev决策综合插件
+desc: 基于 Jev/SystemOne 的 Tools 与 SubAgents 逐项判断、过滤、推荐，支持白名单群聊和私聊的主动对话，以及 jev_decide 结构化决策工具。
+short_desc: 用 Jev 判断工具、子代理与主动对话，保留 AstrBot 主 LLM 的最终调用和回答决策。
 author: 一吟Faith
 version: 0.1.0
 repo: https://github.com/yiyinfaith/astrbot_plugin_decision

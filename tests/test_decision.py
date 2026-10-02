@@ -784,6 +784,8 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     page = (Path(__file__).resolve().parents[1] / "pages" / "settings" / "index.html").read_text(
         encoding="utf-8"
     )
+    assert "<title>jev决策综合插件设置</title>" in page
+    assert "<h1>jev决策综合插件设置</h1>" in page
     assert "始终推荐给主 LLM" in page
     assert "tool.builtin" in page
     assert "builtin" in page

@@ -52,7 +52,7 @@ from .decision.routing import (
 from .decision.tokens import estimate_request_tokens, fit_request_state
 
 PLUGIN_NAME = "astrbot_plugin_decision"
-PLUGIN_DISPLAY_NAME = "AstrBot 智能决策引擎"
+PLUGIN_DISPLAY_NAME = "jev决策综合插件"
 DEFAULT_TOOL_NOUL_THRESHOLD = 0.65
 PROACTIVE_PAGE_DEFAULTS: dict[str, Any] = {
     "proactive_whitelist": [],
@@ -104,7 +104,7 @@ DETAIL_DEFAULTS: dict[str, Any] = {
 @register(
     PLUGIN_NAME,
     "yiyinfaith",
-    "AstrBot Tools 与 SubAgent 决策：逐个过滤、推荐和结构化判断；主动对话单独配置。",
+    "jev决策综合插件：用 Jev 判断 Tools、SubAgents 和主动对话，并保留 AstrBot 主 LLM 的最终控制权。",
     "0.1.0",
 )
 class DecisionPlugin(Star):
@@ -325,6 +325,24 @@ class DecisionPlugin(Star):
         if tool_set.get_tool(DECISION_TOOL_NAME) is None:
             tool_set.add_tool(self._decision_tool)
         return tool_set
+
+    @staticmethod
+    def _command_handler_matched(event: AstrMessageEvent | None) -> bool:
+        """Return whether AstrBot already matched a registered command.
+
+        AstrBot records parsed command handlers during its waking-check stage.
+        Such events must stay on the command pipeline: running Jev routing or
+        proactive analysis first could delay, alter, or duplicate a native or
+        plugin command. An empty mapping means that no command matched.
+        """
+
+        if event is None:
+            return False
+        try:
+            matched = event.get_extra("handlers_parsed_params", {})
+        except (AttributeError, TypeError, ValueError):
+            return False
+        return isinstance(matched, Mapping) and bool(matched)
 
     def _builtin_tool_objects(self) -> list[Any]:
         """Return AstrBot's native tools without making them request-scoped."""
@@ -611,6 +629,11 @@ class DecisionPlugin(Star):
     ) -> None:
         """Run one fan-out decision request before AstrBot's main LLM call."""
 
+        # A registered AstrBot/plugin command has already been parsed by the
+        # waking-check pipeline and should execute directly without entering
+        # this LLM routing hook. The command handler owns the event.
+        if self._command_handler_matched(event):
+            return
         if not self._bool("tools_subagents_decision_enabled", True):
             return
         tool_set = self._ensure_request_toolset(req)
@@ -967,7 +990,7 @@ class DecisionPlugin(Star):
         message_type = event.get_message_type()
         if message_type not in {MessageType.GROUP_MESSAGE, MessageType.FRIEND_MESSAGE}:
             return True
-        if event.get_extra("handlers_parsed_params", {}):
+        if self._command_handler_matched(event):
             return True
         sender_id = str(event.get_sender_id() or "")
         self_id = str(event.get_self_id() or "")
