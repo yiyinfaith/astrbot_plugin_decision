@@ -74,6 +74,19 @@ class OutputPipelineRuntime:
                 summary = {}
                 payload["summary"] = summary
             summary["quotes_files"] = [str(self.data_dir / "default_quotes.json")]
+            t2i = payload.get("t2i")
+            if isinstance(t2i, dict):
+                configured_style = str(t2i.get("pillowmd_style_dir", "") or "").strip()
+                style_path = Path(configured_style).expanduser() if configured_style else None
+                if style_path is not None and not style_path.is_absolute():
+                    style_path = Path.cwd() / style_path
+                # A server that previously used OutputPro may already have
+                # its PillowMD style assets.  Reuse them transparently when
+                # the migrated plugin has no bundled style directory yet.
+                legacy_style = Path.cwd() / "data/plugins/astrbot_plugin_outputpro/t2i_style"
+                if style_path is None or not style_path.exists():
+                    if legacy_style.exists():
+                        t2i["pillowmd_style_dir"] = str(legacy_style)
             self.data_dir.mkdir(parents=True, exist_ok=True)
             quotes_path = self.data_dir / "default_quotes.json"
             if not quotes_path.exists():
