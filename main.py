@@ -31,11 +31,16 @@ from .decision.context import (
 )
 from .decision.models import DecisionProviderError
 from .decision.proactive import (
+    DEFAULT_REPLY_STARTERS,
+    GROUP_TARGET_ID,
+    GROUP_TARGET_NAME,
+    DialogueInference,
     ProactiveRecord,
     ProactiveState,
     ProactiveStatus,
     aggregate_scores,
     bounded_float,
+    infer_dialogue_target,
     normalize_prefixes,
     parse_noul_scores,
     text_matches_prefix,
@@ -74,6 +79,8 @@ PROACTIVE_PAGE_DEFAULTS: dict[str, Any] = {
     "dense_conversation_threshold": 30,
     "dense_conversation_window_seconds": 600.0,
     "min_participant_count": 2,
+    "conversation_flow_enabled": True,
+    "conversation_flow_window": 8,
 }
 DEFAULT_POLICY = (
     "你是一个只负责结构化判断的 Decision Model。\n"
@@ -460,6 +467,8 @@ class DecisionPlugin(Star):
         text: str,
         status: ProactiveStatus,
         summoned: bool,
+        dialogue: DialogueInference,
+        dialogue_enabled: bool,
         questions: Mapping[str, Mapping[str, Any]],
     ) -> str:
         """Trim the oldest proactive history until the full Jev request fits."""
@@ -467,11 +476,23 @@ class DecisionPlugin(Star):
         budget = self._context_budget()
 
         def make_state(lines: list[str]) -> str:
+            if dialogue_enabled:
+                current_message = (
+                    f"[Current Message]\n{sender_name} ({sender_id}) → "
+                    f"{dialogue.target_name} ({dialogue.target_id}): {text}\n"
+                    f"[Dialogue Flow Analysis]\n"
+                    f"Current addressee: {dialogue.target_name} ({dialogue.target_id})\n"
+                    f"Inference: {dialogue.reason}; confidence={dialogue.confidence:.2f}\n"
+                    "Treat sender IDs as stable identity anchors; nicknames may be duplicated or changed.\n"
+                    "When the addressee is uncertain, assume the message is for the group rather than the Bot.\n"
+                )
+            else:
+                current_message = f"[Current Message]\n{sender_name} ({sender_id}): {text}\n"
             return (
                 f"[Decision Policy]\n{self._policy()}\n\n"
                 "[Conversation]\n"
                 f"{chr(10).join(lines) or '(none)'}\n\n"
-                f"[Current Message]\n{sender_name} ({sender_id}): {text}\n"
+                f"{current_message}"
                 f"[Interaction State]\n{status.value}\n"
                 f"Directly summoned: {str(summoned).lower()}"
             )
@@ -912,6 +933,122 @@ class DecisionPlugin(Star):
             return at_self, reply_self, at_all, True
         return at_self, reply_self, at_all, False
 
+    def _dialogue_message_metadata(
+        self, event: AstrMessageEvent
+    ) -> tuple[tuple[tuple[str, str], ...], str]:
+        """Extract only stable At/Reply identity metadata for flow analysis."""
+
+        targets: list[tuple[str, str]] = []
+        reply_to_id = ""
+        try:
+            from astrbot.api.message_components import At, Reply
+
+            for component in event.get_messages():
+                if isinstance(component, At):
+                    target_id = str(
+                        getattr(component, "qq", None)
+                        or getattr(component, "target", None)
+                        or ""
+                    ).strip()
+                    if target_id:
+                        target_name = str(
+                            getattr(component, "name", None) or target_id
+                        ).strip()
+                        targets.append((target_id, target_name or target_id))
+                elif isinstance(component, Reply):
+                    reply_to_id = str(
+                        getattr(component, "sender_id", None)
+                        or getattr(component, "sender", None)
+                        or ""
+                    ).strip()
+        except (AttributeError, ImportError, KeyError, TypeError, ValueError):
+            return (), reply_to_id
+        # Preserve order while avoiding duplicate At components from adapters.
+        unique: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for target_id, target_name in targets:
+            if target_id in seen:
+                continue
+            seen.add(target_id)
+            unique.append((target_id, target_name))
+        return tuple(unique), reply_to_id
+
+    def _infer_proactive_dialogue(
+        self,
+        event: AstrMessageEvent,
+        *,
+        session: str,
+        sender: str,
+        sender_id: str,
+        text: str,
+        at_targets: tuple[tuple[str, str], ...] | None = None,
+        reply_to_id: str | None = None,
+    ) -> DialogueInference:
+        """Infer the current addressee before the record enters session history."""
+
+        if not self._bool("conversation_flow_enabled", True):
+            return DialogueInference()
+        if at_targets is None or reply_to_id is None:
+            at_targets, reply_to_id = self._dialogue_message_metadata(event)
+        current = ProactiveRecord(
+            sender=sender,
+            sender_id=sender_id,
+            text=text,
+            reply_to_id=reply_to_id,
+            at_targets=at_targets,
+        )
+        return infer_dialogue_target(
+            current,
+            self.proactive.history_records(session)[
+                -max(2, min(30, self._int("conversation_flow_window", 8))) :
+            ],
+            bot_id=str(event.get_self_id() or ""),
+            reply_starters=DEFAULT_REPLY_STARTERS,
+        )
+
+    def _record_proactive_input(
+        self,
+        event: AstrMessageEvent,
+        *,
+        session: str,
+        sender: str,
+        sender_id: str,
+        text: str,
+    ) -> tuple[list[str], DialogueInference]:
+        """Record one non-command message and return its Jev-facing snapshot."""
+
+        flow_enabled = self._bool("conversation_flow_enabled", True)
+        flow_window = max(2, min(30, self._int("conversation_flow_window", 8)))
+        history = self.proactive.history_lines(
+            session,
+            self._int("history_max_chars", 6000),
+            include_dialogue=flow_enabled,
+            max_messages=(flow_window if flow_enabled else None),
+        )
+        at_targets, reply_to_id = self._dialogue_message_metadata(event)
+        dialogue = self._infer_proactive_dialogue(
+            event,
+            session=session,
+            sender=sender,
+            sender_id=sender_id,
+            text=text,
+            at_targets=at_targets,
+            reply_to_id=reply_to_id,
+        )
+        self.proactive.add(
+            session,
+            ProactiveRecord(
+                sender,
+                sender_id,
+                text,
+                reply_to_id=reply_to_id,
+                at_targets=at_targets,
+                talking_to=dialogue.target_id,
+                talking_to_name=dialogue.target_name,
+            ),
+        )
+        return history, dialogue
+
     def _direct_reply_requested(self, event: AstrMessageEvent) -> bool:
         """Implement AngelHeart's direct prefix feature without text @ matching."""
 
@@ -1022,8 +1159,21 @@ class DecisionPlugin(Star):
         # A direct prefix is always handled by AstrBot's native Agent path;
         # native active-reply settings must not prevent this explicit wake-up.
         if self._direct_reply_requested(event):
+            session = str(event.unified_msg_origin)
+            text = str(event.get_message_str() or "").strip()
+            if text:
+                sender_id = str(event.get_sender_id() or "")
+                sender_name = str(event.get_sender_name() or sender_id or "user")
+                async with self.proactive.lock_for(session):
+                    self._record_proactive_input(
+                        event,
+                        session=session,
+                        sender=sender_name,
+                        sender_id=sender_id,
+                        text=text,
+                    )
             event.is_at_or_wake_command = True
-            self.proactive.set_status(str(event.unified_msg_origin), ProactiveStatus.SUMMONED)
+            self.proactive.set_status(session, ProactiveStatus.SUMMONED)
             logger.warning("Decision Engine 因为命中直接回复前缀或 @ 机器人，所以主动对话。")
             return
 
@@ -1048,8 +1198,14 @@ class DecisionPlugin(Star):
         explicit_summon = not parse_failed and not at_all and (at_self or reply_self)
         summoned = explicit_summon or self._proactive_summoned(event)
         async with self.proactive.lock_for(session):
-            history = self.proactive.history_lines(session, self._int("history_max_chars", 6000))
-            self.proactive.add(session, ProactiveRecord(sender_name, sender_id, text))
+            history, dialogue = self._record_proactive_input(
+                event,
+                session=session,
+                sender=sender_name,
+                sender_id=sender_id,
+                text=text,
+            )
+            flow_enabled = self._bool("conversation_flow_enabled", True)
             # Keep every allowlisted message in the bounded session history,
             # while the analysis cooldown suppresses only the Jev request.
             if not self.proactive.can_analyze(session):
@@ -1103,6 +1259,8 @@ class DecisionPlugin(Star):
                     text=text,
                     status=status,
                     summoned=summoned,
+                    dialogue=dialogue,
+                    dialogue_enabled=flow_enabled,
                     questions=questions,
                 )
                 try:
@@ -1206,9 +1364,18 @@ class DecisionPlugin(Star):
         if self.proactive.has_pending_reply(session):
             self.proactive.mark_reply_success(session)
         if text:
+            replied_to_id = str(event.get_sender_id() or "")
+            replied_to_name = str(event.get_sender_name() or replied_to_id or "用户")
             self.proactive.add(
                 session,
-                ProactiveRecord("bot", str(event.get_self_id() or "bot"), text, True),
+                ProactiveRecord(
+                    "bot",
+                    str(event.get_self_id() or "bot"),
+                    text,
+                    True,
+                    talking_to=replied_to_id or GROUP_TARGET_ID,
+                    talking_to_name=replied_to_name or GROUP_TARGET_NAME,
+                ),
             )
 
     def _is_admin(self, event: AstrMessageEvent) -> bool:
@@ -1465,6 +1632,8 @@ class DecisionPlugin(Star):
             elif isinstance(default, int):
                 if isinstance(value, bool) or not isinstance(value, int):
                     return error_response(f"{key} must be an integer", status_code=400)
+                if key == "conversation_flow_window":
+                    value = min(30, max(2, value))
                 cleaned_proactive[key] = value
             elif isinstance(default, float):
                 if (

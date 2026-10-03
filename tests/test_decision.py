@@ -11,10 +11,12 @@ from decision.context import build_decision_state, context_lines, tool_summary
 from decision.context import question_id as make_question_id
 from decision.models import DecisionProviderError, DecisionValidationError, parse_systemone_response
 from decision.proactive import (
+    DialogueInference,
     ProactiveRecord,
     ProactiveState,
     ProactiveStatus,
     aggregate_scores,
+    infer_dialogue_target,
     normalize_prefixes,
     parse_noul_scores,
     text_matches_prefix,
@@ -811,6 +813,9 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     assert "subagent_decision_enabled" in page
     assert "routing-rules-table" in page
     assert "两类能力的 Jev 判断会合并为一次请求" in page
+    assert "对话流分析（识别说话对象）" in page
+    assert "conversation_flow_enabled" in page
+    assert "conversation_flow_window" in page
 
 
 def test_proactive_details_are_page_only_and_excluded_from_public_schema():
@@ -824,6 +829,8 @@ def test_proactive_details_are_page_only_and_excluded_from_public_schema():
         "proactive_whitelist",
         "direct_reply_prefixes",
         "force_reply_when_summoned",
+        "conversation_flow_enabled",
+        "conversation_flow_window",
         "proactive_score_threshold",
         "observation_timeout_seconds",
     ):
@@ -894,6 +901,64 @@ def test_proactive_history_records_bot_and_user_roles():
     state.add("g", ProactiveRecord("Alice", "1", "hello"))
     state.add("g", ProactiveRecord("bot", "0", "reply", True))
     assert state.history_lines("g", 200) == ["[Alice]: hello", "[bot]: reply"]
+
+
+def test_dialogue_flow_prefers_explicit_bot_and_other_targets():
+    bot = ProactiveRecord(
+        "Alice", "u1", "@bot hi", at_targets=(("bot-id", "Bot"),), timestamp=100
+    )
+    result = infer_dialogue_target(bot, [], bot_id="bot-id", now=100)
+    assert result == DialogueInference("bot", "你", 1.0, "explicit_at_bot")
+
+    other = ProactiveRecord(
+        "Alice", "u1", "@Bob hi", at_targets=(("u2", "Bob"),), timestamp=100
+    )
+    result = infer_dialogue_target(other, [], bot_id="bot-id", now=100)
+    assert result.target_id == "u2"
+    assert result.target_name == "Bob"
+    assert result.reason == "explicit_at_other"
+
+
+def test_dialogue_flow_uses_reply_bot_aba_and_conservative_group_fallback():
+    reply = ProactiveRecord("Alice", "u1", "thanks", reply_to_id="bot-id", timestamp=100)
+    assert infer_dialogue_target(reply, [], bot_id="bot-id", now=100).target_id == "bot"
+
+    recent_bot = ProactiveRecord(
+        "bot", "bot-id", "answer", True, timestamp=90, talking_to="u1", talking_to_name="Alice"
+    )
+    short_ack = ProactiveRecord("Alice", "u1", "好的", timestamp=100)
+    assert infer_dialogue_target(short_ack, [recent_bot], bot_id="bot-id", now=100).reason == "bot_recently_replied"
+
+    previous = ProactiveRecord(
+        "Bob", "u2", "问 Alice", timestamp=90, talking_to="u1", talking_to_name="Alice"
+    )
+    follow = ProactiveRecord("Alice", "u1", "我来了", timestamp=100)
+    result = infer_dialogue_target(follow, [previous], bot_id="bot-id", now=100)
+    assert result.target_id == "u2"
+    assert result.reason == "aba_pattern"
+
+    unrelated = ProactiveRecord("Alice", "u1", "随便说说", timestamp=100)
+    result = infer_dialogue_target(
+        unrelated,
+        [ProactiveRecord("Bob", "u2", "群里说话", timestamp=70)],
+        bot_id="bot-id",
+        now=100,
+    )
+    assert result.target_id == "group"
+    assert result.reason == "default_group"
+
+
+def test_proactive_history_can_render_identity_aware_dialogue_flow():
+    state = ProactiveState(max_messages=4)
+    state.add(
+        "g",
+        ProactiveRecord(
+            "Alice", "u1", "hello", talking_to="u2", talking_to_name="Bob"
+        ),
+    )
+    assert state.history_lines("g", 200, include_dialogue=True) == [
+        "[Alice (u1) → Bob (u2)]: hello"
+    ]
 
 
 def test_proactive_reconfigure_applies_live_history_and_session_limits():

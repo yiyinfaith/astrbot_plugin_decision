@@ -14,6 +14,10 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 
+GROUP_TARGET_ID = "group"
+GROUP_TARGET_NAME = "群聊"
+BOT_TARGET_ID = "bot"
+
 
 class ProactiveStatus(str, Enum):  # noqa: UP042 - AstrBot supports Python 3.10
     """Four interaction states adapted from AngelHeart."""
@@ -31,6 +35,135 @@ class ProactiveRecord:
     text: str
     is_bot: bool = False
     timestamp: float = field(default_factory=time.monotonic)
+    # These fields are deliberately adapter-neutral.  The main plugin fills
+    # them from AstrBot's At/Reply components, while tests and other adapters
+    # can construct records without importing AstrBot message classes.
+    reply_to_id: str = ""
+    at_targets: tuple[tuple[str, str], ...] = ()
+    talking_to: str = GROUP_TARGET_ID
+    talking_to_name: str = GROUP_TARGET_NAME
+
+
+@dataclass(frozen=True, slots=True)
+class DialogueInference:
+    """A conservative, explainable guess about the current addressee."""
+
+    target_id: str = GROUP_TARGET_ID
+    target_name: str = GROUP_TARGET_NAME
+    confidence: float = 0.0
+    reason: str = "default_group"
+
+
+DEFAULT_REPLY_STARTERS = (
+    "好",
+    "嗯",
+    "哦",
+    "对",
+    "是的",
+    "谢谢",
+    "收到",
+    "知道",
+    "明白",
+    "哈哈",
+    "笑死",
+)
+
+
+def _unique_targets(
+    targets: Iterable[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    result: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for raw_id, raw_name in targets:
+        target_id = str(raw_id or "").strip()
+        if not target_id or target_id in seen:
+            continue
+        seen.add(target_id)
+        target_name = str(raw_name or target_id).strip() or target_id
+        result.append((target_id, target_name))
+    return result
+
+
+def _reply_like(text: str, starters: Iterable[str] = DEFAULT_REPLY_STARTERS) -> bool:
+    value = str(text or "").strip()
+    return bool(value and len(value) <= 20 and any(value.startswith(item) for item in starters))
+
+
+def infer_dialogue_target(
+    current: ProactiveRecord,
+    history: Iterable[ProactiveRecord],
+    *,
+    bot_id: str = "",
+    reply_starters: Iterable[str] = DEFAULT_REPLY_STARTERS,
+    now: float | None = None,
+) -> DialogueInference:
+    """Infer who a group message is addressing without an extra Jev call.
+
+    The rules intentionally mirror only the useful, conservative part of
+    ContextAware: explicit address signals win; contextual guesses never
+    promote a message to the Bot unless the preceding Bot response was aimed
+    at this sender.  Sender IDs are the identity anchor, so duplicate or
+    changed nicknames do not merge people.
+    """
+
+    bot_id = str(bot_id or "").strip()
+    bot_target_ids = {bot_id} if bot_id else {BOT_TARGET_ID}
+    targets = _unique_targets(current.at_targets)
+    bot_targets = [name for target_id, name in targets if target_id in bot_target_ids]
+    other_targets = [(target_id, name) for target_id, name in targets if target_id not in bot_target_ids]
+    if bot_targets:
+        label = "你" if not other_targets else "你和" + "、".join(name for _, name in other_targets)
+        return DialogueInference(BOT_TARGET_ID, label, 1.0, "explicit_at_bot")
+    if other_targets:
+        target_id, target_name = other_targets[0]
+        if len(other_targets) > 1:
+            target_name = "、".join(name for _, name in other_targets)
+        return DialogueInference(target_id, target_name, 1.0, "explicit_at_other")
+
+    history_list = list(history)
+    if current.reply_to_id:
+        reply_id = str(current.reply_to_id).strip()
+        if reply_id in bot_target_ids:
+            return DialogueInference(BOT_TARGET_ID, "你", 1.0, "reply_to_bot")
+        reply_name = reply_id
+        for item in reversed(history_list):
+            if str(item.sender_id) == reply_id:
+                reply_name = item.sender
+                break
+        return DialogueInference(reply_id, reply_name, 1.0, "reply_to_other")
+
+    if not history_list:
+        return DialogueInference(reason="default_group")
+    current_time = time.monotonic() if now is None else float(now)
+    recent = [item for item in history_list[-5:] if item.sender_id != current.sender_id]
+    if not recent:
+        return DialogueInference(reason="default_group")
+    last = recent[-1]
+    gap = max(0.0, current_time - float(last.timestamp))
+
+    # A short acknowledgement after a Bot response can be a reply to the Bot.
+    # If another person was speaking to this sender immediately before the Bot
+    # interjected, preserve that human-to-human thread instead.
+    if last.is_bot and gap < 20 and last.talking_to == current.sender_id:
+        if _reply_like(current.text, reply_starters):
+            for item in reversed(history_list[:-1]):
+                if current_time - float(item.timestamp) > 90:
+                    break
+                if item.is_bot or item.sender_id == current.sender_id:
+                    continue
+                if item.talking_to == current.sender_id and last.timestamp - item.timestamp < 60:
+                    return DialogueInference(item.sender_id, item.sender, 0.82, "bot_interrupted")
+            return DialogueInference(BOT_TARGET_ID, "你", 0.82, "bot_recently_replied")
+        return DialogueInference(reason="after_bot_nonreply")
+
+    # A-B-A: the previous speaker explicitly addressed the current sender.
+    if last.talking_to == current.sender_id and gap < 60 and not last.is_bot:
+        return DialogueInference(last.sender_id, last.sender, 0.68, "aba_pattern")
+
+    # A quick follow-up to a group-directed message is intentionally left as
+    # group-directed.  Timing alone is too weak to claim that the sender is
+    # speaking to a particular person.
+    return DialogueInference(reason="default_group")
 
 
 @dataclass(slots=True)
@@ -187,12 +320,38 @@ class ProactiveState:
         current.history.append(record)
         current.last_activity = time.monotonic()
 
-    def history_lines(self, session: str, max_chars: int) -> list[str]:
+    def history_records(self, session: str) -> list[ProactiveRecord]:
+        """Return a stable snapshot for local dialogue-flow inference."""
+
+        return list(self._session(session).history)
+
+    def history_lines(
+        self,
+        session: str,
+        max_chars: int,
+        *,
+        include_dialogue: bool = False,
+        max_messages: int | None = None,
+    ) -> list[str]:
         current = self._session(session)
         lines = []
-        for item in current.history:
+        records = list(current.history)
+        if max_messages is not None and int(max_messages) > 0:
+            records = records[-int(max_messages) :]
+        for item in records:
             role = "bot" if item.is_bot else item.sender
-            lines.append(f"[{role}]: {item.text}")
+            if include_dialogue:
+                identity = f"{role} ({item.sender_id})" if item.sender_id else role
+                target = item.talking_to_name or item.talking_to or GROUP_TARGET_NAME
+                target_identity = (
+                    f"{target} ({item.talking_to})"
+                    if item.talking_to not in {GROUP_TARGET_ID, BOT_TARGET_ID}
+                    and item.talking_to
+                    else target
+                )
+                lines.append(f"[{identity} → {target_identity}]: {item.text}")
+            else:
+                lines.append(f"[{role}]: {item.text}")
         joined = "\n".join(lines)
         return joined[-max(1, int(max_chars)) :].splitlines() if joined else []
 

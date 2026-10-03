@@ -135,7 +135,12 @@ async def test_save_reload_keeps_native_config_clean_and_webui_settings_intact(h
         tool_decision_enabled=False,
         subagent_decision_enabled=True,
         tool_filter_enabled=False,
-        proactive={"proactive_whitelist": ["12345"], "cooldown_seconds": 25.0},
+        proactive={
+            "proactive_whitelist": ["12345"],
+            "cooldown_seconds": 25.0,
+            "conversation_flow_enabled": False,
+            "conversation_flow_window": 35,
+        },
     )
     result = await plugin.page_save_settings()
     assert result["saved"] is True
@@ -157,6 +162,8 @@ async def test_save_reload_keeps_native_config_clean_and_webui_settings_intact(h
     assert settings["subagent_decision_enabled"] is True
     assert settings["proactive"]["proactive_whitelist"] == ["12345"]
     assert settings["proactive"]["cooldown_seconds"] == 25.0
+    assert settings["proactive"]["conversation_flow_enabled"] is False
+    assert settings["proactive"]["conversation_flow_window"] == 30
     assert settings["always_keep_tools"] == ["jev_decide"]
     assert settings["always_keep_subagents"] == ["agent_alpha"]
     assert host.config == original

@@ -310,6 +310,8 @@
             <div class="field"><label>白名单 <span>每行一个群聊 ID、用户 ID 或 unified_msg_origin</span></label><textarea v-model="form.proactive.proactive_whitelist" class="list-editor" placeholder="群聊 ID\n私聊用户 ID"></textarea></div>
             <div class="two-col"><div class="field"><label>直接回复前缀</label><input v-model="form.proactive.direct_reply_prefixes" type="text" placeholder="/、@"></div><div class="field"><label>机器人昵称</label><input v-model="form.proactive.proactive_alias" type="text" placeholder="AI|助手"></div></div>
             <div class="switch-row"><div class="switch-copy"><strong>@ 或回复机器人时强制回复</strong><small>明确唤醒时跳过主动判断 Jev，直接进入 AstrBot 原生 Agent。</small></div><label class="switch"><input v-model="form.proactive.force_reply_when_summoned" type="checkbox"><span class="switch-track"></span></label></div>
+             <div class="switch-row"><div class="switch-copy"><strong>对话流分析（识别说话对象）</strong><small>根据 @、引用回复和最近对话推断“谁在和谁说话”；用发送者 ID 区分重名或改名用户，不增加额外 Jev 请求。</small></div><label class="switch"><input v-model="form.proactive.conversation_flow_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+             <div class="field"><label>对话流窗口 <span>参与“谁在和谁说话”推断的最近消息条数</span></label><input v-model.number="form.proactive.conversation_flow_window" type="number" min="2" max="30" step="1"></div>
             <div class="two-col"><div class="field"><label>综合介入阈值</label><input v-model.number="form.proactive.proactive_score_threshold" type="number" min="0" max="1" step="0.01"></div><div class="field"><label>直接指向阈值</label><input v-model.number="form.proactive.addressing_threshold" type="number" min="0" max="1" step="0.01"></div><div class="field"><label>自然介入阈值</label><input v-model.number="form.proactive.interject_threshold" type="number" min="0" max="1" step="0.01"></div><div class="field"><label>判断间隔（秒）</label><input v-model.number="form.proactive.no_reply_cooldown_seconds" type="number" min="0" step="0.1"></div></div>
           </div>
           <div class="glass-card">
@@ -392,6 +394,7 @@
         interject_threshold: .85, cooldown_seconds: 60, reply_window_seconds: 600,
         max_replies_per_window: 2, proactive_history_max_messages: 12, proactive_max_sessions: 500,
         no_reply_cooldown_seconds: 3, observation_timeout_seconds: 600,
+         conversation_flow_enabled: true, conversation_flow_window: 8,
         echo_detection_threshold: 3, echo_detection_window_seconds: 30,
         dense_conversation_threshold: 30, dense_conversation_window_seconds: 600, min_participant_count: 2
       };
