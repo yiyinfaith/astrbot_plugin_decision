@@ -58,9 +58,11 @@ from .decision.tokens import estimate_request_tokens, fit_request_state
 
 PLUGIN_NAME = "astrbot_plugin_decision"
 PLUGIN_DISPLAY_NAME = "jev决策综合插件"
+_ON_DECORATING_RESULT = getattr(filter, "on_decorating_result", None)
 DEFAULT_TOOL_NOUL_THRESHOLD = 0.65
 PROACTIVE_PAGE_DEFAULTS: dict[str, Any] = {
     "proactive_whitelist": [],
+    "proactive_scope_blacklist": False,
     "direct_reply_prefixes": ["/", "@"],
     "force_reply_when_summoned": True,
     "proactive_alias": "AI|助手",
@@ -81,6 +83,16 @@ PROACTIVE_PAGE_DEFAULTS: dict[str, Any] = {
     "min_participant_count": 2,
     "conversation_flow_enabled": True,
     "conversation_flow_window": 8,
+    # The input/output conversation-flow enhancement has its own scope.  A
+    # blacklist with no entries intentionally means every conversation.
+    "conversation_flow_scope": [],
+    "conversation_flow_scope_blacklist": True,
+}
+OUTPUT_PAGE_DEFAULTS: dict[str, Any] = {
+    "output_enhancement_enabled": False,
+    "output_scope": [],
+    "output_scope_blacklist": True,
+    "output_pipeline": {},
 }
 DEFAULT_POLICY = (
     "你是一个只负责结构化判断的 Decision Model。\n"
@@ -104,6 +116,7 @@ DETAIL_DEFAULTS: dict[str, Any] = {
     "tool_noul_threshold": DEFAULT_TOOL_NOUL_THRESHOLD,
     "jev_pre_prompt": DEFAULT_POLICY,
     "main_llm_post_prompt": DEFAULT_MAIN_LLM_POST_PROMPT,
+    **OUTPUT_PAGE_DEFAULTS,
     **PROACTIVE_PAGE_DEFAULTS,
 }
 
@@ -144,6 +157,7 @@ class DecisionPlugin(Star):
         self.provider: SystemOneProvider | None = None
         self._ready = False
         self._active_reply_warning_emitted = False
+        self._output_runtime: Any | None = None
         self.proactive = ProactiveState(
             self._int("proactive_history_max_messages", 12),
             self._int("proactive_max_sessions", 500),
@@ -244,6 +258,7 @@ class DecisionPlugin(Star):
             logger.warning(
                 "Decision Engine provider %s is unavailable; plugin stays fail-open.", provider_name
             )
+            await self._configure_output_runtime()
             return
         self.provider = SystemOneProvider(
             base_url=str(self._setting("base_url", "")),
@@ -264,10 +279,32 @@ class DecisionPlugin(Star):
                 "Decision Engine could not initialize its HTTP client; calls will fail open."
             )
         self._ready = True
+        await self._configure_output_runtime()
         if not self.provider.api_key:
             logger.warning(
                 "Decision Engine API key is empty; tool filtering and proactive decisions are disabled."
             )
+
+    async def _configure_output_runtime(self) -> None:
+        """Enable the vendored output pipeline only when explicitly selected."""
+
+        enabled = self._bool("output_enhancement_enabled", False)
+        if not enabled:
+            if self._output_runtime is not None:
+                await self._output_runtime.close()
+                self._output_runtime = None
+            return
+        if self._output_runtime is None:
+            from .decision.outputpro_runtime import OutputPipelineRuntime
+
+            self._output_runtime = OutputPipelineRuntime(
+                self.context,
+                self._settings_path.parent / PLUGIN_NAME,
+            )
+        config = self._setting("output_pipeline", {})
+        if not isinstance(config, Mapping):
+            config = {}
+        await self._output_runtime.configure(dict(config))
 
     def _log_provider_retry(
         self, retry_number: int, max_retries: int, reason: str, backoff_seconds: float
@@ -285,6 +322,9 @@ class DecisionPlugin(Star):
             await self.provider.close()
         self.provider = None
         self._ready = False
+        if self._output_runtime is not None:
+            await self._output_runtime.close()
+            self._output_runtime = None
 
     def _int(self, key: str, default: int) -> int:
         try:
@@ -312,6 +352,37 @@ class DecisionPlugin(Star):
         # An explicitly empty value is a supported way to disable this
         # optional advisory section without disabling Tool filtering.
         return str(configured)
+
+    def _output_page_settings(self) -> dict[str, Any]:
+        """Return a complete, editable OutputPro-compatible configuration."""
+
+        from .decision.outputpro_runtime import _deep_merge, output_config_defaults
+
+        configured = self._setting("output_pipeline", {})
+        merged = _deep_merge(
+            output_config_defaults(),
+            configured if isinstance(configured, Mapping) else {},
+        )
+        return {
+            "conversation_flow_enabled": self._bool("conversation_flow_enabled", True),
+            "conversation_flow_window": self._int("conversation_flow_window", 8),
+            "conversation_flow_scope": [
+                str(item)
+                for item in (self._setting("conversation_flow_scope", []) or [])
+                if str(item).strip()
+            ],
+            "conversation_flow_scope_blacklist": self._bool(
+                "conversation_flow_scope_blacklist", True
+            ),
+            "output_enhancement_enabled": self._bool("output_enhancement_enabled", False),
+            "output_scope": [
+                str(item)
+                for item in (self._setting("output_scope", []) or [])
+                if str(item).strip()
+            ],
+            "output_scope_blacklist": self._bool("output_scope_blacklist", True),
+            "output_pipeline": merged,
+        }
 
     def _tool_list(self, req: ProviderRequest) -> list[Any]:
         return list(getattr(getattr(req, "func_tool", None), "tools", None) or [])
@@ -993,7 +1064,7 @@ class DecisionPlugin(Star):
     ) -> DialogueInference:
         """Infer the current addressee before the record enters session history."""
 
-        if not self._bool("conversation_flow_enabled", True):
+        if not self._conversation_flow_enabled_for(event):
             return DialogueInference()
         if at_targets is None or reply_to_id is None:
             at_targets, reply_to_id = self._dialogue_message_metadata(event)
@@ -1024,7 +1095,7 @@ class DecisionPlugin(Star):
     ) -> tuple[list[str], DialogueInference]:
         """Record one non-command message and return its Jev-facing snapshot."""
 
-        flow_enabled = self._bool("conversation_flow_enabled", True)
+        flow_enabled = self._conversation_flow_enabled_for(event)
         flow_window = max(2, min(30, self._int("conversation_flow_window", 8)))
         history = self.proactive.history_lines(
             session,
@@ -1084,24 +1155,14 @@ class DecisionPlugin(Star):
         ]
         return bool(aliases and any(alias in text for alias in aliases))
 
-    def _proactive_whitelist_allows(self, event: AstrMessageEvent) -> bool:
-        """Return whether this group or private conversation is allowlisted.
-
-        AstrBot's ``unified_msg_origin`` is accepted for deployments that need
-        platform-specific precision.  Raw group IDs and sender IDs are also
-        accepted, which keeps the common WebUI configuration simple.
-        """
-
-        configured = self._setting("proactive_whitelist", [])
-        if not isinstance(configured, (list, tuple, set)):
-            return False
-        allowlist = {str(item).strip() for item in configured if str(item).strip()}
-        if not allowlist:
-            return False
+    def _event_scope_candidates(self, event: AstrMessageEvent) -> set[str]:
+        """Collect stable IDs accepted by both scope editors."""
 
         candidates: set[str] = set()
         try:
-            candidates.add(str(event.unified_msg_origin).strip())
+            origin = str(event.unified_msg_origin).strip()
+            if origin:
+                candidates.add(origin)
         except (AttributeError, TypeError):
             pass
 
@@ -1128,7 +1189,53 @@ class DecisionPlugin(Star):
                 continue
             if value is not None and str(value).strip():
                 candidates.add(str(value).strip())
-        return bool(candidates & allowlist)
+        return candidates
+
+    def _scope_allows(
+        self,
+        event: AstrMessageEvent,
+        values_key: str,
+        blacklist_key: str,
+        *,
+        default_blacklist: bool,
+    ) -> bool:
+        """Apply the UI's empty-list semantics for a black/white scope.
+
+        Blacklist mode + empty list means all conversations apply.  Whitelist
+        mode + empty list means no conversation applies.  This is deliberately
+        shared by active replies and both dialogue-flow enhancements so the
+        two editors cannot drift apart.
+        """
+
+        configured = self._setting(values_key, [])
+        values = {
+            str(item).strip()
+            for item in configured
+            if str(item).strip()
+        } if isinstance(configured, (list, tuple, set)) else set()
+        matched = bool(self._event_scope_candidates(event) & values)
+        blacklist = self._bool(blacklist_key, default_blacklist)
+        return (not matched) if blacklist else matched
+
+    def _proactive_whitelist_allows(self, event: AstrMessageEvent) -> bool:
+        """Apply the independent active-conversation black/white scope."""
+
+        return self._scope_allows(
+            event,
+            "proactive_whitelist",
+            "proactive_scope_blacklist",
+            default_blacklist=False,
+        )
+
+    def _conversation_flow_enabled_for(self, event: AstrMessageEvent) -> bool:
+        """Return whether input/output dialogue enhancement applies here."""
+
+        return self._bool("conversation_flow_enabled", True) and self._scope_allows(
+            event,
+            "conversation_flow_scope",
+            "conversation_flow_scope_blacklist",
+            default_blacklist=True,
+        )
 
     def _should_skip_proactive(self, event: AstrMessageEvent) -> bool:
         message_type = event.get_message_type()
@@ -1212,7 +1319,7 @@ class DecisionPlugin(Star):
                 sender_id=sender_id,
                 text=text,
             )
-            flow_enabled = self._bool("conversation_flow_enabled", True)
+            flow_enabled = self._conversation_flow_enabled_for(event)
             # Keep every allowlisted message in the bounded session history,
             # while the analysis cooldown suppresses only the Jev request.
             if not self.proactive.can_analyze(session):
@@ -1352,6 +1459,46 @@ class DecisionPlugin(Star):
                 logger.debug(
                     "Decision Engine proactive request was not queued: %s", _safe_error(exc)
                 )
+
+    @filter.event_message_type(
+        EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE,
+        priority=1000,
+    )
+    async def output_enhancement_message(self, event: AstrMessageEvent) -> None:
+        """Collect the small amount of input state required by OutputPro."""
+
+        runtime = self._output_runtime
+        if runtime is None or not self._scope_allows(
+            event,
+            "output_scope",
+            "output_scope_blacklist",
+            default_blacklist=True,
+        ):
+            return
+        await runtime.prepare_message(event)
+
+    @(
+        _ON_DECORATING_RESULT(priority=15)
+        if callable(_ON_DECORATING_RESULT)
+        else (lambda target: target)
+    )
+    async def output_enhancement(self, event: AstrMessageEvent) -> None:
+        """Run the optional OutputPro-compatible last-mile pipeline.
+
+        The scope is intentionally independent from active conversation.  A
+        user can therefore enable output formatting for a set of groups while
+        keeping Jev proactive decisions disabled there.
+        """
+
+        runtime = self._output_runtime
+        if runtime is None or not self._scope_allows(
+            event,
+            "output_scope",
+            "output_scope_blacklist",
+            default_blacklist=True,
+        ):
+            return
+        await runtime.run(event)
 
     @filter.on_llm_response()
     async def remember_bot_response(self, event: AstrMessageEvent, response: Any) -> None:
@@ -1560,6 +1707,7 @@ class DecisionPlugin(Star):
                 ),
                 "proactive_reply_enabled": self._bool("proactive_reply_enabled", False),
                 "proactive": proactive,
+                "dialogue_enhancement": self._output_page_settings(),
             }
         )
 
@@ -1621,6 +1769,39 @@ class DecisionPlugin(Star):
         proactive_payload = payload.get("proactive", {})
         if not isinstance(proactive_payload, Mapping):
             return error_response("proactive must be an object", status_code=400)
+        dialogue_payload = payload.get("dialogue_enhancement", {})
+        if not isinstance(dialogue_payload, Mapping):
+            return error_response("dialogue_enhancement must be an object", status_code=400)
+        proactive_payload = dict(proactive_payload)
+        for key in (
+            "conversation_flow_enabled",
+            "conversation_flow_window",
+            "conversation_flow_scope",
+            "conversation_flow_scope_blacklist",
+        ):
+            if key in dialogue_payload:
+                proactive_payload[key] = dialogue_payload[key]
+        output_enabled = dialogue_payload.get("output_enhancement_enabled")
+        output_scope = dialogue_payload.get("output_scope")
+        output_scope_blacklist = dialogue_payload.get("output_scope_blacklist")
+        output_pipeline = dialogue_payload.get("output_pipeline")
+        if output_enabled is not None and not isinstance(output_enabled, bool):
+            return error_response("output_enhancement_enabled must be a boolean", status_code=400)
+        if output_scope is not None and (
+            not isinstance(output_scope, list)
+            or any(not isinstance(item, str) for item in output_scope)
+        ):
+            return error_response("output_scope must be a string list", status_code=400)
+        if output_scope_blacklist is not None and not isinstance(output_scope_blacklist, bool):
+            return error_response("output_scope_blacklist must be a boolean", status_code=400)
+        if output_pipeline is not None and not isinstance(output_pipeline, Mapping):
+            return error_response("output_pipeline must be an object", status_code=400)
+        if output_pipeline is not None:
+            try:
+                if len(json.dumps(output_pipeline, ensure_ascii=False)) > 300_000:
+                    return error_response("output_pipeline is too large", status_code=400)
+            except (TypeError, ValueError):
+                return error_response("output_pipeline must be JSON serializable", status_code=400)
         cleaned_proactive: dict[str, Any] = {}
         for key, default in PROACTIVE_PAGE_DEFAULTS.items():
             if key not in proactive_payload:
@@ -1715,6 +1896,20 @@ class DecisionPlugin(Star):
         if tool_noul_threshold is not None:
             detail_values["tool_noul_threshold"] = min(1.0, max(0.0, float(tool_noul_threshold)))
         detail_values.update(cleaned_proactive)
+        if output_enabled is not None:
+            detail_values["output_enhancement_enabled"] = output_enabled
+        if output_scope is not None:
+            detail_values["output_scope"] = list(
+                dict.fromkeys(item.strip() for item in output_scope if item.strip())
+            )[:500]
+        if output_scope_blacklist is not None:
+            detail_values["output_scope_blacklist"] = output_scope_blacklist
+        if output_pipeline is not None:
+            from .decision.outputpro_runtime import _deep_merge, output_config_defaults
+
+            detail_values["output_pipeline"] = _deep_merge(
+                output_config_defaults(), dict(output_pipeline)
+            )
         # Commit first: a failed disk write must not change the running policy
         # or prune proactive history while reporting a failed save to the UI.
         try:
@@ -1726,6 +1921,7 @@ class DecisionPlugin(Star):
             self._int("proactive_history_max_messages", 12),
             self._int("proactive_max_sessions", 500),
         )
+        await self._configure_output_runtime()
         return json_response(
             {
                 "saved": True,
@@ -1744,6 +1940,7 @@ class DecisionPlugin(Star):
                     key: self._setting(key, default)
                     for key, default in PROACTIVE_PAGE_DEFAULTS.items()
                 },
+                "dialogue_enhancement": self._output_page_settings(),
             }
         )
 

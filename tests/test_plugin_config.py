@@ -258,11 +258,100 @@ async def test_mapping_tool_manager_is_supported_by_page_and_save(host):
     assert result["always_keep_subagents"] == [agent.name]
 
 
+@pytest.mark.asyncio
+async def test_dialogue_enhancement_scopes_and_output_pipeline_are_page_settings(host):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    host.body.update(
+        always_keep_tools=[],
+        always_keep_recommend_tools=[],
+        always_keep_subagents=[],
+        always_keep_recommend_subagents=[],
+        dialogue_enhancement={
+            "conversation_flow_enabled": True,
+            "conversation_flow_window": 10,
+            "conversation_flow_scope": ["group-1"],
+            "conversation_flow_scope_blacklist": False,
+            "output_enhancement_enabled": True,
+            "output_scope": ["group-2"],
+            "output_scope_blacklist": True,
+            "output_pipeline": {
+                "pipeline": {"steps": ["split(分段回复)"]},
+                "split": {"max_length": 240},
+            },
+        }
+    )
+    result = await plugin.page_save_settings()
+    assert result["saved"] is True
+    settings = await plugin.page_settings()
+    dialogue = settings["dialogue_enhancement"]
+    assert dialogue["conversation_flow_scope"] == ["group-1"]
+    assert dialogue["conversation_flow_scope_blacklist"] is False
+    assert dialogue["output_scope"] == ["group-2"]
+    assert dialogue["output_scope_blacklist"] is True
+    assert dialogue["output_pipeline"]["split"]["max_length"] == 240
+    # The optional runtime is fail-open in this host double and must not make
+    # a valid WebUI save fail.
+    assert plugin._bool("output_enhancement_enabled", False) is True
+
+
 def test_path_fallback_uses_astrbot_data_directory(host, monkeypatch, tmp_path):
     plugin_directory = tmp_path / "plugin_installation"
     plugin_directory.mkdir()
     monkeypatch.chdir(plugin_directory)
     assert host.module.DecisionPlugin._get_settings_path({}) == host.path
+
+
+def test_scope_modes_have_explicit_empty_list_semantics_and_namespaces(host):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+
+    group = SimpleNamespace(
+        unified_msg_origin="qq:GroupMessage:group-1",
+        get_message_type=lambda: 1,
+        get_group_id=lambda: "group-1",
+        get_sender_id=lambda: "user-1",
+    )
+    private = SimpleNamespace(
+        unified_msg_origin="qq:FriendMessage:user-1",
+        get_message_type=lambda: 2,
+        get_group_id=lambda: "",
+        get_sender_id=lambda: "user-1",
+    )
+
+    # Blacklist + empty means every conversation applies.
+    plugin._detail_settings.update(
+        {
+            "proactive_whitelist": [],
+            "proactive_scope_blacklist": True,
+            "conversation_flow_scope": [],
+            "conversation_flow_scope_blacklist": True,
+        }
+    )
+    assert plugin._proactive_whitelist_allows(group)
+    assert plugin._conversation_flow_enabled_for(private)
+
+    # Whitelist + empty means no conversation applies.
+    plugin._detail_settings.update(
+        {
+            "proactive_scope_blacklist": False,
+            "conversation_flow_scope_blacklist": False,
+        }
+    )
+    assert not plugin._proactive_whitelist_allows(group)
+    assert not plugin._conversation_flow_enabled_for(private)
+
+    # A raw private user id must not match a group with the same sender id.
+    plugin._detail_settings.update(
+        {
+            "proactive_whitelist": ["user-1"],
+            "proactive_scope_blacklist": False,
+            "conversation_flow_scope": ["user-1"],
+            "conversation_flow_scope_blacklist": False,
+        }
+    )
+    assert not plugin._proactive_whitelist_allows(group)
+    assert not plugin._conversation_flow_enabled_for(group)
+    assert plugin._proactive_whitelist_allows(private)
+    assert plugin._conversation_flow_enabled_for(private)
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,172 @@
+{
+  "pipeline": {
+    "lock_order": true,
+    "steps": [
+      "summary(图片外显)",
+      "error(报错处理)",
+      "block(消息拦截)",
+      "at(解析艾特)",
+      "clean(文本清洗)",
+      "replace(文本替换)",
+      "typo(错字模拟)",
+      "tts(文转语音)",
+      "t2i(文转图片)",
+      "reply(智能引用)",
+      "forward(合并转发)",
+      "recall(自动撤回)",
+      "split(分段回复)"
+    ],
+    "llm_steps": [
+      "block(消息拦截)",
+      "at(解析艾特)",
+      "clean(文本清洗)",
+      "replace(文本替换)",
+      "typo(错字模拟)",
+      "tts(文转语音)",
+      "reply(智能引用)",
+      "split(分段回复)"
+    ]
+  },
+  "summary": {
+    "quotes": [
+      "你已被移出群聊",
+      "[群主女装图]",
+      "哎呦，你干嘛~",
+      "Ciallo～(∠・ω< )⌒☆"
+    ],
+    "quotes_files": [
+      "data/plugins/astrbot_plugin_outputpro/default_quotes.json"
+    ]
+  },
+  "error": {
+    "keywords": [
+      "请求失败",
+      "出现异常"
+    ],
+    "custom_msg": "",
+    "forward_umo": "admin"
+  },
+  "block": {
+    "timeout": 0,
+    "block_reread": true,
+    "block_words": [
+      "抱歉",
+      "您好",
+      "请稍后",
+      "隐私政策",
+      "作为AI助手",
+      "作为一个AI",
+      "我理解您的感受",
+      "让我来为您解释",
+      "根据相关法规",
+      "很抱歉给您带来不便",
+      "感谢您的理解",
+      "感谢您的耐心等待",
+      "为您带来的不便深表歉意",
+      "如有需要请随时联系",
+      "如果您还有其他问题",
+      "我将尽力为您提供帮助",
+      "希望我的回答对您有所帮助",
+      "该问题需要进一步核实",
+      "请您理解并配合",
+      "暂时无法提供相关信息",
+      "不支持该请求",
+      "不在支持范围内",
+      "该内容暂不可用",
+      "出于安全原因",
+      "出于合规要求",
+      "为保障您的账户安全",
+      "为了保护您的隐私",
+      "根据平台规则",
+      "根据系统检测",
+      "由系统自动生成"
+    ]
+  },
+  "at": {
+    "at_str": true,
+    "at_prob": 0.1
+  },
+  "clean": {
+    "text_threshold": 150,
+    "bracket": true,
+    "parenthesis": true,
+    "emotion_tag": true,
+    "emoji": true,
+    "lead": [
+      "print",
+      ":",
+      "："
+    ],
+    "tail": [
+      "。",
+      "."
+    ],
+    "punctuation": "[#%~]"
+  },
+  "replace": {
+    "words": [
+      "示例旧词1 示例新词1",
+      "示例旧词2"
+    ],
+    "default_new_word": "*"
+  },
+  "typo": {
+    "error_rate": 0.01,
+    "tone_error_rate": 0.1,
+    "word_replace_rate": 0.01,
+    "correction_append_prob": 0.5
+  },
+  "tts": {
+    "tts_provider_id": "",
+    "group_id": "",
+    "character_id": "lucy-voice-f36",
+    "threshold": 50,
+    "prob": 0.1
+  },
+  "t2i": {
+    "threshold": 150,
+    "pillowmd_style_dir": "data/plugins/astrbot_plugin_decision/outputpro/t2i_style",
+    "auto_page": true,
+    "clean_cache": true
+  },
+  "reply": {
+    "threshold": 1,
+    "include_at": false
+  },
+  "forward": {
+    "threshold": 150,
+    "node_name": ""
+  },
+  "recall": {
+    "keywords": [
+      "我是",
+      "我叫",
+      "我住在"
+    ],
+    "delay": 30
+  },
+  "split": {
+    "max_length": 200,
+    "max_count": 2,
+    "char_list": [
+      "。",
+      "？",
+      "\\n",
+      "，"
+    ],
+    "per_char_delay": 0.3,
+    "delay_scope_str": "1~16",
+    "show_typing": true,
+    "tail_punc": [
+      ".",
+      ",",
+      "，",
+      "。",
+      ";",
+      "；",
+      ":",
+      "：",
+      "、"
+    ]
+  }
+}
