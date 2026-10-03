@@ -941,15 +941,22 @@ class DecisionPlugin(Star):
         targets: list[tuple[str, str]] = []
         reply_to_id = ""
         try:
-            from astrbot.api.message_components import At, Reply
+            from astrbot.api.message_components import At, AtAll, Reply
 
             for component in event.get_messages():
+                # ``AtAll`` subclasses ``At`` in AstrBot.  It addresses the
+                # whole group, so it must never become a concrete dialogue
+                # target such as the literal ``all`` user ID.
+                if isinstance(component, AtAll):
+                    continue
                 if isinstance(component, At):
                     target_id = str(
                         getattr(component, "qq", None)
                         or getattr(component, "target", None)
                         or ""
                     ).strip()
+                    if target_id.lower() == "all":
+                        continue
                     if target_id:
                         target_name = str(
                             getattr(component, "name", None) or target_id

@@ -76,7 +76,10 @@ def _unique_targets(
     seen: set[str] = set()
     for raw_id, raw_name in targets:
         target_id = str(raw_id or "").strip()
-        if not target_id or target_id in seen:
+        # AstrBot represents @all as an ``AtAll`` component (a subclass of
+        # ``At``) and some adapters expose it as the literal target ID
+        # ``all``.  It addresses the group, never a concrete participant.
+        if not target_id or target_id.casefold() == "all" or target_id in seen:
             continue
         seen.add(target_id)
         target_name = str(raw_name or target_id).strip() or target_id

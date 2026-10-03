@@ -918,6 +918,14 @@ def test_dialogue_flow_prefers_explicit_bot_and_other_targets():
     assert result.target_name == "Bob"
     assert result.reason == "explicit_at_other"
 
+    # AstrBot's AtAll is represented as a target named ``all`` by some
+    # adapters; it addresses the group and must not become a user target.
+    group_mention = ProactiveRecord(
+        "Alice", "u1", "@all hi", at_targets=(("all", "全体成员"),), timestamp=100
+    )
+    result = infer_dialogue_target(group_mention, [], bot_id="bot-id", now=100)
+    assert result == DialogueInference(reason="default_group")
+
 
 def test_dialogue_flow_uses_reply_bot_aba_and_conservative_group_fallback():
     reply = ProactiveRecord("Alice", "u1", "thanks", reply_to_id="bot-id", timestamp=100)
