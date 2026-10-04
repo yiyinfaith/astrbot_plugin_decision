@@ -752,6 +752,7 @@ def test_public_schema_contains_only_global_settings_and_master_switches():
         "history_max_chars",
         "tools_subagents_decision_enabled",
         "proactive_reply_enabled",
+        "conversation_flow_enabled",
     }
     assert all("[" not in item.get("description", "") for item in schema.values())
     assert schema["tools_subagents_decision_enabled"]["default"] is True
@@ -813,9 +814,27 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     assert "subagent_decision_enabled" in page
     assert "routing-rules-table" in page
     assert "两类能力的 Jev 判断会合并为一次请求" in page
-    assert "对话流分析（识别说话对象）" in page
-    assert "conversation_flow_enabled" in page
+    assert "<h2>输入增强</h2>" in page
+    assert "conversation_flow_analysis_enabled" in page
     assert "conversation_flow_window" in page
+    for field in (
+        "outputList('summary','quotes_files')",
+        "outputConfig.error.custom_msg",
+        "outputConfig.block.block_reread",
+        "outputConfig.at.at_str",
+        "outputConfig.clean.punctuation",
+        "outputList('clean','lead')",
+        "outputList('replace','words')",
+        "outputConfig.typo.tone_error_rate",
+        "outputConfig.tts.character_id",
+        "outputConfig.t2i.pillowmd_style_dir",
+        "outputConfig.reply.threshold",
+        "outputConfig.forward.threshold",
+        "outputList('recall','keywords')",
+        "outputConfig.split.delay_scope_str",
+        "outputList('split','tail_punc')",
+    ):
+        assert field in page
 
 
 def test_proactive_details_are_page_only_and_excluded_from_public_schema():
@@ -829,7 +848,7 @@ def test_proactive_details_are_page_only_and_excluded_from_public_schema():
         "proactive_whitelist",
         "direct_reply_prefixes",
         "force_reply_when_summoned",
-        "conversation_flow_enabled",
+        "conversation_flow_analysis_enabled",
         "conversation_flow_window",
         "proactive_score_threshold",
         "observation_timeout_seconds",

@@ -35,7 +35,7 @@
       "Ciallo～(∠・ω< )⌒☆"
     ],
     "quotes_files": [
-      "data/plugins/astrbot_plugin_outputpro/default_quotes.json"
+      "data/plugins/astrbot_plugin_decision/outputboost/default_quotes.json"
     ]
   },
   "error": {
@@ -125,7 +125,7 @@
   },
   "t2i": {
     "threshold": 150,
-    "pillowmd_style_dir": "data/plugins/astrbot_plugin_decision/outputpro/t2i_style",
+    "pillowmd_style_dir": "data/plugins/astrbot_plugin_decision/outputboost/t2i_style",
     "auto_page": true,
     "clean_cache": true
   },

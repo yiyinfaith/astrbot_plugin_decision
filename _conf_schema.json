@@ -70,5 +70,11 @@
     "description": "主动对话",
     "hint": "只对白名单内的群聊和私聊启用主动对话判断。详细配置在插件 WebUI。",
     "default": false
+  },
+  "conversation_flow_enabled": {
+    "type": "bool",
+    "description": "对话流增强",
+    "hint": "控制输入增强和输出增强；详细配置在插件 WebUI。",
+    "default": true
   }
 }

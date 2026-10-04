@@ -81,7 +81,9 @@ PROACTIVE_PAGE_DEFAULTS: dict[str, Any] = {
     "dense_conversation_threshold": 30,
     "dense_conversation_window_seconds": 600.0,
     "min_participant_count": 2,
-    "conversation_flow_enabled": True,
+    # WebUI child switch for the input dialogue-flow analysis.  The native
+    # schema owns the module-level ``conversation_flow_enabled`` switch.
+    "conversation_flow_analysis_enabled": True,
     "conversation_flow_window": 8,
     # The input/output conversation-flow enhancement has its own scope.  A
     # blacklist with no entries intentionally means every conversation.
@@ -288,7 +290,10 @@ class DecisionPlugin(Star):
     async def _configure_output_runtime(self) -> None:
         """Enable the vendored output pipeline only when explicitly selected."""
 
-        enabled = self._bool("output_enhancement_enabled", False)
+        enabled = (
+            self._bool("conversation_flow_enabled", True)
+            and self._bool("output_enhancement_enabled", False)
+        )
         if not enabled:
             if self._output_runtime is not None:
                 await self._output_runtime.close()
@@ -364,7 +369,9 @@ class DecisionPlugin(Star):
             configured if isinstance(configured, Mapping) else {},
         )
         return {
-            "conversation_flow_enabled": self._bool("conversation_flow_enabled", True),
+            "conversation_flow_analysis_enabled": self._bool(
+                "conversation_flow_analysis_enabled", True
+            ),
             "conversation_flow_window": self._int("conversation_flow_window", 8),
             "conversation_flow_scope": [
                 str(item)
@@ -1230,11 +1237,15 @@ class DecisionPlugin(Star):
     def _conversation_flow_enabled_for(self, event: AstrMessageEvent) -> bool:
         """Return whether input/output dialogue enhancement applies here."""
 
-        return self._bool("conversation_flow_enabled", True) and self._scope_allows(
-            event,
-            "conversation_flow_scope",
-            "conversation_flow_scope_blacklist",
-            default_blacklist=True,
+        return (
+            self._bool("conversation_flow_enabled", True)
+            and self._bool("conversation_flow_analysis_enabled", True)
+            and self._scope_allows(
+                event,
+                "conversation_flow_scope",
+                "conversation_flow_scope_blacklist",
+                default_blacklist=True,
+            )
         )
 
     def _should_skip_proactive(self, event: AstrMessageEvent) -> bool:
@@ -1706,6 +1717,7 @@ class DecisionPlugin(Star):
                     "tools_subagents_decision_enabled", True
                 ),
                 "proactive_reply_enabled": self._bool("proactive_reply_enabled", False),
+                "conversation_flow_enabled": self._bool("conversation_flow_enabled", True),
                 "proactive": proactive,
                 "dialogue_enhancement": self._output_page_settings(),
             }
@@ -1774,7 +1786,7 @@ class DecisionPlugin(Star):
             return error_response("dialogue_enhancement must be an object", status_code=400)
         proactive_payload = dict(proactive_payload)
         for key in (
-            "conversation_flow_enabled",
+            "conversation_flow_analysis_enabled",
             "conversation_flow_window",
             "conversation_flow_scope",
             "conversation_flow_scope_blacklist",

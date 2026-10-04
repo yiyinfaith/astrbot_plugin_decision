@@ -117,6 +117,7 @@ def test_native_schema_contains_only_globals_and_module_switches(host):
         "history_max_chars",
         "tools_subagents_decision_enabled",
         "proactive_reply_enabled",
+        "conversation_flow_enabled",
     }
     assert not (host.schema.keys() & host.module.DETAIL_DEFAULTS.keys())
 
@@ -138,9 +139,9 @@ async def test_save_reload_keeps_native_config_clean_and_webui_settings_intact(h
         proactive={
             "proactive_whitelist": ["12345"],
             "cooldown_seconds": 25.0,
-            "conversation_flow_enabled": False,
             "conversation_flow_window": 35,
         },
+        dialogue_enhancement={"conversation_flow_analysis_enabled": False},
     )
     result = await plugin.page_save_settings()
     assert result["saved"] is True
@@ -162,7 +163,7 @@ async def test_save_reload_keeps_native_config_clean_and_webui_settings_intact(h
     assert settings["subagent_decision_enabled"] is True
     assert settings["proactive"]["proactive_whitelist"] == ["12345"]
     assert settings["proactive"]["cooldown_seconds"] == 25.0
-    assert settings["proactive"]["conversation_flow_enabled"] is False
+    assert settings["dialogue_enhancement"]["conversation_flow_analysis_enabled"] is False
     assert settings["proactive"]["conversation_flow_window"] == 30
     assert settings["always_keep_tools"] == ["jev_decide"]
     assert settings["always_keep_subagents"] == ["agent_alpha"]
@@ -267,7 +268,7 @@ async def test_dialogue_enhancement_scopes_and_output_pipeline_are_page_settings
         always_keep_subagents=[],
         always_keep_recommend_subagents=[],
         dialogue_enhancement={
-            "conversation_flow_enabled": True,
+            "conversation_flow_analysis_enabled": True,
             "conversation_flow_window": 10,
             "conversation_flow_scope": ["group-1"],
             "conversation_flow_scope_blacklist": False,
@@ -328,6 +329,12 @@ def test_scope_modes_have_explicit_empty_list_semantics_and_namespaces(host):
     )
     assert plugin._proactive_whitelist_allows(group)
     assert plugin._conversation_flow_enabled_for(private)
+
+    # The native module switch gates both the input analysis and output
+    # runtime, independently of the WebUI child switch.
+    host.config["conversation_flow_enabled"] = False
+    assert not plugin._conversation_flow_enabled_for(private)
+    host.config["conversation_flow_enabled"] = True
 
     # Whitelist + empty means no conversation applies.
     plugin._detail_settings.update(
