@@ -133,6 +133,13 @@ WebUI 分为“Tools/SubAgent 决策”“主动对话”“对话流增强”�
 
 当前默认值是：判断普通 Tools 开、过滤普通 Tools 开；判断 SubAgents 开、过滤 SubAgents 关。这个默认组合会过滤普通 Tools，但让 SubAgents 全量可见，同时仍利用 Jev 生成 SubAgent 推荐。
 
+整个 Tools/SubAgent 决策区域还有一个独立的会话范围黑白名单：
+
+- **黑名单模式（默认）**：名单内的群聊、私聊用户或完整 `unified_msg_origin` 不进行 Tools/SubAgent 决策；名单为空时全部应用。
+- **白名单模式**：只对名单内会话进行 Tools/SubAgent 决策；名单为空时全部不应用。
+
+范围不适用时，插件不会请求 Jev、不会过滤 ToolSet，也不会追加推荐提示词，AstrBot 会按原始能力集合继续处理请求。这个范围只控制 Tools/SubAgent 决策，不影响主动对话或对话流增强。
+
 ### Tools/SubAgent 决策
 
 每个普通 Tool 和 SubAgent 都有两个独立选项：
@@ -272,7 +279,7 @@ flowchart TD
 | 复读检测 | `3` 条 / `30` 秒 | 判断重复消息并更新熟悉阶段状态 |
 | 密集对话 | `30` 条 / `600` 秒 / `2` 人 | 判断多人高密度聊天并更新熟悉阶段状态 |
 
-输出增强的配置位于 WebUI 的“对话流增强 → 输出增强”区域。勾选输出阶梯后按内置顺序执行；关闭某一步即可跳过。样式目录默认使用 `data/plugins/astrbot_plugin_decision/outputboost/t2i_style`，运行时会优先复用服务器上已有的旧 OutputPro 样式目录。输出处理失败时自动保留原消息，不会阻断 AstrBot。
+输出增强的配置位于 WebUI 的“对话流增强 → 输出增强”区域。勾选输出阶梯后始终按内置顺序执行；用户只能启用或停用步骤，不能修改执行顺序。样式目录默认使用 `data/plugins/astrbot_plugin_decision/outputboost/t2i_style`，运行时会优先复用服务器上已有的旧 OutputPro 样式目录。输出处理失败时自动保留原消息，不会阻断 AstrBot。
 
 如果 AstrBot 原生 `provider_ltm_settings.active_reply.enable` 已开启，插件会关闭自己的 ambient 主动判断，避免两套主动回复机制重复触发。明确命令、前缀和原生唤醒仍由 AstrBot 正常处理。
 

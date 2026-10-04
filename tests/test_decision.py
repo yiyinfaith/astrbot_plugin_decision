@@ -812,6 +812,10 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     assert "always_keep_recommend_subagents" in page
     assert "tool_decision_enabled" in page
     assert "subagent_decision_enabled" in page
+    assert "tools_scope_blacklist" in page
+    assert "tools_scope" in page
+    assert "锁定内置顺序" not in page
+    assert "始终按内置顺序执行" in page
     assert "routing-rules-table" in page
     assert "两类能力的 Jev 判断会合并为一次请求" in page
     assert "<h2>输入增强</h2>" in page

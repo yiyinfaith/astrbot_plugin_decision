@@ -115,6 +115,12 @@ DETAIL_DEFAULTS: dict[str, Any] = {
     # be filtered from the manually kept set without making a Jev request.
     "tool_decision_enabled": True,
     "subagent_decision_enabled": True,
+    # One shared scope gates the complete Tools/SubAgent decision module.
+    # Blacklist mode with no entries preserves the historical default: apply
+    # the module to every conversation.  Switching to whitelist mode with an
+    # empty list intentionally disables it everywhere.
+    "tools_scope": [],
+    "tools_scope_blacklist": True,
     "tool_noul_threshold": DEFAULT_TOOL_NOUL_THRESHOLD,
     "jev_pre_prompt": DEFAULT_POLICY,
     "main_llm_post_prompt": DEFAULT_MAIN_LLM_POST_PROMPT,
@@ -368,6 +374,11 @@ class DecisionPlugin(Star):
             output_config_defaults(),
             configured if isinstance(configured, Mapping) else {},
         )
+        pipeline = merged.get("pipeline")
+        if not isinstance(pipeline, dict):
+            pipeline = {}
+            merged["pipeline"] = pipeline
+        pipeline["lock_order"] = True
         return {
             "conversation_flow_analysis_enabled": self._bool(
                 "conversation_flow_analysis_enabled", True
@@ -734,6 +745,8 @@ class DecisionPlugin(Star):
         if self._command_handler_matched(event):
             return
         if not self._bool("tools_subagents_decision_enabled", True):
+            return
+        if not self._tools_scope_allows(event):
             return
         tool_set = self._ensure_request_toolset(req)
         tool_filter_enabled = self._bool("tool_filter_enabled", True)
@@ -1162,7 +1175,7 @@ class DecisionPlugin(Star):
         ]
         return bool(aliases and any(alias in text for alias in aliases))
 
-    def _event_scope_candidates(self, event: AstrMessageEvent) -> set[str]:
+    def _event_scope_candidates(self, event: AstrMessageEvent | None) -> set[str]:
         """Collect stable IDs accepted by both scope editors."""
 
         candidates: set[str] = set()
@@ -1200,7 +1213,7 @@ class DecisionPlugin(Star):
 
     def _scope_allows(
         self,
-        event: AstrMessageEvent,
+        event: AstrMessageEvent | None,
         values_key: str,
         blacklist_key: str,
         *,
@@ -1233,6 +1246,24 @@ class DecisionPlugin(Star):
             "proactive_scope_blacklist",
             default_blacklist=False,
         )
+
+    def _tools_scope_allows(self, event: AstrMessageEvent | None) -> bool:
+        """Apply the shared Tools/SubAgent decision black/white list."""
+
+        return self._scope_allows(
+            event,
+            "tools_scope",
+            "tools_scope_blacklist",
+            default_blacklist=True,
+        )
+
+    def _configured_scope_values(self, key: str) -> list[str]:
+        """Return a normalized scope list for WebUI responses."""
+
+        configured = self._setting(key, [])
+        if not isinstance(configured, (list, tuple, set)):
+            return []
+        return [str(item).strip() for item in configured if str(item).strip()]
 
     def _conversation_flow_enabled_for(self, event: AstrMessageEvent) -> bool:
         """Return whether input/output dialogue enhancement applies here."""
@@ -1710,6 +1741,8 @@ class DecisionPlugin(Star):
                 "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
                 "tool_decision_enabled": self._bool("tool_decision_enabled", True),
                 "subagent_decision_enabled": self._bool("subagent_decision_enabled", True),
+                "tools_scope": self._configured_scope_values("tools_scope"),
+                "tools_scope_blacklist": self._bool("tools_scope_blacklist", True),
                 "tool_noul_threshold": self._float(
                     "tool_noul_threshold", DEFAULT_TOOL_NOUL_THRESHOLD
                 ),
@@ -1757,6 +1790,8 @@ class DecisionPlugin(Star):
         subagent_filter_enabled = payload.get("subagent_filter_enabled")
         tool_decision_enabled = payload.get("tool_decision_enabled")
         subagent_decision_enabled = payload.get("subagent_decision_enabled")
+        tools_scope = payload.get("tools_scope")
+        tools_scope_blacklist = payload.get("tools_scope_blacklist")
         tool_noul_threshold = payload.get("tool_noul_threshold")
         if jev_pre_prompt is not None and not isinstance(jev_pre_prompt, str):
             return error_response("jev_pre_prompt must be a string", status_code=400)
@@ -1772,6 +1807,13 @@ class DecisionPlugin(Star):
             subagent_decision_enabled, bool
         ):
             return error_response("subagent_decision_enabled must be a boolean", status_code=400)
+        if tools_scope is not None and (
+            not isinstance(tools_scope, list)
+            or any(not isinstance(item, str) for item in tools_scope)
+        ):
+            return error_response("tools_scope must be a string list", status_code=400)
+        if tools_scope_blacklist is not None and not isinstance(tools_scope_blacklist, bool):
+            return error_response("tools_scope_blacklist must be a boolean", status_code=400)
         if tool_noul_threshold is not None and (
             isinstance(tool_noul_threshold, bool)
             or not isinstance(tool_noul_threshold, (int, float))
@@ -1901,6 +1943,12 @@ class DecisionPlugin(Star):
             detail_values["tool_decision_enabled"] = tool_decision_enabled
         if subagent_decision_enabled is not None:
             detail_values["subagent_decision_enabled"] = subagent_decision_enabled
+        if tools_scope is not None:
+            detail_values["tools_scope"] = list(
+                dict.fromkeys(item.strip() for item in tools_scope if item.strip())
+            )[:500]
+        if tools_scope_blacklist is not None:
+            detail_values["tools_scope_blacklist"] = tools_scope_blacklist
         if jev_pre_prompt is not None:
             detail_values["jev_pre_prompt"] = jev_pre_prompt[:50000]
         if main_llm_post_prompt is not None:
@@ -1916,12 +1964,27 @@ class DecisionPlugin(Star):
             )[:500]
         if output_scope_blacklist is not None:
             detail_values["output_scope_blacklist"] = output_scope_blacklist
-        if output_pipeline is not None:
-            from .decision.outputpro_runtime import _deep_merge, output_config_defaults
+        from .decision.outputpro_runtime import _deep_merge, output_config_defaults
 
+        if output_pipeline is not None:
             detail_values["output_pipeline"] = _deep_merge(
                 output_config_defaults(), dict(output_pipeline)
             )
+        # The output pipeline has one built-in execution order.  Keep the
+        # legacy field for schema compatibility, but never persist a
+        # user-editable false value, including when the current save payload
+        # does not include output settings.
+        configured_output = detail_values.get("output_pipeline")
+        normalized_output = _deep_merge(
+            output_config_defaults(),
+            dict(configured_output) if isinstance(configured_output, Mapping) else {},
+        )
+        output_pipeline_node = normalized_output.get("pipeline")
+        if not isinstance(output_pipeline_node, dict):
+            output_pipeline_node = {}
+            normalized_output["pipeline"] = output_pipeline_node
+        output_pipeline_node["lock_order"] = True
+        detail_values["output_pipeline"] = normalized_output
         # Commit first: a failed disk write must not change the running policy
         # or prune proactive history while reporting a failed save to the UI.
         try:
@@ -1945,6 +2008,8 @@ class DecisionPlugin(Star):
                 "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
                 "tool_decision_enabled": self._bool("tool_decision_enabled", True),
                 "subagent_decision_enabled": self._bool("subagent_decision_enabled", True),
+                "tools_scope": self._configured_scope_values("tools_scope"),
+                "tools_scope_blacklist": self._bool("tools_scope_blacklist", True),
                 "tool_noul_threshold": self._float(
                     "tool_noul_threshold", DEFAULT_TOOL_NOUL_THRESHOLD
                 ),

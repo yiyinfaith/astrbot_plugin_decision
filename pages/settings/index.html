@@ -317,6 +317,8 @@
             </div>
             <div class="glass-card">
               <div class="card-heading"><div><div class="section-kicker">Decision Rules</div><h2>判断与过滤规则</h2><p>普通 Tools 与 SubAgents 使用相同的四种组合规则，但各自独立开关。</p></div></div>
+              <div class="scope-mode"><div><strong>{{ form.tools_scope_blacklist ? 'Tools/SubAgent 决策黑名单' : 'Tools/SubAgent 决策白名单' }}</strong><small>{{ form.tools_scope_blacklist ? '名单内不进行 Tools/SubAgent 决策；名单为空时全部应用。' : '只对名单内会话进行 Tools/SubAgent 决策；名单为空时全部不应用。' }}</small></div><button class="scope-toggle" type="button" @click="form.tools_scope_blacklist = !form.tools_scope_blacklist">{{ form.tools_scope_blacklist ? '黑名单' : '白名单' }}</button></div>
+              <div class="field"><label>{{ form.tools_scope_blacklist ? '不应用 Tools/SubAgent 决策的会话' : '应用 Tools/SubAgent 决策的会话' }} <span>每行一个群聊 ID、私聊用户 ID 或 unified_msg_origin</span></label><textarea v-model="form.tools_scope" class="list-editor" placeholder="群聊 ID\n私聊用户 ID"></textarea></div>
               <div class="switch-row"><div class="switch-copy"><strong>判断普通 Tools</strong><small>开启后把普通 Tools 交给 Jev 逐项判断；关闭后不请求普通 Tools。</small></div><label class="switch"><input v-model="form.tool_decision_enabled" type="checkbox"><span class="switch-track"></span></label></div>
               <div class="switch-row"><div class="switch-copy"><strong>过滤普通 Tools</strong><small>开启后主 LLM 只看到 Jev 选中项与始终保留项；关闭后全量保留。</small></div><label class="switch"><input v-model="form.tool_filter_enabled" type="checkbox"><span class="switch-track"></span></label></div>
               <div class="switch-row"><div class="switch-copy"><strong>判断 SubAgents</strong><small>开启后把 SubAgents 交给 Jev 逐项判断；关闭后不请求 SubAgents。</small></div><label class="switch"><input v-model="form.subagent_decision_enabled" type="checkbox"><span class="switch-track"></span></label></div>
@@ -367,9 +369,8 @@
             </div>
           </div>
           <div class="glass-card output-config-card">
-            <div class="card-heading"><div><div class="section-kicker">Output Pipeline</div><h2>输出阶梯</h2><p>按顺序执行；关闭某一步即可跳过。只有勾选“仅 LLM”对应步骤时才限制到模型回复。</p></div></div>
+            <div class="card-heading"><div><div class="section-kicker">Output Pipeline</div><h2>输出阶梯</h2><p>始终按内置顺序执行；关闭某一步即可跳过。只有勾选“仅 LLM”对应步骤时才限制到模型回复。</p></div></div>
             <div class="output-step-grid"><div v-for="step in outputStepOptions" :key="step.key" class="output-step"><label class="output-step-main"><input type="checkbox" :checked="outputStepEnabled(step.key)" @change="toggleOutputStep(step.key)"><span><strong>{{ step.label }}</strong><small>{{ step.hint }}</small></span></label><label class="output-llm-only"><input type="checkbox" :checked="outputLlmStepEnabled(step.key)" @change="toggleOutputLlmStep(step.key)">仅 LLM</label></div></div>
-            <div class="switch-row"><div class="switch-copy"><strong>锁定内置顺序</strong><small>开启时按内置推荐顺序执行；关闭后仍按当前顺序列表。</small></div><label class="switch"><input v-model="form.dialogue_enhancement.output_pipeline.pipeline.lock_order" type="checkbox"><span class="switch-track"></span></label></div>
             <div class="output-config-groups">
               <section class="output-config-group"><h3>图片外显与报错</h3><div class="two-col">
                 <div class="field"><label>外显金句 <span>每行一句</span></label><textarea :value="outputList('summary','quotes')" @input="setOutputList('summary','quotes',$event.target.value)" class="list-editor"></textarea></div>
@@ -551,6 +552,8 @@
               subagent_decision_enabled: true,
               tool_filter_enabled: true,
               subagent_filter_enabled: false,
+              tools_scope: '',
+              tools_scope_blacklist: true,
               tool_noul_threshold: TOOL_THRESHOLD_DEFAULT,
               jev_pre_prompt: DEFAULT_JEV_PROMPT,
               main_llm_post_prompt: DEFAULT_MAIN_PROMPT,
@@ -694,7 +697,7 @@
               const dialogue = JSON.parse(JSON.stringify(this.form.dialogue_enhancement));
               dialogue.conversation_flow_scope = this.scopeList(dialogue.conversation_flow_scope);
               dialogue.output_scope = this.scopeList(dialogue.output_scope);
-              const body = {always_keep_tools: Array.from(this.selectedKeep, String), always_keep_recommend_tools: Array.from(this.selectedRecommend, String), always_keep_subagents: Array.from(this.selectedKeepSubagents, String), always_keep_recommend_subagents: Array.from(this.selectedRecommendSubagents, String), jev_pre_prompt: String(this.form.jev_pre_prompt ?? ''), main_llm_post_prompt: String(this.form.main_llm_post_prompt ?? ''), tool_decision_enabled: this.form.tool_decision_enabled === true, subagent_decision_enabled: this.form.subagent_decision_enabled === true, tool_filter_enabled: this.form.tool_filter_enabled === true, subagent_filter_enabled: this.form.subagent_filter_enabled === true, tool_noul_threshold: numberOr(this.form.tool_noul_threshold, TOOL_THRESHOLD_DEFAULT), proactive, dialogue_enhancement: dialogue};
+              const body = {always_keep_tools: Array.from(this.selectedKeep, String), always_keep_recommend_tools: Array.from(this.selectedRecommend, String), always_keep_subagents: Array.from(this.selectedKeepSubagents, String), always_keep_recommend_subagents: Array.from(this.selectedRecommendSubagents, String), jev_pre_prompt: String(this.form.jev_pre_prompt ?? ''), main_llm_post_prompt: String(this.form.main_llm_post_prompt ?? ''), tool_decision_enabled: this.form.tool_decision_enabled === true, subagent_decision_enabled: this.form.subagent_decision_enabled === true, tool_filter_enabled: this.form.tool_filter_enabled === true, subagent_filter_enabled: this.form.subagent_filter_enabled === true, tools_scope: this.scopeList(this.form.tools_scope), tools_scope_blacklist: this.form.tools_scope_blacklist === true, tool_noul_threshold: numberOr(this.form.tool_noul_threshold, TOOL_THRESHOLD_DEFAULT), proactive, dialogue_enhancement: dialogue};
               const result = payloadOf(await activeBridge.apiPost('settings/save', JSON.parse(JSON.stringify(body))));
               if (result.saved !== true) throw new Error('服务器未确认保存成功');
               if (Array.isArray(result.always_keep_tools)) this.selectedKeep = result.always_keep_tools.map(String);
@@ -716,7 +719,7 @@
               this.selectedRecommend = Array.isArray(settings.always_keep_recommend_tools) ? settings.always_keep_recommend_tools.map(String) : [];
               this.selectedKeepSubagents = Array.isArray(settings.always_keep_subagents) ? settings.always_keep_subagents.map(String) : [];
               this.selectedRecommendSubagents = Array.isArray(settings.always_keep_recommend_subagents) ? settings.always_keep_recommend_subagents.map(String) : [];
-              this.form.tool_decision_enabled = settings.tool_decision_enabled !== false; this.form.subagent_decision_enabled = settings.subagent_decision_enabled !== false; this.form.tool_filter_enabled = settings.tool_filter_enabled !== false; this.form.subagent_filter_enabled = settings.subagent_filter_enabled === true; this.form.tool_noul_threshold = Number.isFinite(Number(settings.tool_noul_threshold)) ? Number(settings.tool_noul_threshold) : TOOL_THRESHOLD_DEFAULT;
+              this.form.tool_decision_enabled = settings.tool_decision_enabled !== false; this.form.subagent_decision_enabled = settings.subagent_decision_enabled !== false; this.form.tool_filter_enabled = settings.tool_filter_enabled !== false; this.form.subagent_filter_enabled = settings.subagent_filter_enabled === true; this.form.tools_scope = (Array.isArray(settings.tools_scope) ? settings.tools_scope : []).map(String).join('\n'); this.form.tools_scope_blacklist = settings.tools_scope_blacklist !== false; this.form.tool_noul_threshold = Number.isFinite(Number(settings.tool_noul_threshold)) ? Number(settings.tool_noul_threshold) : TOOL_THRESHOLD_DEFAULT;
               this.form.jev_pre_prompt = hasOwn(settings, 'jev_pre_prompt') ? String(settings.jev_pre_prompt ?? '') : DEFAULT_JEV_PROMPT; this.form.main_llm_post_prompt = hasOwn(settings, 'main_llm_post_prompt') ? String(settings.main_llm_post_prompt ?? '') : DEFAULT_MAIN_PROMPT;
               this.form.proactive = {...defaults, ...(settings.proactive || {})}; this.form.proactive.proactive_whitelist = (settings.proactive?.proactive_whitelist || []).join('\n'); this.form.proactive.direct_reply_prefixes = (settings.proactive?.direct_reply_prefixes || ['/', '@']).join(', ');
               const incoming = settings.dialogue_enhancement || {}; this.form.dialogue_enhancement = {...this.form.dialogue_enhancement, ...incoming}; this.form.dialogue_enhancement.conversation_flow_scope = (incoming.conversation_flow_scope || []).join('\n'); this.form.dialogue_enhancement.output_scope = (incoming.output_scope || []).join('\n'); if (incoming.output_pipeline) this.form.dialogue_enhancement.output_pipeline = incoming.output_pipeline;

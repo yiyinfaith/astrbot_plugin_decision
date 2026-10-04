@@ -63,6 +63,15 @@ class OutputPipelineRuntime:
             from .outputpro.core.pipeline import Pipeline
 
             payload = _deep_merge(output_config_defaults(), config)
+            # Output steps always follow the bundled registry order.  The
+            # WebUI only controls which steps are enabled; an old settings
+            # file may still contain ``lock_order: false``, so normalize it
+            # after merging user data as well as at the defaults layer.
+            pipeline = payload.get("pipeline")
+            if not isinstance(pipeline, dict):
+                pipeline = {}
+                payload["pipeline"] = pipeline
+            pipeline["lock_order"] = True
             # Keep the bundled sample quote file in this plugin's data
             # directory, while preserving user-supplied quote files.  The
             # two known sample paths from OutputPro are aliases for the local

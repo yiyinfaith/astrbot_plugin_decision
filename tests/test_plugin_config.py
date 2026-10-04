@@ -295,6 +295,83 @@ async def test_dialogue_enhancement_scopes_and_output_pipeline_are_page_settings
     assert plugin._bool("output_enhancement_enabled", False) is True
 
 
+@pytest.mark.asyncio
+async def test_tools_scope_is_page_only_and_persists_with_empty_list_semantics(host):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    host.body.update(
+        always_keep_tools=[],
+        always_keep_recommend_tools=[],
+        always_keep_subagents=[],
+        always_keep_recommend_subagents=[],
+        tools_scope=["group-1", "group-1", ""],
+        tools_scope_blacklist=False,
+    )
+    result = await plugin.page_save_settings()
+    assert result["saved"] is True
+    assert plugin._detail_settings["tools_scope"] == ["group-1"]
+    assert plugin._detail_settings["tools_scope_blacklist"] is False
+    assert (await plugin.page_settings())["tools_scope"] == ["group-1"]
+    assert (await plugin.page_settings())["tools_scope_blacklist"] is False
+    # A whitelist only applies to an explicitly matching group.
+    matching = SimpleNamespace(
+        unified_msg_origin="qq:GroupMessage:group-1",
+        get_message_type=lambda: 1,
+        get_group_id=lambda: "group-1",
+    )
+    other = SimpleNamespace(
+        unified_msg_origin="qq:GroupMessage:group-2",
+        get_message_type=lambda: 1,
+        get_group_id=lambda: "group-2",
+    )
+    assert plugin._tools_scope_allows(matching)
+    assert not plugin._tools_scope_allows(other)
+
+    # Empty whitelist disables the module everywhere; empty blacklist enables
+    # it everywhere, matching the WebUI copy.
+    plugin._detail_settings.update({"tools_scope": [], "tools_scope_blacklist": False})
+    assert not plugin._tools_scope_allows(matching)
+    plugin._detail_settings["tools_scope_blacklist"] = True
+    assert plugin._tools_scope_allows(other)
+
+
+@pytest.mark.asyncio
+async def test_tools_scope_bypass_keeps_request_untouched_and_skips_jev(host, monkeypatch):
+    manager = host.context.get_llm_tool_manager()
+    ordinary = SimpleNamespace(name="ordinary_tool", description="ordinary", active=True)
+    manager.func_list.append(ordinary)
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    plugin._detail_settings.update(
+        {
+            "tools_scope": ["blocked-group"],
+            "tools_scope_blacklist": True,
+            "always_keep_tools": [],
+            "always_keep_tools_customized": True,
+        }
+    )
+    evaluate = AsyncMock(side_effect=AssertionError("out-of-scope must not call Jev"))
+    monkeypatch.setattr(plugin, "_evaluate", evaluate)
+    toolset = SimpleNamespace(tools=[ordinary], get_tool=lambda name: ordinary if name == ordinary.name else None)
+    req = SimpleNamespace(func_tool=toolset, system_prompt="persona")
+    event = SimpleNamespace(
+        unified_msg_origin="qq:GroupMessage:blocked-group",
+        get_message_type=lambda: 1,
+        get_group_id=lambda: "blocked-group",
+        get_extra=lambda key, default=None: default,
+    )
+
+    await plugin.filter_tools_before_llm(event, req)
+
+    assert req.func_tool.tools == [ordinary]
+    assert req.system_prompt == "persona"
+    evaluate.assert_not_awaited()
+
+
+def test_output_pipeline_always_reports_and_normalizes_builtin_order(host):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    plugin._detail_settings["output_pipeline"] = {"pipeline": {"lock_order": False}}
+    assert plugin._output_page_settings()["output_pipeline"]["pipeline"]["lock_order"] is True
+
+
 def test_path_fallback_uses_astrbot_data_directory(host, monkeypatch, tmp_path):
     plugin_directory = tmp_path / "plugin_installation"
     plugin_directory.mkdir()
