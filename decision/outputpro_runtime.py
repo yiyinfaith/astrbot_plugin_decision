@@ -63,17 +63,30 @@ class OutputPipelineRuntime:
             from .outputpro.core.pipeline import Pipeline
 
             payload = _deep_merge(output_config_defaults(), config)
-            # The old plugin's sample path points at its own installation.  A
-            # merged plugin must never write into another plugin's directory.
-            # Always keep the migrated quote list in this plugin's data
-            # directory.  ``outputpro_defaults.json`` contains the old
-            # OutputPro installation path, so ``setdefault`` would leave that
-            # path untouched whenever the defaults were loaded first.
+            # Keep the bundled sample quote file in this plugin's data
+            # directory, while preserving user-supplied quote files.  The
+            # two known sample paths from OutputPro are aliases for the local
+            # copy; arbitrary paths entered in the WebUI remain usable.
             summary = payload.get("summary")
             if not isinstance(summary, dict):
                 summary = {}
                 payload["summary"] = summary
-            summary["quotes_files"] = [str(self.data_dir / "default_quotes.json")]
+            local_quotes = self.data_dir / "default_quotes.json"
+            configured_quotes = summary.get("quotes_files")
+            quote_files: list[str] = []
+            if isinstance(configured_quotes, list):
+                for item in configured_quotes:
+                    value = str(item or "").strip()
+                    if not value:
+                        continue
+                    normalized = value.replace("\\", "/")
+                    if normalized in {
+                        "data/plugins/astrbot_plugin_outputpro/default_quotes.json",
+                        "data/plugins/astrbot_plugin_decision/outputboost/default_quotes.json",
+                    }:
+                        value = str(local_quotes)
+                    quote_files.append(value)
+            summary["quotes_files"] = quote_files or [str(local_quotes)]
             t2i = payload.get("t2i")
             if isinstance(t2i, dict):
                 configured_style = str(t2i.get("pillowmd_style_dir", "") or "").strip()
