@@ -200,6 +200,6 @@ class ForwardStep(BaseStep):
                 if success:
                     ctx.event.stop_event()
                     ctx.chain.clear()
-                    return StepResult(msg="已使用 Telegram 折叠引用发送")
+                    return StepResult(abort=True, msg="已使用 Telegram 折叠引用发送")
 
         return StepResult()

@@ -1010,6 +1010,14 @@ def test_proactive_cooldown_and_window():
     assert not state.allow_reply("disabled", cooldown_seconds=0, window_seconds=600, max_replies=0)
 
 
+def test_proactive_cancel_reply_releases_unqueued_slot():
+    state = ProactiveState()
+    assert state.allow_reply("g", cooldown_seconds=60, window_seconds=600, max_replies=1)
+    state.cancel_reply("g")
+    assert not state.has_pending_reply("g")
+    assert state.allow_reply("g", cooldown_seconds=60, window_seconds=600, max_replies=1)
+
+
 def test_proactive_analysis_cooldown_does_not_drop_new_history():
     state = ProactiveState(max_messages=4)
     state.add("g", ProactiveRecord("Alice", "1", "first"))

@@ -31,7 +31,8 @@ class T2IStep(BaseStep):
 
     async def handle(self, ctx: OutContext) -> StepResult:
         if (
-            isinstance(ctx.chain[-1], Plain)
+            ctx.chain
+            and isinstance(ctx.chain[-1], Plain)
             and len(ctx.chain[-1].text) > self.cfg.threshold
         ):
             style = self.style or await self._load_style()

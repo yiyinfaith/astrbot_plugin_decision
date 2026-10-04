@@ -445,14 +445,29 @@ class DecisionPlugin(Star):
 
         manager = self.context.get_llm_tool_manager()
         iterator = getattr(manager, "iter_builtin_tools", None)
-        if not callable(iterator):
-            return []
-        try:
-            values = iterator()
-            return list(values.values()) if isinstance(values, Mapping) else list(values)
-        except (KeyError, RuntimeError, TypeError, ValueError):
-            logger.debug("Decision Engine could not enumerate AstrBot builtin tools.")
-            return []
+        if callable(iterator):
+            try:
+                values = iterator()
+                enumerated = list(values.values()) if isinstance(values, Mapping) else list(values)
+                if enumerated:
+                    return enumerated
+            except (KeyError, RuntimeError, TypeError, ValueError):
+                logger.debug("Decision Engine could not enumerate AstrBot builtin tools.")
+
+        # AstrBot 4.28.x keeps builtin and plugin tools in the same
+        # ``func_list`` and identifies their owner through
+        # ``handler_module_path``.  There is no public iterator in that
+        # version, so use the stable reserved module prefix as a fallback.
+        return [tool for tool in self._manager_tool_objects() if self._is_builtin_tool(tool)]
+
+    @staticmethod
+    def _is_builtin_tool(tool: Any) -> bool:
+        """Return whether a tool belongs to AstrBot's reserved builtin stars."""
+
+        module_path = str(getattr(tool, "handler_module_path", "") or "").strip()
+        return module_path == "astrbot.builtin_stars" or module_path.startswith(
+            "astrbot.builtin_stars."
+        )
 
     def _manager_tool_objects(self) -> list[Any]:
         """Normalize AstrBot tool-manager collections across supported versions."""
@@ -502,7 +517,7 @@ class DecisionPlugin(Star):
 
         if getattr(tool, "name", None) == DECISION_TOOL_NAME:
             return PLUGIN_DISPLAY_NAME
-        if builtin:
+        if builtin or self._is_builtin_tool(tool):
             return "Astrbot内置工具"
         mcp_server = str(getattr(tool, "mcp_server_name", "") or "").strip()
         if mcp_server:
@@ -756,7 +771,9 @@ class DecisionPlugin(Star):
         original = list(tool_set.tools)
         if not original:
             return
-        handoffs = [tool for tool in original if is_handoff_tool(tool)]
+        handoffs = [
+            tool for tool in original if is_handoff_tool(tool) and tool_is_active(tool)
+        ]
         ordinary = [
             tool
             for tool in original
@@ -873,17 +890,28 @@ class DecisionPlugin(Star):
                 question_to_tool,
                 subagent_question_to_name,
             )
-            results = await asyncio.gather(
-                *(
-                    self._evaluate(state=state, questions=batch_questions)
-                    for state, batch_questions in batches
-                )
-            )
+            tasks = [
+                asyncio.create_task(self._evaluate(state=state, questions=batch_questions))
+                for state, batch_questions in batches
+            ]
+            try:
+                results = await asyncio.gather(*tasks)
+            except BaseException:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
         except Exception as exc:
             # Tool filtering is deliberately fail-open: leave the original
             # request untouched. Respect an explicit decision-tool opt-out.
             logger.warning("Decision Engine tool filter unavailable: %s", _safe_error(exc))
-            if DECISION_TOOL_NAME not in always_keep:
+            # When ordinary Tool filtering is disabled, the whole ordinary
+            # category is pass-through even if Jev itself is unavailable.
+            # Keep ``jev_decide`` in that case just as the normal routing path
+            # does; remove it only when filtering is actually enabled and the
+            # user did not select Always Keep.
+            if tool_filter_enabled and DECISION_TOOL_NAME not in always_keep:
                 req.func_tool.tools = [
                     tool
                     for tool in tool_set.tools
@@ -1425,7 +1453,14 @@ class DecisionPlugin(Star):
                     self.proactive.mark_analysis(
                         session,
                         success=False,
-                        no_reply_cooldown=self._float("retry_backoff_seconds", 0.0),
+                        # Retry backoff controls the gap between transport
+                        # attempts inside one Jev request.  Once all attempts
+                        # fail, use the proactive analysis interval instead
+                        # of zero so an API outage cannot trigger one new
+                        # request for every incoming message.
+                        no_reply_cooldown=self._float(
+                            "no_reply_cooldown_seconds", 3.0
+                        ),
                     )
                     logger.warning(
                         "Decision Engine proactive check closed after failure: %s", _safe_error(exc)
@@ -1486,9 +1521,14 @@ class DecisionPlugin(Star):
                     session, cid
                 )
                 if not conversation:
-                    self.proactive.mark_reply_finished(session)
+                    self.proactive.cancel_reply(session)
                     return
                 event.is_at_or_wake_command = True
+                # This request is already being sent through the handler's
+                # ProviderRequest path.  Mark it as consumed so AstrBot's
+                # ProcessStage does not issue a second native LLM request
+                # merely because the event is also marked as awakened.
+                event.should_call_llm(True)
                 yield event.request_llm(
                     prompt=text,
                     # Continue AstrBot's native conversation so persona and
@@ -1497,7 +1537,7 @@ class DecisionPlugin(Star):
                     conversation=conversation,
                 )
             except Exception as exc:
-                self.proactive.mark_reply_finished(session)
+                self.proactive.cancel_reply(session)
                 logger.debug(
                     "Decision Engine proactive request was not queued: %s", _safe_error(exc)
                 )
@@ -1510,11 +1550,15 @@ class DecisionPlugin(Star):
         """Collect the small amount of input state required by OutputPro."""
 
         runtime = self._output_runtime
-        if runtime is None or not self._scope_allows(
-            event,
-            "output_scope",
-            "output_scope_blacklist",
-            default_blacklist=True,
+        if (
+            runtime is None
+            or not self._bool("conversation_flow_enabled", True)
+            or not self._scope_allows(
+                event,
+                "output_scope",
+                "output_scope_blacklist",
+                default_blacklist=True,
+            )
         ):
             return
         await runtime.prepare_message(event)
@@ -1533,11 +1577,15 @@ class DecisionPlugin(Star):
         """
 
         runtime = self._output_runtime
-        if runtime is None or not self._scope_allows(
-            event,
-            "output_scope",
-            "output_scope_blacklist",
-            default_blacklist=True,
+        if (
+            runtime is None
+            or not self._bool("conversation_flow_enabled", True)
+            or not self._scope_allows(
+                event,
+                "output_scope",
+                "output_scope_blacklist",
+                default_blacklist=True,
+            )
         ):
             return
         await runtime.run(event)

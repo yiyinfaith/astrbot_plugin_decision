@@ -20,6 +20,20 @@ class _MixedQuestionTypeError(DecisionProviderError):
     """The endpoint cannot currently combine Noul with Choice/Score."""
 
 
+async def _gather_cancel_on_error(*awaitables):
+    """Gather parallel provider calls without leaving failed siblings running."""
+
+    tasks = [asyncio.create_task(awaitable) for awaitable in awaitables]
+    try:
+        return await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
 class SystemOneProvider(DecisionProvider):
     """Small async HTTP client for the TypeSafe-compatible SystemOne endpoint."""
 
@@ -190,7 +204,7 @@ class SystemOneProvider(DecisionProvider):
                 if len(chunk_items) <= 1:
                     raise
                 midpoint = max(1, len(chunk_items) // 2)
-                left, right = await asyncio.gather(
+                left, right = await _gather_cancel_on_error(
                     evaluate_chunk(chunk_items[:midpoint]),
                     evaluate_chunk(chunk_items[midpoint:]),
                 )
@@ -223,7 +237,9 @@ class SystemOneProvider(DecisionProvider):
         initial_chunks = [
             items[i : i + self.chunk_size] for i in range(0, len(items), self.chunk_size)
         ]
-        results = await asyncio.gather(*(evaluate_chunk(chunk) for chunk in initial_chunks))
+        results = await _gather_cancel_on_error(
+            *(evaluate_chunk(chunk) for chunk in initial_chunks)
+        )
         merged: dict[str, dict[str, Any]] = {}
         usage: dict[str, Any] = {}
         latencies: list[float] = []

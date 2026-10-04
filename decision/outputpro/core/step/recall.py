@@ -126,6 +126,7 @@ class RecallStep(BaseStep):
 
                 ctx.chain.clear()
                 return StepResult(
+                    abort=True,
                     msg=f"已启动撤回任务，将在 {self.cfg.delay} 秒后撤回消息"
                 )
 
@@ -156,6 +157,7 @@ class RecallStep(BaseStep):
                 ctx.event.stop_event()
                 ctx.chain.clear()
                 return StepResult(
+                    abort=True,
                     msg=f"已启动 Telegram 撤回任务，将在 {self.cfg.delay} 秒后撤回消息"
                 )
             except Exception as e:

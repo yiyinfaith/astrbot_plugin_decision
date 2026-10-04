@@ -372,6 +372,93 @@ def test_output_pipeline_always_reports_and_normalizes_builtin_order(host):
     assert plugin._output_page_settings()["output_pipeline"]["pipeline"]["lock_order"] is True
 
 
+@pytest.mark.asyncio
+async def test_builtin_tools_fall_back_to_reserved_module_prefix(host):
+    builtin = SimpleNamespace(
+        name="builtin_search",
+        description="search",
+        active=True,
+        handler_module_path="astrbot.builtin_stars.web_searcher.main",
+    )
+    host.context.get_llm_tool_manager().func_list.append(builtin)
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+
+    assert plugin._builtin_tool_names() == {builtin.name}
+    listed = await plugin.page_tools()
+    item = next(item for item in listed["tools"] if item["name"] == builtin.name)
+    assert item["builtin"] is True
+    assert item["origin_display"] == "Astrbot内置工具"
+
+
+@pytest.mark.asyncio
+async def test_conversation_flow_global_switch_disables_existing_output_runtime(host):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    runtime = SimpleNamespace(prepare_message=AsyncMock(), run=AsyncMock())
+    plugin._output_runtime = runtime
+    host.config["conversation_flow_enabled"] = False
+    event = SimpleNamespace(
+        unified_msg_origin="qq:FriendMessage:user-1",
+        get_group_id=lambda: "",
+        get_sender_id=lambda: "user-1",
+    )
+
+    await plugin.output_enhancement_message(event)
+    await plugin.output_enhancement(event)
+
+    runtime.prepare_message.assert_not_awaited()
+    runtime.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_proactive_provider_request_marks_event_as_consumed(host, monkeypatch):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    host.config["proactive_reply_enabled"] = True
+    plugin._detail_settings["proactive_scope_blacklist"] = True
+    plugin.provider = object()
+    plugin._ready = True
+    host.context.conversation_manager = SimpleNamespace(
+        get_curr_conversation_id=AsyncMock(return_value="conversation-1"),
+        get_conversation=AsyncMock(return_value=SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        plugin,
+        "_evaluate",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                answers={
+                    "is_addressing_bot": {"noul": 1.0},
+                    "should_interject": {"noul": 1.0},
+                    "conversation_relevance": {"noul": 1.0},
+                    "timing": {"noul": 1.0},
+                    "continuity": {"noul": 1.0},
+                }
+            )
+        ),
+    )
+    event = SimpleNamespace(
+        unified_msg_origin="qq:GroupMessage:group-1",
+        is_at_or_wake_command=False,
+        call_llm=False,
+        get_message_type=lambda: 1,
+        get_message_str=lambda: "普通消息",
+        get_sender_id=lambda: "user-1",
+        get_sender_name=lambda: "用户",
+        get_self_id=lambda: "bot-1",
+        get_messages=lambda: [],
+        get_extra=lambda key, default=None: default,
+        get_message_outline=lambda: "普通消息",
+        request_llm=lambda **kwargs: ("provider-request", kwargs),
+        should_call_llm=lambda value: setattr(event, "call_llm", value),
+    )
+
+    yielded = [item async for item in plugin.proactive_reply(event)]
+
+    assert len(yielded) == 1
+    assert yielded[0][0] == "provider-request"
+    assert event.is_at_or_wake_command is True
+    assert event.call_llm is True
+
+
 def test_path_fallback_uses_astrbot_data_directory(host, monkeypatch, tmp_path):
     plugin_directory = tmp_path / "plugin_installation"
     plugin_directory.mkdir()
@@ -751,6 +838,34 @@ async def test_jev_failure_keeps_manual_recommendations(host, monkeypatch):
     assert agent in req.func_tool.tools
     assert "Tools=ordinary_tool" in req.system_prompt
     assert f"SubAgents={agent.name}" in req.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_jev_failure_respects_unfiltered_tools_category(host, monkeypatch):
+    ordinary = SimpleNamespace(name="ordinary_tool", description="ordinary", active=True)
+    manager = host.context.get_llm_tool_manager()
+    manager.func_list.append(ordinary)
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    plugin._detail_settings.update(
+        {
+            "always_keep_tools": [],
+            "always_keep_tools_customized": True,
+            "tool_filter_enabled": False,
+            "tool_decision_enabled": True,
+            "subagent_decision_enabled": False,
+        }
+    )
+    monkeypatch.setattr(plugin, "_evaluate", AsyncMock(side_effect=RuntimeError("jev down")))
+    tools = [ordinary, plugin._decision_tool]
+    toolset = SimpleNamespace(tools=tools)
+    toolset.get_tool = lambda name: next(
+        (tool for tool in toolset.tools if tool.name == name), None
+    )
+    req = SimpleNamespace(func_tool=toolset, system_prompt="persona", prompt="", contexts=[])
+
+    await plugin.filter_tools_before_llm(None, req)
+
+    assert req.func_tool.tools == tools
 
 
 @pytest.mark.asyncio

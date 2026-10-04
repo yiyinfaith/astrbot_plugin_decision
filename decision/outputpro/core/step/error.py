@@ -89,7 +89,15 @@ class ErrorStep(BaseStep):
             forward_msg = await self._forward_to_admin(ctx, error_report)
             msg += f"，{forward_msg}"
 
-        ctx.event.set_result(ctx.event.plain_result(self.cfg.custom_msg))
-        msg += f"，原消息替换为 {self.cfg.custom_msg}"
+        custom_msg = str(self.cfg.custom_msg or "").strip()
+        if not custom_msg:
+            # An empty custom message means "forward only" in the WebUI.  Do
+            # not replace the live result with an empty chain; leave the
+            # original response available to the remaining output steps.
+            msg += "，未设置替换文本，保留原消息"
+            return StepResult(msg=msg)
 
-        return StepResult(msg=msg)
+        ctx.event.set_result(ctx.event.plain_result(custom_msg))
+        msg += f"，原消息替换为 {custom_msg}"
+
+        return StepResult(abort=True, msg=msg)

@@ -478,3 +478,22 @@ class ProactiveState:
 
     def mark_reply_finished(self, session: str) -> None:
         self._session(session).pending_reply = False
+
+    def cancel_reply(self, session: str) -> None:
+        """Release a reply slot when the request was never queued."""
+
+        key = str(session)
+        current = self._session(key)
+        if not current.pending_reply:
+            return
+        current.pending_reply = False
+        # ``allow_reply`` appends the reservation as the newest timestamp. It
+        # is safe to remove only that newest entry; completed replies have
+        # already cleared ``pending_reply`` and remain counted for the window.
+        if current.reply_times and current.reply_times[-1] == current.last_reply:
+            current.reply_times.pop()
+        current.last_reply = current.reply_times[-1] if current.reply_times else 0.0
+        if current.last_reply:
+            self.last_reply[key] = current.last_reply
+        else:
+            self.last_reply.pop(key, None)

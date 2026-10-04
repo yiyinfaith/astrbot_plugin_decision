@@ -27,7 +27,7 @@ class ReplyStep(BaseStep):
         if platform_name in self.unsupported_platforms:
             return StepResult(msg=f"平台不支持智能引用，已跳过: {platform_name}")
 
-        if self.cfg.threshold > 0 and all(
+        if ctx.chain and self.cfg.threshold > 0 and all(
             isinstance(x, Plain | Image | Face | At) for x in ctx.chain
         ):
             msg_id = str(ctx.event.message_obj.message_id)

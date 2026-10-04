@@ -137,6 +137,12 @@ class OutputPipelineRuntime:
             result = event.get_result()
             if not result or not result.chain:
                 return
+            # Steps mutate the live result chain in place.  Keep a deep copy so
+            # a later optional step failure cannot leak a partially formatted
+            # response to AstrBot.  Side effects that were already sent to a
+            # platform cannot be undone, but the unsent final chain remains
+            # fail-open.
+            original_chain = copy.deepcopy(result.chain)
             from .outputpro.core.model import OutContext, StateManager
 
             gid = str(event.get_group_id() or event.get_sender_id() or "")
@@ -161,6 +167,10 @@ class OutputPipelineRuntime:
         except Exception as exc:
             # Output enhancement is fail-open.  A formatting step must never
             # prevent AstrBot from sending the original response.
+            try:
+                result.chain[:] = original_chain
+            except (NameError, AttributeError, TypeError, ValueError):
+                pass
             logger.warning("Decision Engine output enhancement failed: %s", exc)
 
     async def prepare_message(self, event: Any) -> None:
@@ -176,7 +186,9 @@ class OutputPipelineRuntime:
         try:
             from .outputpro.core.model import StateManager, StepName
 
-            gid = str(event.get_group_id() or "")
+            # Private chats have no group ID.  Fall back to the sender so
+            # OutputPro's per-conversation state cannot leak between users.
+            gid = str(event.get_group_id() or event.get_sender_id() or "")
             group = StateManager.get_group(gid)
             sender_id = str(event.get_sender_id() or "")
             self_id = str(event.get_self_id() or "")

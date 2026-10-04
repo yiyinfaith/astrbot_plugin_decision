@@ -1,3 +1,4 @@
+import asyncio
 import os
 import random
 import uuid
@@ -27,6 +28,38 @@ class TTSStep(BaseStep):
         super().__init__(config)
         self.cfg = config.tts
         self.style = None
+        self._cleanup_tasks: set[asyncio.Task] = set()
+
+    async def _delete_later(self, path: Path, delay: float = 300.0) -> None:
+        """Keep a converted file long enough for AstrBot to send it, then remove it."""
+
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            try:
+                path.unlink(missing_ok=True)
+            except (OSError, RuntimeError):
+                pass
+            raise
+        try:
+            path.unlink(missing_ok=True)
+        except (OSError, RuntimeError):
+            pass
+
+    def _schedule_cleanup(self, path: Path) -> None:
+        task = asyncio.create_task(self._delete_later(path))
+        self._cleanup_tasks.add(task)
+        task.add_done_callback(self._cleanup_tasks.discard)
+
+    async def terminate(self) -> None:
+        """Cancel pending delayed cleanup tasks during pipeline shutdown."""
+
+        tasks = tuple(self._cleanup_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._cleanup_tasks.clear()
 
     def _build_record_from_audio(self, audio: str, text: str) -> Record:
         audio = (audio or "").strip()
@@ -79,6 +112,8 @@ class TTSStep(BaseStep):
         if platform_name == "aiocqhttp":
             return Record.fromURL(audio_url)
 
+        temporary_paths: set[Path] = set()
+        keep_path: Path | None = None
         try:
             temp_dir = get_astrbot_temp_path()
             os.makedirs(temp_dir, exist_ok=True)
@@ -86,6 +121,7 @@ class TTSStep(BaseStep):
             suffix = os.path.splitext(parsed.path)[1] or ".audio"
             raw_path = os.path.join(temp_dir, f"outputpro_relay_{uuid.uuid4().hex}{suffix}")
             await download_file(audio_url, raw_path)
+            temporary_paths.add(Path(raw_path))
 
             with open(raw_path, "rb") as f:
                 probe_head = f.read(16)
@@ -109,15 +145,18 @@ class TTSStep(BaseStep):
                     with open(silk_path, "wb") as f:
                         f.write(normalized_silk)
                     normalized_input = silk_path
+                    temporary_paths.add(Path(silk_path))
 
                 wav_path = os.path.join(
                     temp_dir, f"outputpro_relay_{uuid.uuid4().hex}.wav"
                 )
                 await tencent_silk_to_wav(normalized_input, wav_path)
                 normalized_input = wav_path
+                temporary_paths.add(Path(wav_path))
             elif is_amr:
                 # amr 转 wav，便于后续统一处理
                 normalized_input = await convert_audio_to_wav(raw_path)
+                temporary_paths.add(Path(normalized_input))
 
             if platform_name == "telegram":
                 converted_path = await convert_audio_format(
@@ -125,10 +164,22 @@ class TTSStep(BaseStep):
                 )
             else:
                 converted_path = await convert_audio_to_wav(normalized_input)
+            converted_path = str(converted_path)
+            keep_path = Path(converted_path)
+            temporary_paths.add(keep_path)
+            self._schedule_cleanup(keep_path)
 
             return Record.fromFileSystem(converted_path, text=text, url=converted_path)
         except Exception:
             return Record.fromURL(audio_url, text=text)
+        finally:
+            for path in temporary_paths:
+                try:
+                    if keep_path is not None and path.resolve() == keep_path.resolve():
+                        continue
+                    path.unlink(missing_ok=True)
+                except (OSError, RuntimeError):
+                    pass
 
     async def handle(self, ctx: OutContext) -> StepResult:
         if not (

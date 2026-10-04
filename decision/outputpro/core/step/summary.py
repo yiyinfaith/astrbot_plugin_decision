@@ -37,17 +37,18 @@ class SummaryStep(BaseStep):
                 with path.open(encoding="utf-8") as f:
                     data = json.load(f)
                     if isinstance(data, list):
-                        quotes.extend(data)
+                        quotes.extend(str(item) for item in data if isinstance(item, str) and item)
                     else:
                         logger.warning(f"金句文件内容不是 list，已跳过：{path}")
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("读取金句文件失败 %s: %s", path, e)
-        return quotes
+        return [quote for quote in quotes if isinstance(quote, str) and quote]
 
     async def handle(self, ctx: OutContext) -> StepResult:
         """图片外显（直接发送并中断流水线）"""
         if (
-            isinstance(ctx.event, AiocqhttpMessageEvent)
+            self.quotes
+            and isinstance(ctx.event, AiocqhttpMessageEvent)
             and len(ctx.chain) == 1
             and isinstance(ctx.chain[0], Image)
         ):
