@@ -10,9 +10,10 @@ from .context import is_handoff_tool, is_mcp_tool, tool_is_active
 DECISION_TOOL_NAME = "jev_decide"
 DEFAULT_MAIN_LLM_POST_PROMPT = """<decision_routing_hint>
 当前场景需要根据用户请求选择合适的能力。
-推荐你优先考虑使用以下 Tools：{tools}
+推荐你优先考虑使用以下 Tool：{tools}
 如果确有必要调用 MCP 能力，推荐你考虑以下 MCP：{mcps}
-如果确有必要委派，推荐你考虑以下 SubAgents：{subagents}
+如果确有必要使用 Skill，推荐你考虑以下 Skill：{skills}
+如果确有必要委派，推荐你考虑以下 SubAgent：{subagents}
 
 以上是 Decision Engine 根据当前场景给出的推荐；你仍需自行判断是否调用、调用哪些参数，以及是否委派。
 推荐列表可以为空，也可以同时包含多个候选。
@@ -30,6 +31,10 @@ class RoutingOutcome:
     recommended_tools: list[str] = field(default_factory=list)
     recommended_mcp: list[str] = field(default_factory=list)
     recommended_subagents: list[str] = field(default_factory=list)
+    # Appended after the historical fields to preserve positional construction
+    # compatibility for integrations that used RoutingOutcome directly.
+    selected_skills: list[Any] = field(default_factory=list)
+    recommended_skills: list[str] = field(default_factory=list)
 
 
 def choose_tools(
@@ -49,9 +54,14 @@ def choose_tools(
     always_keep_mcp_recommend: set[str] | None = None,
     question_to_mcp: Mapping[str, str] | None = None,
     filter_mcp: bool = True,
+    skills: Sequence[Any] | None = None,
+    always_keep_skills: set[str] | None = None,
+    always_keep_skills_recommend: set[str] | None = None,
+    question_to_skill: Mapping[str, str] | None = None,
+    filter_skills: bool = True,
     filter_handoffs: bool = False,
 ) -> RoutingOutcome:
-    """Route Tools, MCP tools and handoffs using independent filter switches.
+    """Route Tools, MCP tools, Skills and handoffs using independent switches.
 
     Jev answers are always used to build recommendations. ``filter_ordinary``
     ``filter_mcp`` and ``filter_handoffs`` only control what remains visible to
@@ -61,15 +71,19 @@ def choose_tools(
     """
 
     final: list[Any] = []
+    selected_skills: list[Any] = []
     handoffs: list[Any] = []
     recommended_tools: list[str] = []
     recommended_mcp: list[str] = []
+    recommended_skills: list[str] = []
     recommended_subagents: list[str] = []
     always_keep_recommend = always_keep_recommend or set()
     always_keep_handoffs = always_keep_handoffs or set()
     always_keep_handoffs_recommend = always_keep_handoffs_recommend or set()
     always_keep_mcp = always_keep_mcp or set()
     always_keep_mcp_recommend = always_keep_mcp_recommend or set()
+    always_keep_skills = always_keep_skills or set()
+    always_keep_skills_recommend = always_keep_skills_recommend or set()
     seen: set[str] = set()
     for tool in original_tools:
         name = str(getattr(tool, "name", ""))
@@ -161,6 +175,33 @@ def choose_tools(
             if name not in recommended_tools:
                 recommended_tools.append(name)
 
+    for skill in skills or ():
+        name = str(getattr(skill, "name", ""))
+        if not name or not tool_is_active(skill):
+            continue
+        keep = name in always_keep_skills
+        matching_ids = [
+            qid
+            for qid, skill_name in (question_to_skill or {}).items()
+            if skill_name == name
+        ]
+        selected_by_jev = any(
+            isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
+            and not isinstance(noul_answers[qid]["noul"], bool)
+            and noul_answers[qid]["noul"] >= threshold
+            for qid in matching_ids
+        )
+        if not keep and filter_skills:
+            keep = selected_by_jev
+        elif not keep:
+            keep = True
+        if keep:
+            selected_skills.append(skill)
+        if selected_by_jev or (
+            name in always_keep_skills and name in always_keep_skills_recommend
+        ):
+            recommended_skills.append(name)
+
     if (
         decision_tool is not None
         and DECISION_TOOL_NAME in always_keep
@@ -176,8 +217,10 @@ def choose_tools(
         selected=final,
         handoffs=handoffs,
         decision_tool=decision_tool,
+        selected_skills=selected_skills,
         recommended_tools=recommended_tools,
         recommended_mcp=recommended_mcp,
+        recommended_skills=recommended_skills,
         recommended_subagents=recommended_subagents,
     )
 
@@ -212,12 +255,14 @@ def render_routing_prompt(
     *,
     recommended_tools: Sequence[str] = (),
     recommended_mcp: Sequence[str] = (),
+    recommended_skills: Sequence[str] = (),
     recommended_subagents: Sequence[str] = (),
 ) -> str:
     """Render the configurable post-decision prompt without interpreting other braces."""
 
     tools_text = ", ".join(dict.fromkeys(str(name) for name in recommended_tools if name))
     mcp_text = ", ".join(dict.fromkeys(str(name) for name in recommended_mcp if name))
+    skills_text = ", ".join(dict.fromkeys(str(name) for name in recommended_skills if name))
     subagents_text = ", ".join(dict.fromkeys(str(name) for name in recommended_subagents if name))
     # Deliberately use targeted replacement rather than str.format: users may
     # put their own JSON/schema braces in the editable prompt.
@@ -225,6 +270,7 @@ def render_routing_prompt(
         str(template)
         .replace("{tools}", tools_text or "(无)")
         .replace("{mcps}", mcp_text or "(无)")
+        .replace("{skills}", skills_text or "(无)")
         .replace("{subagents}", subagents_text or "(无)")
     )
 
@@ -251,6 +297,7 @@ def add_routing_hint(
     template: str = DEFAULT_MAIN_LLM_POST_PROMPT,
     recommended_tools: Sequence[str] = (),
     recommended_mcp: Sequence[str] = (),
+    recommended_skills: Sequence[str] = (),
     recommended_subagents: Sequence[str] = (),
 ) -> None:
     """Append an advisory hint to the main LLM system prompt.
@@ -265,6 +312,7 @@ def add_routing_hint(
         template,
         recommended_tools=recommended_tools,
         recommended_mcp=recommended_mcp,
+        recommended_skills=recommended_skills,
         recommended_subagents=recommended_subagents,
     )
     append_system_prompt(req, text)

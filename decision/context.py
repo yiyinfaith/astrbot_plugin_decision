@@ -71,6 +71,7 @@ def build_decision_state(
     contexts: Iterable[Mapping[str, Any]] | None,
     tools: Iterable[Mapping[str, str]] = (),
     mcp_tools: Iterable[Mapping[str, str]] = (),
+    skills: Iterable[Mapping[str, str]] = (),
     subagents: Iterable[Mapping[str, str]] = (),
     history_max_messages: int = 8,
     history_max_chars: int = 6000,
@@ -99,13 +100,21 @@ def build_decision_state(
     sections.append(
         "[Available MCP Tools]\n" + ("\n".join(mcp_lines) if mcp_lines else "(none)")
     )
+    skill_lines = [
+        f"- {item.get('name', '')}: {item.get('description', '')}"
+        for item in skills
+        if item.get("name")
+    ]
+    sections.append(
+        "[Available Skills]\n" + ("\n".join(skill_lines) if skill_lines else "(none)")
+    )
     agent_lines = [
         f"- {item.get('name', '')}: {item.get('description', '')}"
         for item in subagents
         if item.get("name")
     ]
     sections.append(
-        "[Available SubAgents]\n" + ("\n".join(agent_lines) if agent_lines else "(none)")
+        "[Available SubAgent]\n" + ("\n".join(agent_lines) if agent_lines else "(none)")
     )
     return "\n\n".join(sections)
 
@@ -143,6 +152,26 @@ def is_mcp_tool(tool: Any) -> bool:
     module_name = str(getattr(cls, "__module__", "")).casefold()
     return class_name == "mcptool" or class_name.endswith("mcptool") or module_name.endswith(
         ".mcp_client"
+    )
+
+
+def is_skill_tool(tool: Any) -> bool:
+    """Return whether an object is an AstrBot SkillInfo-like capability.
+
+    Skills are not function tools: AstrBot injects their inventory into the
+    system prompt.  Keeping this predicate deliberately narrow prevents a
+    regular plugin object that happens to expose a ``path`` or ``source_type``
+    attribute from being routed as a Skill.
+    """
+
+    cls = type(tool)
+    if str(getattr(cls, "__name__", "")) == "SkillInfo":
+        return True
+    return (
+        bool(getattr(tool, "skill_name", ""))
+        and hasattr(tool, "source_type")
+        and hasattr(tool, "path")
+        and hasattr(tool, "active")
     )
 
 

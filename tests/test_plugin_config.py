@@ -883,6 +883,72 @@ async def test_mcp_manual_keep_and_recommend_are_persisted_separately(host):
 
 
 @pytest.mark.asyncio
+async def test_skill_is_listed_saved_and_decided_in_the_same_request(host, monkeypatch):
+    class SkillInfo:
+        name = "spreadsheet_skill"
+        description = "work with spreadsheets"
+        active = True
+        source_type = "local_only"
+        plugin_name = ""
+        path = "/skills/spreadsheet_skill/SKILL.md"
+
+    skill = SkillInfo()
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    monkeypatch.setattr(plugin, "_skill_objects", lambda: [skill])
+    host.body.update(
+        always_keep_tools=[],
+        always_keep_recommend_tools=[],
+        always_keep_mcp=[],
+        always_keep_recommend_mcp=[],
+        always_keep_skills=[skill.name],
+        always_keep_recommend_skills=[skill.name],
+        always_keep_subagents=[],
+        always_keep_recommend_subagents=[],
+        skill_filter_enabled=True,
+        skill_decision_enabled=True,
+        main_llm_post_prompt="Skill={skills}",
+    )
+    result = await plugin.page_save_settings()
+    assert result["always_keep_skills"] == [skill.name]
+    listed = (await plugin.page_tools())["tools"]
+    row = next(item for item in listed if item["name"] == skill.name)
+    assert row["skill"] is True
+    assert row["origin_display"] == "Skill"
+
+    seen_questions = []
+
+    async def evaluate(*, state, questions):
+        seen_questions.append(questions)
+        return SimpleNamespace(answers={qid: {"noul": 1.0} for qid in questions})
+
+    monkeypatch.setattr(plugin, "_evaluate", evaluate)
+    ordinary = SimpleNamespace(name="ordinary_tool", description="ordinary", active=True)
+    toolset = SimpleNamespace(tools=[ordinary, plugin._decision_tool])
+    toolset.get_tool = lambda name: next(
+        (tool for tool in toolset.tools if tool.name == name), None
+    )
+    req = SimpleNamespace(
+        func_tool=toolset,
+        system_prompt=(
+            "persona\n## Skills\n\n### Available skills\n\n"
+            "- **spreadsheet_skill**: work with spreadsheets\n"
+            "  File: `/skills/spreadsheet_skill/SKILL.md`\n"
+            "- **other_skill**: unrelated\n"
+            "  File: `/skills/other_skill/SKILL.md`\n\n"
+            "### Skill rules\n\n1. rule"
+        ),
+        prompt="make a spreadsheet",
+        contexts=[],
+    )
+    await plugin.filter_tools_before_llm(None, req)
+    assert len(seen_questions) == 1
+    assert any(qid.startswith("skill_") for qid in seen_questions[0])
+    assert "Skill=spreadsheet_skill" in req.system_prompt
+    assert "**spreadsheet_skill**" in req.system_prompt
+    assert "**other_skill**" not in req.system_prompt
+
+
+@pytest.mark.asyncio
 async def test_jev_failure_keeps_manual_recommendations(host, monkeypatch):
     """A fail-open Jev request must not suppress manual recommendations."""
 

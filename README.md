@@ -1,6 +1,6 @@
 # jev决策综合插件
 
-`jev决策综合插件` 是一个适用于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的 Jev/SystemOne 决策插件。它在 AstrBot 把请求交给主 LLM 之前，先判断当前场景真正需要哪些 Tools、MCP 工具和 SubAgents，必要时过滤掉无关能力，或者把候选写入主 LLM 的推荐提示词；它也可以在白名单群聊和私聊中判断机器人是否适合主动回复。
+`jev决策综合插件` 是一个适用于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的 Jev/SystemOne 决策插件。它在 AstrBot 把请求交给主 LLM 之前，先判断当前场景真正需要哪些 Tool、MCP 工具、Skill 和 SubAgent，必要时过滤掉无关能力，或者把候选写入主 LLM 的推荐提示词；它也可以在白名单群聊和私聊中判断机器人是否适合主动回复。
 
 插件只负责结构化判断、能力路由和主动回复时机。最终回答、参数生成、工具执行、人格和会话上下文仍由 AstrBot 原生 Agent 负责。插件不会替换 AstrBot 的人格提示词，也不会覆盖其他插件追加到 system prompt 的内容。
 
@@ -9,14 +9,14 @@
 这个插件有两层配置：
 
 - AstrBot 原生插件配置页只放全局服务参数和三个总开关。
-- 插件详情页 WebUI 放 Tools、MCP、SubAgents、提示词、主动对话白名单和详细策略。
+- 插件详情页 WebUI 放 Tool、MCP、Skill、SubAgent、提示词、主动对话白名单和详细策略。
 
 安装后的推荐顺序是：
 
 1. 安装并启用插件。
 2. 在 AstrBot 原生配置页填写 Jev 服务地址、路径、API 密钥和模型。
-3. 打开需要使用的总开关：“Tools/MCP/SubAgent 决策”“主动对话”“对话流增强”。
-4. 进入插件 WebUI，保存 Tools/MCP/SubAgents 和主动对话的详细规则。
+3. 打开需要使用的总开关：“Tool/MCP/Skill/SubAgent 决策”“主动对话”“对话流增强”。
+4. 进入插件 WebUI，保存 Tool/MCP/Skill/SubAgent 和主动对话的详细规则。
 5. 用 AstrBot 的插件热重载使原生全局参数重新初始化；WebUI 详细设置保存后会立即用于后续请求。
 
 服务地址默认留空，不会预置任何第三方地址。API 密钥只应填写在 AstrBot 的密钥字段中，不要写进 README、截图、日志或 Git 提交。
@@ -25,26 +25,27 @@
 
 | 功能 | 做什么 | 是否改变 AstrBot 原生回答链 |
 | --- | --- | --- |
-| Tools 判断 | 让 Jev 逐项判断普通 Tool 是否适合当前请求 | 只调整本次请求可见的 ToolSet，并追加推荐提示 |
-| MCP 判断 | 让 Jev 逐项判断每个 MCP 工具是否适合当前请求 | 与普通 Tools 相同，独立控制判断、过滤、保留和推荐 |
-| SubAgents 判断 | 让 Jev 逐项判断是否值得委派给每个 SubAgent | 只调整本次请求可见的 handoff，并追加推荐提示 |
+| Tool 判断 | 让 Jev 逐项判断普通 Tool 是否适合当前请求 | 只调整本次请求可见的 ToolSet，并追加推荐提示 |
+| MCP 判断 | 让 Jev 逐项判断每个 MCP 工具是否适合当前请求 | 与 Tool 相同，独立控制判断、过滤、保留和推荐 |
+| Skill 判断 | 让 Jev 逐项判断每个 Skill 是否适合当前请求 | 控制 AstrBot 注入主 LLM 的 Skill 清单，并追加推荐提示 |
+| SubAgent 判断 | 让 Jev 逐项判断是否值得委派给每个 SubAgent | 只调整本次请求可见的 handoff，并追加推荐提示 |
 | `jev_decide` | 让主 LLM 按需调用 Jev 做一次 noul、choice 或 score 判断 | 不执行其他工具 |
 | 主动对话 | 判断白名单会话现在是否适合 Bot 插话 | 满足条件后调用 AstrBot 原生 Agent |
 | WebUI | 管理规则、提示词、工具来源和白名单 | 不替换 AstrBot 主 LLM 人格 |
 
 ## 主流程
 
-Tools、MCP 和 SubAgents 判断会合并为一个 Jev 请求。没有超过上下文上限时只有一次请求，超过上限才分批；每个候选仍然独立判断，可以选中 0 个、1 个或多个。
+Tool、MCP、Skill 和 SubAgent 判断会合并为一个 Jev 请求。没有超过上下文上限时只有一次请求，超过上限才分批；每个候选仍然独立判断，可以选中 0 个、1 个或多个。
 
 ```mermaid
 flowchart TD
     A[收到 AstrBot 请求] --> B{是否已匹配注册指令?}
     B -- 是 --> C[跳过本插件流程]
     C --> D[直接执行 AstrBot 或插件指令]
-    B -- 否 --> E{Tools/MCP/SubAgent 总开关开启?}
+    B -- 否 --> E{Tool/MCP/Skill/SubAgent 总开关开启?}
     E -- 否 --> F[保持 AstrBot 原始 ToolSet]
-    E -- 是 --> G[收集当前请求的 Tools、MCP 与 SubAgents]
-    G --> H[按三个判断开关生成 Noul 问题]
+    E -- 是 --> G[收集当前请求的 Tool、MCP、Skill 与 SubAgent]
+    G --> H[按四个判断开关生成 Noul 问题]
     H --> I{是否超过全局 Token 上限?}
     I -- 否 --> J[一次 Jev 请求]
     I -- 是 --> K[按估算 Token 分批请求并合并答案]
@@ -55,7 +56,7 @@ flowchart TD
     N --> O[AstrBot 主 Agent / Tool Loop / SubAgent]
 ```
 
-命中已注册的 AstrBot 内置指令或插件指令时，AstrBot 的 waking-check 已经产生 `handlers_parsed_params`，插件会在主动判断和 LLM 工具路由处直接返回，不会让 Jev 延迟或改变指令执行。没有命中注册指令的 `/xxx` 只是普通文本；默认 `/` 是直接唤醒前缀，它可能进入 AstrBot 原生 Agent，此时 Agent 请求仍会经过 Tools/MCP/SubAgents 决策。
+命中已注册的 AstrBot 内置指令或插件指令时，AstrBot 的 waking-check 已经产生 `handlers_parsed_params`，插件会在主动判断和 LLM 工具路由处直接返回，不会让 Jev 延迟或改变指令执行。没有命中注册指令的 `/xxx` 只是普通文本；默认 `/` 是直接唤醒前缀，它可能进入 AstrBot 原生 Agent，此时 Agent 请求仍会经过 Tool/MCP/Skill/SubAgent 决策。
 
 ## 安装
 
@@ -104,10 +105,10 @@ AstrBot 原生插件配置页中的项目如下：
 | 请求超时 | `5` 秒 | 每次 Jev 请求的超时时间 |
 | 最大重试次数 | `1` | 首次失败后的额外重试次数；`0` 表示不重试 |
 | 重试间隔 | `0` 秒 | 默认失败后立即重试 |
-| 上下文上限 | `32000` Token | 主动对话超限时裁剪旧历史；Tools/MCP/SubAgents 超限时分批 |
-| 上下文消息数 | `8` | Tools/MCP/SubAgents 判断使用的最多历史消息数 |
-| 上下文字符数 | `6000` | Tools/MCP/SubAgents 判断状态中的历史字符上限 |
-| Tools/MCP/SubAgent 决策 | 开启 | 整个 Tools/MCP/SubAgents 决策链总开关，不影响主动对话 |
+| 上下文上限 | `32000` Token | 主动对话超限时裁剪旧历史；Tool/MCP/Skill/SubAgent 超限时分批 |
+| 上下文消息数 | `8` | Tool/MCP/Skill/SubAgent 判断使用的最多历史消息数 |
+| 上下文字符数 | `6000` | Tool/MCP/Skill/SubAgent 判断状态中的历史字符上限 |
+| Tool/MCP/Skill/SubAgent 决策 | 开启 | 整个 Tool/MCP/Skill/SubAgent 决策链总开关，不影响主动对话 |
 | 主动对话 | 关闭 | 主动对话总开关，详细规则在 WebUI |
 | 对话流增强 | 开启 | 输入增强和输出增强的总开关，详细配置在 WebUI |
 
@@ -117,11 +118,11 @@ SystemOne 客户端默认只对超时、网络错误、429 和 5xx 重试；401/
 
 ## 第二步：配置插件 WebUI
 
-WebUI 分为“Tools/MCP/SubAgent 决策”“主动对话”“对话流增强”三个区域。页面使用 Vue 3 和 Goose liquid-glass 组件；Goose 或 WebGL 不可用时会回退到原生控件，仍可查看和保存。原生配置页的三个总开关分别控制这三个区域；区域里的输入增强、输出增强开关只控制各自子功能。
+WebUI 分为“Tool/MCP/Skill/SubAgent 决策”“主动对话”“对话流增强”三个区域。页面使用 Vue 3 和 Goose liquid-glass 组件；Goose 或 WebGL 不可用时会回退到原生控件，仍可查看和保存。原生配置页的三个总开关分别控制这三个区域；区域里的输入增强、输出增强开关只控制各自子功能。
 
-### Tools、MCP 与 SubAgents：判断和过滤
+### Tool、MCP、Skill 与 SubAgent：判断和过滤
 
-普通 Tools、MCP 和 SubAgents 各有一个“判断”开关和一个“过滤”开关。三类开关可以使用不同组合，但 Jev 判断问题会合并处理。
+普通 Tool、MCP、Skill 和 SubAgent 各有一个“判断”开关和一个“过滤”开关。四类开关可以使用不同组合，但 Jev 判断问题会合并处理。
 
 | 判断 | 过滤 | 交给主 LLM 的能力 | 注入推荐提示词 |
 | --- | --- | --- | --- |
@@ -132,25 +133,27 @@ WebUI 分为“Tools/MCP/SubAgent 决策”“主动对话”“对话流增强�
 
 “判断”决定是否把该类别送给 Jev；“过滤”只决定是否从本次交给主 LLM 的 ToolSet 中移除未保留候选。判断关闭时不会请求 Jev，但仍按该类别自己的过滤开关执行：过滤开只留手动保留，过滤关全量保留。
 
-当前默认值是：判断普通 Tools 开、过滤普通 Tools 开；判断 MCP 开、过滤 MCP 开；判断 SubAgents 开、过滤 SubAgents 关。这个默认组合会过滤普通 Tools 和 MCP，但让 SubAgents 全量可见，同时仍利用 Jev 生成三类能力推荐。
+当前默认值是：判断 Tool 开、过滤 Tool 开；判断 MCP 开、过滤 MCP 开；判断 Skill 开、过滤 Skill 开；判断 SubAgent 开、过滤 SubAgent 关。这个默认组合会过滤 Tool、MCP 和 Skill，但让 SubAgent 全量可见，同时仍利用 Jev 生成四类能力推荐。
 
-整个 Tools/MCP/SubAgent 决策区域还有一个独立的会话范围黑白名单：
+整个 Tool/MCP/Skill/SubAgent 决策区域还有一个独立的会话范围黑白名单：
 
-- **黑名单模式（默认）**：名单内的群聊、私聊用户或完整 `unified_msg_origin` 不进行 Tools/MCP/SubAgent 决策；名单为空时全部应用。
-- **白名单模式**：只对名单内会话进行 Tools/MCP/SubAgent 决策；名单为空时全部不应用。
+- **黑名单模式（默认）**：名单内的群聊、私聊用户或完整 `unified_msg_origin` 不进行 Tool/MCP/Skill/SubAgent 决策；名单为空时全部应用。
+- **白名单模式**：只对名单内会话进行 Tool/MCP/Skill/SubAgent 决策；名单为空时全部不应用。
 
-范围不适用时，插件不会请求 Jev、不会过滤 ToolSet，也不会追加推荐提示词，AstrBot 会按原始能力集合继续处理请求。这个范围只控制 Tools/MCP/SubAgent 决策，不影响主动对话或对话流增强。
+范围不适用时，插件不会请求 Jev、不会过滤 ToolSet，也不会追加推荐提示词，AstrBot 会按原始能力集合继续处理请求。这个范围只控制 Tool/MCP/Skill/SubAgent 决策，不影响主动对话或对话流增强。
 
-### Tools/MCP/SubAgent 决策
+### Tool/MCP/Skill/SubAgent 决策
 
-每个普通 Tool、MCP 工具和 SubAgent 都有两个独立选项：
+每个 Tool、MCP 工具、Skill 和 SubAgent 都有两个独立选项：
 
 - **始终保留**：即使 Jev 没选中，过滤开启时也继续交给主 LLM。
 - **始终推荐给主 LLM**：把该能力名称写入主 LLM 的推荐提示词。必须先勾选“始终保留”。
 
-Jev 选中的候选会自动进入推荐提示词；仅勾选“始终保留”的候选只会保留，不会被插件主动推荐。MCP 工具的配置单独位于 WebUI 的 MCP 区域，不会与普通 Tools 或 SubAgents 的手动列表混用。
+Jev 选中的候选会自动进入推荐提示词；仅勾选“始终保留”的候选只会保留，不会被插件主动推荐。MCP、Skill 和 SubAgent 的配置分别位于 WebUI 对应区域，不会与其他类别的手动列表混用。
 
-列表会显示能力来源。同一插件的能力会放在同一分组中，AstrBot 内置能力显示为“Astrbot内置工具”并默认排在底部。首次打开页面时，内置 Tools 和 `jev_decide` 默认“始终保留”，默认不勾选“始终推荐给主 LLM”。
+Skill 不是函数工具，而是 AstrBot 注入 system prompt 的 `SKILL.md` 能力清单。插件会把 Skill 清单和其他三类能力放进同一次 Jev 判断；过滤开启时只保留 Jev 选中项和“始终保留”项，再从 AstrBot 已生成的 `## Skills` 区块中移除其他条目，不会改动人格或其他插件的 system prompt。Skill 的来源按 `SkillInfo.plugin_name` 归属插件；没有插件归属的本地、工作区或沙箱 Skill 单独显示为“Skill”。
+
+列表会显示能力来源。同一插件的 Tool、MCP 或 Skill 会放在同一分组中；没有插件归属的 MCP 单独归为“MCP”，没有插件归属的 Skill 单独归为“Skill”。AstrBot 内置 Tool 显示为“Astrbot内置工具”并默认排在底部。首次打开页面时，内置 Tool 和 `jev_decide` 默认“始终保留”，默认不勾选“始终推荐给主 LLM”。
 
 ### `jev_decide` 工具
 
@@ -168,17 +171,17 @@ Jev 选中的候选会自动进入推荐提示词；仅勾选“始终保留”�
 WebUI 提供两套可编辑提示词：
 
 1. **Jev 判断前提示词**：只发送给 Jev，说明它应该怎样做结构化判断，不会把主 LLM 人格 system prompt 原样发送给 Jev。
-2. **判断后注入主 LLM 的提示词**：在 Jev 判断结束后追加到当前请求的 system prompt，支持 `{tools}`、`{mcps}` 和 `{subagents}` 占位符。
+2. **判断后注入主 LLM 的提示词**：在 Jev 判断结束后追加到当前请求的 system prompt，支持 `{tools}`、`{mcps}`、`{skills}` 和 `{subagents}` 占位符。
 
 插件只追加自己拥有的 `<astrbot_plugin_decision_routing>` 区块，不替换原有 system prompt。AstrBot 人格、其他插件追加的提示词和备用模型切换都会继续保留。
 
 ### Jev 失败时
 
-Tools/MCP/SubAgents 请求失败时插件采用 fail-open，避免服务故障导致 AstrBot 无法正常聊天：三类能力都会保持全量可见；普通 Tools 过滤开启时仍会按原有规则移除未保留的 `jev_decide`，除非勾选了“始终保留”。手动“始终推荐给主 LLM”在 Jev 失败时仍会注入推荐提示词。
+Tool/MCP/Skill/SubAgent 请求失败时插件采用 fail-open，避免服务故障导致 AstrBot 无法正常聊天：四类能力都会保持全量可见；普通 Tool 过滤开启时仍会按原有规则移除未保留的 `jev_decide`，除非勾选了“始终保留”。手动“始终推荐给主 LLM”在 Jev 失败时仍会注入推荐提示词。
 
 ## 主动对话
 
-WebUI 现在分为三个并列区域：**Tools/MCP/SubAgent 决策**、**主动对话**、**对话流增强**。主动对话总开关仍在 AstrBot 原生配置页，详细参数在 WebUI 的“主动对话”页面。
+WebUI 现在分为三个并列区域：**Tool/MCP/Skill/SubAgent 决策**、**主动对话**、**对话流增强**。主动对话总开关仍在 AstrBot 原生配置页，详细参数在 WebUI 的“主动对话”页面。
 
 ### 主动对话范围
 
@@ -221,7 +224,7 @@ flowchart TD
 
 ### 一次消息的完整处理流程
 
-下面的流程图把命令、主动对话、Tools/MCP/SubAgents 决策、主 LLM 和输出增强串在一起：
+下面的流程图把命令、主动对话、Tool/MCP/Skill/SubAgent 决策、主 LLM 和输出增强串在一起：
 
 ```mermaid
 flowchart TD
@@ -242,9 +245,9 @@ flowchart TD
     O -- 否 --> N
     O -- 是 --> P[提交一次 AstrBot ProviderRequest]
     G --> P
-    P --> Q{Tools/MCP/SubAgent 总开关与范围是否允许}
+    P --> Q{Tool/MCP/Skill/SubAgent 总开关与范围是否允许}
     Q -- 否 --> R[保留原始 ToolSet，不追加路由提示]
-    Q -- 是 --> S[读取普通 Tools、MCP 与 SubAgents]
+    Q -- 是 --> S[读取普通 Tool、MCP、Skill 与 SubAgent]
     S --> T[只把开启判断的类别合并进一个 Jev 请求]
     T --> U{是否超过模型上下文上限}
     U -- 否 --> V[一次 Jev 请求，逐项判断每个候选]
@@ -288,7 +291,7 @@ flowchart TD
 - 加权综合分 `>= 0.68`；
 - 指向 Bot `>= 0.70` 且适合介入 `>= 0.85`。
 
-显式 @Bot 或回复 Bot 且“强制回复”开启时，会旁路主动对话 Jev，直接进入 AstrBot 原生 Agent；这个 Agent 请求仍会触发 Tools/MCP/SubAgents 决策。命中昵称别名 `AI|助手` 只是增加“被指向”上下文，仍会走主动判断。
+显式 @Bot 或回复 Bot 且“强制回复”开启时，会旁路主动对话 Jev，直接进入 AstrBot 原生 Agent；这个 Agent 请求仍会触发 Tool/MCP/Skill/SubAgent 决策。命中昵称别名 `AI|助手` 只是增加“被指向”上下文，仍会走主动判断。
 
 ### 前缀和节流参数
 
@@ -362,11 +365,11 @@ Jev 超时、网络错误、重试和最终错误也会输出。管理员诊断�
 
 | 现象 | 检查项 |
 | --- | --- |
-| 主 LLM 仍看到全部 Tools | 确认原生“Tools/MCP/SubAgent 决策”开启，并确认对应类别的“判断”和“过滤”都开启 |
-| 有判断但没有自动推荐 | 检查判断开关、阈值、Jev 返回，以及后置提示词中的 `{tools}` / `{subagents}` |
+| 主 LLM 仍看到全部 Tools | 确认原生“Tool/MCP/Skill/SubAgent 决策”开启，并确认对应类别的“判断”和“过滤”都开启 |
+| 有判断但没有自动推荐 | 检查判断开关、阈值、Jev 返回，以及后置提示词中的 `{tools}` / `{mcps}` / `{skills}` / `{subagents}` |
 | 主动对话不触发 | 确认原生总开关、白名单和群聊/私聊 ID；检查是否同时开启 AstrBot 原生 active_reply |
 | Jev 请求失败 | 检查服务地址、API 路径、API 密钥、模型和重试日志 |
-| Tools/MCP/SubAgent 决策页面为空 | 确认插件已启用并热重载；页面读取当前已注册 Tools 和动态 SubAgent handoff |
+| Tool/MCP/Skill/SubAgent 决策页面为空 | 确认插件已启用并热重载；页面读取当前已注册 Tool、MCP、Skill 和动态 SubAgent handoff |
 | 保存后设置消失 | 检查 AstrBot `data/config` 是否可写，不要把设置文件放进插件目录 |
 
 ## 开发检查

@@ -61,8 +61,8 @@
   },
   "tools_subagents_decision_enabled": {
     "type": "bool",
-    "description": "Tools/MCP/SubAgent 决策",
-    "hint": "控制 Tools、MCP 和 SubAgent 的 Jev 判断；不影响主动对话。",
+    "description": "Tool/MCP/Skill/SubAgent 决策",
+    "hint": "控制 Tool、MCP、Skill 和 SubAgent 的 Jev 判断；不影响主动对话。",
     "default": true
   },
   "proactive_reply_enabled": {

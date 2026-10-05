@@ -7,7 +7,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from decision.context import build_decision_state, context_lines, is_mcp_tool, tool_summary
+from decision.context import (
+    build_decision_state,
+    context_lines,
+    is_mcp_tool,
+    is_skill_tool,
+    tool_summary,
+)
 from decision.context import question_id as make_question_id
 from decision.models import DecisionProviderError, DecisionValidationError, parse_systemone_response
 from decision.proactive import (
@@ -30,6 +36,7 @@ from decision.routing import (
     recommendations_from_noul,
     render_routing_prompt,
 )
+from decision.skills import filter_skills_prompt
 from decision.tokens import estimate_request_tokens, estimate_tokens, fit_request_state
 
 
@@ -771,6 +778,76 @@ def test_mcp_filter_off_keeps_unselected_and_still_recommends_only_selected():
     assert outcome.recommended_mcp == []
 
 
+def test_skill_routing_supports_filter_and_manual_keep_recommend_independently():
+    selected = SimpleNamespace(name="selected_skill", description="selected", active=True)
+    manual = SimpleNamespace(name="manual_skill", description="manual", active=True)
+    dropped = SimpleNamespace(name="dropped_skill", description="dropped", active=True)
+    outcome = choose_tools(
+        [],
+        {
+            "selected_q": {"noul": 0.9},
+            "dropped_q": {"noul": 0.1},
+        },
+        {},
+        threshold=0.65,
+        always_keep=set(),
+        decision_tool=None,
+        skills=[selected, manual, dropped],
+        always_keep_skills={"manual_skill"},
+        always_keep_skills_recommend={"manual_skill"},
+        question_to_skill={"selected_q": "selected_skill", "dropped_q": "dropped_skill"},
+        filter_skills=True,
+    )
+    assert [item.name for item in outcome.selected_skills] == ["selected_skill", "manual_skill"]
+    assert outcome.recommended_skills == ["selected_skill", "manual_skill"]
+
+
+def test_skill_filter_off_keeps_all_but_manual_recommendations_need_the_checkbox():
+    skills = [
+        SimpleNamespace(name="a", description="a", active=True),
+        SimpleNamespace(name="b", description="b", active=True),
+    ]
+    outcome = choose_tools(
+        [],
+        {"a_q": {"noul": 0.9}, "b_q": {"noul": 0.1}},
+        {},
+        threshold=0.65,
+        always_keep=set(),
+        decision_tool=None,
+        skills=skills,
+        always_keep_skills={"a"},
+        always_keep_skills_recommend=set(),
+        question_to_skill={"a_q": "a", "b_q": "b"},
+        filter_skills=False,
+    )
+    assert [item.name for item in outcome.selected_skills] == ["a", "b"]
+    assert outcome.recommended_skills == ["a"]
+
+
+def test_skill_detection_is_narrow_and_skill_prompt_filter_preserves_other_sections():
+    class SkillInfo:
+        name = "x"
+        skill_name = "x"
+        source_type = "local_only"
+        path = "/skills/x/SKILL.md"
+        active = True
+
+    skill = SkillInfo()
+    # A real SkillInfo-like class is accepted; a plain function tool is not.
+    assert is_skill_tool(skill)
+    assert not is_skill_tool(SimpleNamespace(name="tool", description="tool"))
+    prompt = (
+        "persona\n## Skills\n\n### Available skills\n\n"
+        "- **keep**: keep it\n  File: `/skills/keep/SKILL.md`\n"
+        "- **drop**: drop it\n  File: `/skills/drop/SKILL.md`\n"
+        "\n### Skill rules\n\n1. rule\n## Other\nrest"
+    )
+    filtered = filter_skills_prompt(prompt, ["keep"])
+    assert "**keep**" in filtered
+    assert "**drop**" not in filtered
+    assert "## Other\nrest" in filtered
+
+
 def test_append_system_prompt_is_idempotent_for_this_plugin_section():
     req = SimpleNamespace(system_prompt="persona")
     append_system_prompt(req, "recommendation")
@@ -792,6 +869,17 @@ def test_state_excludes_system_prompt_and_tool_schema():
     assert "search the web" in state
     assert "system_prompt" not in state
     assert "parameters" not in state
+
+
+def test_decision_state_has_a_separate_skill_section():
+    state = build_decision_state(
+        policy="policy",
+        current_prompt="make a spreadsheet",
+        contexts=[],
+        skills=[{"name": "spreadsheet_skill", "description": "spreadsheet help"}],
+    )
+    assert "[Available Skills]" in state
+    assert "spreadsheet_skill: spreadsheet help" in state
 
 
 def test_public_schema_contains_only_global_settings_and_master_switches():
@@ -816,7 +904,7 @@ def test_public_schema_contains_only_global_settings_and_master_switches():
     }
     assert all("[" not in item.get("description", "") for item in schema.values())
     assert schema["tools_subagents_decision_enabled"]["default"] is True
-    assert schema["tools_subagents_decision_enabled"]["description"] == "Tools/MCP/SubAgent 决策"
+    assert schema["tools_subagents_decision_enabled"]["description"] == "Tool/MCP/Skill/SubAgent 决策"
     assert "不影响主动对话" in schema["tools_subagents_decision_enabled"]["hint"]
     assert schema["proactive_reply_enabled"]["default"] is False
     assert "详细配置在插件 WebUI" in schema["proactive_reply_enabled"]["hint"]
@@ -880,10 +968,15 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     assert "锁定内置顺序" not in page
     assert "始终按内置顺序执行" in page
     assert "routing-rules-table" in page
-    assert "三类能力的 Jev 判断会合并为一次请求" in page
+    assert "四类能力的 Jev 判断会合并为一次请求" in page
     assert "mcp_decision_enabled" in page
     assert "mcp_filter_enabled" in page
     assert "always_keep_mcp" in page
+    assert "always_keep_skills" in page
+    assert "always_keep_recommend_skills" in page
+    assert "skill_decision_enabled" in page
+    assert "skill_filter_enabled" in page
+    assert "Tool/MCP/Skill/SubAgent" in page
     assert "<h2>输入增强</h2>" in page
     assert "conversation_flow_analysis_enabled" in page
     assert "conversation_flow_window" in page
