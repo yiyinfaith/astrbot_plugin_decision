@@ -70,6 +70,7 @@ def build_decision_state(
     current_prompt: str,
     contexts: Iterable[Mapping[str, Any]] | None,
     tools: Iterable[Mapping[str, str]] = (),
+    mcp_tools: Iterable[Mapping[str, str]] = (),
     subagents: Iterable[Mapping[str, str]] = (),
     history_max_messages: int = 8,
     history_max_chars: int = 6000,
@@ -90,6 +91,14 @@ def build_decision_state(
         if item.get("name")
     ]
     sections.append("[Available Tools]\n" + ("\n".join(tool_lines) if tool_lines else "(none)"))
+    mcp_lines = [
+        f"- {item.get('name', '')}: {item.get('description', '')}"
+        for item in mcp_tools
+        if item.get("name")
+    ]
+    sections.append(
+        "[Available MCP Tools]\n" + ("\n".join(mcp_lines) if mcp_lines else "(none)")
+    )
     agent_lines = [
         f"- {item.get('name', '')}: {item.get('description', '')}"
         for item in subagents
@@ -121,6 +130,20 @@ def is_handoff_tool(tool: Any) -> bool:
         return isinstance(tool, HandoffTool)
     except Exception:
         return tool.__class__.__name__ == "HandoffTool"
+
+
+def is_mcp_tool(tool: Any) -> bool:
+    """Return whether an AstrBot function tool is provided by an MCP server."""
+
+    server_name = str(getattr(tool, "mcp_server_name", "") or "").strip()
+    if server_name:
+        return True
+    cls = type(tool)
+    class_name = str(getattr(cls, "__name__", "")).casefold()
+    module_name = str(getattr(cls, "__module__", "")).casefold()
+    return class_name == "mcptool" or class_name.endswith("mcptool") or module_name.endswith(
+        ".mcp_client"
+    )
 
 
 def tool_is_active(tool: Any) -> bool:

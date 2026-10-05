@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from decision.context import build_decision_state, context_lines, tool_summary
+from decision.context import build_decision_state, context_lines, is_mcp_tool, tool_summary
 from decision.context import question_id as make_question_id
 from decision.models import DecisionProviderError, DecisionValidationError, parse_systemone_response
 from decision.proactive import (
@@ -711,6 +711,66 @@ def test_custom_routing_template_replaces_only_supported_placeholders():
     assert rendered == 'tools=search; agents=(无); json={"keep": true}'
 
 
+def test_routing_template_replaces_mcp_placeholder():
+    rendered = render_routing_prompt(
+        "tools={tools}; mcp={mcps}; agents={subagents}",
+        recommended_tools=[],
+        recommended_mcp=["filesystem_read"],
+        recommended_subagents=[],
+    )
+    assert rendered == "tools=(无); mcp=filesystem_read; agents=(无)"
+
+
+def test_mcp_tool_detection_uses_server_identity():
+    mcp_tool = SimpleNamespace(
+        name="filesystem_read", mcp_server_name="filesystem", active=True
+    )
+    ordinary = SimpleNamespace(name="filesystem_read", active=True)
+    assert is_mcp_tool(mcp_tool)
+    assert not is_mcp_tool(ordinary)
+
+
+def test_mcp_filter_keep_and_recommend_are_independent():
+    selected = SimpleNamespace(
+        name="filesystem_read", description="read files", mcp_server_name="filesystem", active=True
+    )
+    dropped = SimpleNamespace(
+        name="filesystem_write", description="write files", mcp_server_name="filesystem", active=True
+    )
+    outcome = choose_tools(
+        [selected, dropped],
+        {"selected_q": {"noul": 0.9}, "dropped_q": {"noul": 0.1}},
+        {},
+        threshold=0.65,
+        always_keep=set(),
+        decision_tool=None,
+        always_keep_mcp={"filesystem_write"},
+        always_keep_mcp_recommend={"filesystem_write"},
+        question_to_mcp={"selected_q": "filesystem_read", "dropped_q": "filesystem_write"},
+        filter_mcp=True,
+    )
+    assert [tool.name for tool in outcome.selected] == ["filesystem_read", "filesystem_write"]
+    assert outcome.recommended_mcp == ["filesystem_read", "filesystem_write"]
+
+
+def test_mcp_filter_off_keeps_unselected_and_still_recommends_only_selected():
+    mcp_tool = SimpleNamespace(
+        name="filesystem_read", description="read files", mcp_server_name="filesystem", active=True
+    )
+    outcome = choose_tools(
+        [mcp_tool],
+        {"mcp_q": {"noul": 0.1}},
+        {},
+        threshold=0.65,
+        always_keep=set(),
+        decision_tool=None,
+        question_to_mcp={"mcp_q": "filesystem_read"},
+        filter_mcp=False,
+    )
+    assert [tool.name for tool in outcome.selected] == ["filesystem_read"]
+    assert outcome.recommended_mcp == []
+
+
 def test_append_system_prompt_is_idempotent_for_this_plugin_section():
     req = SimpleNamespace(system_prompt="persona")
     append_system_prompt(req, "recommendation")
@@ -756,7 +816,7 @@ def test_public_schema_contains_only_global_settings_and_master_switches():
     }
     assert all("[" not in item.get("description", "") for item in schema.values())
     assert schema["tools_subagents_decision_enabled"]["default"] is True
-    assert schema["tools_subagents_decision_enabled"]["description"] == "Tools/SubAgent 决策"
+    assert schema["tools_subagents_decision_enabled"]["description"] == "Tools/MCP/SubAgent 决策"
     assert "不影响主动对话" in schema["tools_subagents_decision_enabled"]["hint"]
     assert schema["proactive_reply_enabled"]["default"] is False
     assert "详细配置在插件 WebUI" in schema["proactive_reply_enabled"]["hint"]
@@ -768,10 +828,13 @@ def test_public_schema_contains_only_global_settings_and_master_switches():
         "jev_pre_prompt",
         "main_llm_post_prompt",
         "tool_filter_enabled",
+        "mcp_filter_enabled",
         "subagent_filter_enabled",
         "tool_noul_threshold",
         "always_keep_tools",
         "always_keep_recommend_tools",
+        "always_keep_mcp",
+        "always_keep_recommend_mcp",
         "always_keep_subagents",
         "always_keep_recommend_subagents",
         "proactive_whitelist",
@@ -817,7 +880,10 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     assert "锁定内置顺序" not in page
     assert "始终按内置顺序执行" in page
     assert "routing-rules-table" in page
-    assert "两类能力的 Jev 判断会合并为一次请求" in page
+    assert "三类能力的 Jev 判断会合并为一次请求" in page
+    assert "mcp_decision_enabled" in page
+    assert "mcp_filter_enabled" in page
+    assert "always_keep_mcp" in page
     assert "<h2>输入增强</h2>" in page
     assert "conversation_flow_analysis_enabled" in page
     assert "conversation_flow_window" in page

@@ -797,6 +797,92 @@ async def test_enabled_tools_and_subagents_share_one_jev_request(host, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_mcp_is_listed_separately_and_joins_the_single_jev_request(host, monkeypatch):
+    manager = host.context.get_llm_tool_manager()
+    mcp_tool = SimpleNamespace(
+        name="filesystem_read",
+        description="read files",
+        mcp_server_name="filesystem",
+        active=True,
+    )
+    ordinary = SimpleNamespace(name="ordinary_tool", description="ordinary", active=True)
+    manager.func_list.extend([mcp_tool, ordinary])
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    host.body.update(
+        always_keep_tools=[],
+        always_keep_recommend_tools=[],
+        always_keep_mcp=[],
+        always_keep_recommend_mcp=[],
+        always_keep_subagents=[],
+        always_keep_recommend_subagents=[],
+        always_keep_tools_customized=True,
+        tool_filter_enabled=True,
+        mcp_filter_enabled=True,
+        subagent_filter_enabled=False,
+        tool_decision_enabled=True,
+        mcp_decision_enabled=True,
+        subagent_decision_enabled=False,
+        main_llm_post_prompt="Tools={tools}; MCP={mcps}; SubAgents={subagents}",
+    )
+    assert (await plugin.page_save_settings())["saved"] is True
+    listed = (await plugin.page_tools())["tools"]
+    mcp_rows = [item for item in listed if item["name"] == mcp_tool.name]
+    assert len(mcp_rows) == 1
+    assert mcp_rows[0]["mcp"] is True
+    assert mcp_rows[0]["handoff"] is False
+
+    seen_questions = []
+
+    async def evaluate(*, state, questions):
+        seen_questions.append(questions)
+        return SimpleNamespace(
+            answers={qid: {"noul": 1.0} for qid in questions},
+        )
+
+    monkeypatch.setattr(plugin, "_evaluate", evaluate)
+    toolset = SimpleNamespace(tools=[ordinary, mcp_tool, plugin._decision_tool])
+    toolset.get_tool = lambda name: next(
+        (tool for tool in toolset.tools if tool.name == name), None
+    )
+    req = SimpleNamespace(
+        func_tool=toolset, system_prompt="persona", prompt="read a file", contexts=[]
+    )
+    await plugin.filter_tools_before_llm(None, req)
+    assert len(seen_questions) == 1
+    assert any(qid.startswith("tool_") for qid in seen_questions[0])
+    assert any(qid.startswith("mcp_") for qid in seen_questions[0])
+    assert mcp_tool in req.func_tool.tools
+    assert "MCP=filesystem_read" in req.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_mcp_manual_keep_and_recommend_are_persisted_separately(host):
+    mcp_tool = SimpleNamespace(
+        name="filesystem_read",
+        description="read files",
+        mcp_server_name="filesystem",
+        active=True,
+    )
+    host.context.get_llm_tool_manager().func_list.append(mcp_tool)
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    host.body.update(
+        always_keep_tools=[],
+        always_keep_recommend_tools=[],
+        always_keep_mcp=[mcp_tool.name],
+        always_keep_recommend_mcp=[mcp_tool.name],
+        always_keep_subagents=[],
+        always_keep_recommend_subagents=[],
+    )
+    result = await plugin.page_save_settings()
+    assert result["always_keep_tools"] == []
+    assert result["always_keep_mcp"] == [mcp_tool.name]
+    assert result["always_keep_recommend_mcp"] == [mcp_tool.name]
+    settings = await plugin.page_settings()
+    assert settings["always_keep_mcp"] == [mcp_tool.name]
+    assert settings["always_keep_recommend_mcp"] == [mcp_tool.name]
+
+
+@pytest.mark.asyncio
 async def test_jev_failure_keeps_manual_recommendations(host, monkeypatch):
     """A fail-open Jev request must not suppress manual recommendations."""
 

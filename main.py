@@ -24,6 +24,7 @@ from astrbot.core.utils.astrbot_path import get_astrbot_config_path
 from .decision.context import (
     build_decision_state,
     is_handoff_tool,
+    is_mcp_tool,
     question_id,
     short_description,
     tool_is_active,
@@ -106,16 +107,20 @@ DETAIL_DEFAULTS: dict[str, Any] = {
     "always_keep_recommend_tools": [],
     "always_keep_subagents": [],
     "always_keep_recommend_subagents": [],
+    "always_keep_mcp": [],
+    "always_keep_recommend_mcp": [],
     "always_keep_tools_customized": False,
     "tool_filter_enabled": True,
     "subagent_filter_enabled": False,
+    "mcp_filter_enabled": True,
     # Per-category Jev decision switches.  Filtering and judging are
     # deliberately independent: a category can be judged only to produce
     # recommendations while remaining fully visible to the main LLM, or can
     # be filtered from the manually kept set without making a Jev request.
     "tool_decision_enabled": True,
     "subagent_decision_enabled": True,
-    # One shared scope gates the complete Tools/SubAgent decision module.
+    "mcp_decision_enabled": True,
+    # One shared scope gates the complete Tools/MCP/SubAgent decision module.
     # Blacklist mode with no entries preserves the historical default: apply
     # the module to every conversation.  Switching to whitelist mode with an
     # empty list intentionally disables it everywhere.
@@ -132,7 +137,7 @@ DETAIL_DEFAULTS: dict[str, Any] = {
 @register(
     PLUGIN_NAME,
     "yiyinfaith",
-    "jev决策综合插件：用 Jev 判断 Tools、SubAgents 和主动对话，并保留 AstrBot 主 LLM 的最终控制权。",
+    "jev决策综合插件：用 Jev 判断 Tools、MCP、SubAgents 和主动对话，并保留 AstrBot 主 LLM 的最终控制权。",
     "0.1.0",
 )
 class DecisionPlugin(Star):
@@ -547,6 +552,7 @@ class DecisionPlugin(Star):
         self,
         req: ProviderRequest,
         tools: list[Any],
+        mcp_tools: list[Any],
         handoffs: list[Any],
     ) -> str:
         return build_decision_state(
@@ -554,6 +560,7 @@ class DecisionPlugin(Star):
             current_prompt=str(req.prompt or ""),
             contexts=req.contexts,
             tools=[tool_summary(tool) for tool in tools],
+            mcp_tools=[tool_summary(tool) for tool in mcp_tools],
             subagents=[tool_summary(tool) for tool in handoffs],
             history_max_messages=self._int("history_max_messages", 8),
             history_max_chars=self._int("history_max_chars", 6000),
@@ -619,14 +626,16 @@ class DecisionPlugin(Star):
         self,
         req: ProviderRequest,
         ordinary: list[Any],
+        mcp_tools: list[Any],
         handoffs: list[Any],
         questions: Mapping[str, Mapping[str, Any]],
         question_to_tool: Mapping[str, str],
+        question_to_mcp: Mapping[str, str],
         question_to_handoff: Mapping[str, str],
     ) -> list[tuple[str, dict[str, dict[str, Any]]]]:
         """Split candidate judgments only when the complete Jev request is oversized."""
 
-        full_state = self._state_for_request(req, ordinary, handoffs)
+        full_state = self._state_for_request(req, ordinary, mcp_tools, handoffs)
         budget = self._context_budget()
         total_tokens = estimate_request_tokens(full_state, questions)
         if total_tokens < budget:
@@ -643,6 +652,11 @@ class DecisionPlugin(Star):
             qid = next((key for key, value in question_to_handoff.items() if value == name), "")
             if qid:
                 entries.append(("handoff", tool, qid))
+        for tool in mcp_tools:
+            name = str(getattr(tool, "name", ""))
+            qid = next((key for key, value in question_to_mcp.items() if value == name), "")
+            if qid:
+                entries.append(("mcp", tool, qid))
         if not entries:
             return [(full_state, dict(questions))]
 
@@ -668,10 +682,11 @@ class DecisionPlugin(Star):
 
         def render(bucket: list[tuple[str, Any, str]]) -> tuple[str, dict[str, dict[str, Any]]]:
             bucket_tools = [tool for kind, tool, _ in bucket if kind == "tool"]
+            bucket_mcp = [tool for kind, tool, _ in bucket if kind == "mcp"]
             bucket_handoffs = [tool for kind, tool, _ in bucket if kind == "handoff"]
             bucket_questions = {qid: dict(questions[qid]) for _, _, qid in bucket}
             return (
-                self._state_for_request(req, bucket_tools, bucket_handoffs),
+                self._state_for_request(req, bucket_tools, bucket_mcp, bucket_handoffs),
                 bucket_questions,
             )
 
@@ -735,14 +750,21 @@ class DecisionPlugin(Star):
             for tool in outcome.selected
             if getattr(tool, "name", None) and is_handoff_tool(tool)
         ]
+        selected_mcp = [
+            str(getattr(tool, "name", ""))
+            for tool in outcome.selected
+            if getattr(tool, "name", None) and is_mcp_tool(tool)
+        ]
         # AstrBot's default console handler can hide INFO records.  Keep the
         # two normal decision summaries at WARNING so operators see them in
         # the console without enabling a separate debug switch.
         logger.warning(
-            "Decision Engine 共筛选出如下工具：Tools=%s；SubAgents=%s；推荐 Tools=%s；推荐 SubAgents=%s",
+            "Decision Engine 共筛选出如下工具：Tools=%s；MCP=%s；SubAgents=%s；推荐 Tools=%s；推荐 MCP=%s；推荐 SubAgents=%s",
             ", ".join(selected_tools) or "无",
+            ", ".join(selected_mcp) or "无",
             ", ".join(selected_subagents) or "无",
             ", ".join(outcome.recommended_tools) or "无",
+            ", ".join(getattr(outcome, "recommended_mcp", [])) or "无",
             ", ".join(getattr(outcome, "recommended_subagents", [])) or "无",
         )
 
@@ -765,8 +787,10 @@ class DecisionPlugin(Star):
             return
         tool_set = self._ensure_request_toolset(req)
         tool_filter_enabled = self._bool("tool_filter_enabled", True)
+        mcp_filter_enabled = self._bool("mcp_filter_enabled", True)
         subagent_filter_enabled = self._bool("subagent_filter_enabled", False)
         tool_decision_enabled = self._bool("tool_decision_enabled", True)
+        mcp_decision_enabled = self._bool("mcp_decision_enabled", True)
         subagent_decision_enabled = self._bool("subagent_decision_enabled", True)
         original = list(tool_set.tools)
         if not original:
@@ -774,10 +798,16 @@ class DecisionPlugin(Star):
         handoffs = [
             tool for tool in original if is_handoff_tool(tool) and tool_is_active(tool)
         ]
+        mcp_tools = [
+            tool
+            for tool in original
+            if is_mcp_tool(tool) and tool_is_active(tool)
+        ]
         ordinary = [
             tool
             for tool in original
             if not is_handoff_tool(tool)
+            and not is_mcp_tool(tool)
             and getattr(tool, "name", None) != DECISION_TOOL_NAME
             and tool_is_active(tool)
         ]
@@ -807,6 +837,35 @@ class DecisionPlugin(Star):
             for name in (self._setting("always_keep_recommend_subagents", []) or [])
             if str(name).strip()
         } & always_keep_subagents
+        always_keep_mcp = {
+            str(name).strip()
+            for name in (self._setting("always_keep_mcp", []) or [])
+            if str(name).strip()
+        }
+        # Before MCP had its own WebUI list, MCP tools were accepted by the
+        # ordinary Tools list.  Keep those selections effective until the user
+        # next saves the new three-section settings page.
+        configured_tool_keeps = {
+            str(name).strip()
+            for name in (self._setting("always_keep_tools", []) or [])
+            if str(name).strip()
+        }
+        always_keep_mcp.update(
+            name for name in configured_tool_keeps if any(
+                str(getattr(tool, "name", "")) == name for tool in mcp_tools
+            )
+        )
+        always_keep_recommend_mcp = {
+            str(name).strip()
+            for name in (self._setting("always_keep_recommend_mcp", []) or [])
+            if str(name).strip()
+        } & always_keep_mcp
+        always_keep_recommend_mcp.update(
+            name
+            for name in (self._setting("always_keep_recommend_tools", []) or [])
+            if str(name).strip() in always_keep_mcp
+            and any(str(getattr(tool, "name", "")) == str(name).strip() for tool in mcp_tools)
+        )
 
         unknown_always_keep = always_keep - {
             str(getattr(tool, "name", "")) for tool in original if getattr(tool, "name", None)
@@ -821,8 +880,10 @@ class DecisionPlugin(Star):
         # category with filtering disabled remains fully visible while its
         # Jev-selected candidates can still be recommended.
         decision_ordinary = ordinary if tool_decision_enabled else []
+        decision_mcp = mcp_tools if mcp_decision_enabled else []
         decision_handoffs = handoffs if subagent_decision_enabled else []
         question_to_tool: dict[str, str] = {}
+        question_to_mcp: dict[str, str] = {}
         questions: dict[str, dict[str, Any]] = {}
         for index, tool in enumerate(decision_ordinary):
             name = str(getattr(tool, "name", ""))
@@ -834,6 +895,21 @@ class DecisionPlugin(Star):
                     "Should this tool be available to and recommended to the main LLM "
                     "for the current request? Return a high probability only when it "
                     "could materially help; zero recommendations are allowed."
+                ),
+            }
+
+        for index, tool in enumerate(decision_mcp):
+            name = str(getattr(tool, "name", ""))
+            if not name:
+                continue
+            qid = question_id("mcp", name, index)
+            question_to_mcp[qid] = name
+            questions[qid] = {
+                "type": "noul",
+                "instructions": (
+                    "Should this MCP tool be available to and recommended to the main LLM "
+                    "for the current request? Return a high probability only when it could "
+                    "materially help; zero recommendations are allowed."
                 ),
             }
 
@@ -869,12 +945,17 @@ class DecisionPlugin(Star):
                 always_keep_handoffs_recommend=always_keep_recommend_subagents,
                 question_to_handoff=subagent_question_to_name,
                 filter_ordinary=tool_filter_enabled,
+                always_keep_mcp=always_keep_mcp,
+                always_keep_mcp_recommend=always_keep_recommend_mcp,
+                question_to_mcp=question_to_mcp,
+                filter_mcp=mcp_filter_enabled,
                 filter_handoffs=subagent_filter_enabled,
             )
             add_routing_hint(
                 req,
                 template=self._main_llm_post_prompt(),
                 recommended_tools=outcome.recommended_tools,
+                recommended_mcp=outcome.recommended_mcp,
                 recommended_subagents=outcome.recommended_subagents,
             )
             req.func_tool.tools = outcome.selected
@@ -885,9 +966,11 @@ class DecisionPlugin(Star):
             batches = self._decision_batches(
                 req,
                 decision_ordinary,
+                decision_mcp,
                 decision_handoffs,
                 questions,
                 question_to_tool,
+                question_to_mcp,
                 subagent_question_to_name,
             )
             tasks = [
@@ -934,10 +1017,18 @@ class DecisionPlugin(Star):
                 and is_handoff_tool(tool)
                 and str(getattr(tool, "name", "")) in always_keep_recommend_subagents
             ]
+            manual_recommended_mcp = [
+                str(getattr(tool, "name", ""))
+                for tool in original
+                if getattr(tool, "name", None)
+                and is_mcp_tool(tool)
+                and str(getattr(tool, "name", "")) in always_keep_recommend_mcp
+            ]
             add_routing_hint(
                 req,
                 template=self._main_llm_post_prompt(),
                 recommended_tools=manual_recommended_tools,
+                recommended_mcp=manual_recommended_mcp,
                 recommended_subagents=manual_recommended_subagents,
             )
             return
@@ -946,7 +1037,7 @@ class DecisionPlugin(Star):
             qid: answer
             for result in results
             for qid, answer in result.answers.items()
-            if qid in question_to_tool or qid in subagent_question_to_name
+            if qid in question_to_tool or qid in question_to_mcp or qid in subagent_question_to_name
         }
         outcome = choose_tools(
             original,
@@ -963,14 +1054,20 @@ class DecisionPlugin(Star):
             always_keep_handoffs_recommend=always_keep_recommend_subagents,
             question_to_handoff=subagent_question_to_name,
             filter_ordinary=tool_filter_enabled,
+            always_keep_mcp=always_keep_mcp,
+            always_keep_mcp_recommend=always_keep_recommend_mcp,
+            question_to_mcp=question_to_mcp,
+            filter_mcp=mcp_filter_enabled,
             filter_handoffs=subagent_filter_enabled,
         )
         recommended_subagents = outcome.recommended_subagents
         recommended_tools = outcome.recommended_tools
+        recommended_mcp = outcome.recommended_mcp
         add_routing_hint(
             req,
             template=self._main_llm_post_prompt(),
             recommended_tools=recommended_tools,
+            recommended_mcp=recommended_mcp,
             recommended_subagents=recommended_subagents,
         )
         req.func_tool.tools = outcome.selected
@@ -1276,7 +1373,7 @@ class DecisionPlugin(Star):
         )
 
     def _tools_scope_allows(self, event: AstrMessageEvent | None) -> bool:
-        """Apply the shared Tools/SubAgent decision black/white list."""
+        """Apply the shared Tools/MCP/SubAgent decision black/white list."""
 
         return self._scope_allows(
             event,
@@ -1643,13 +1740,13 @@ class DecisionPlugin(Star):
             tools = self._manager_tool_objects()
             handoffs = sum(isinstance(item, HandoffTool) for item in tools)
             output = (
-                f"Tools/SubAgent decision: {'enabled' if self._bool('tools_subagents_decision_enabled', True) else 'disabled'}\n"
+                f"Tools/MCP/SubAgent decision: {'enabled' if self._bool('tools_subagents_decision_enabled', True) else 'disabled'}\n"
                 f"proactive_reply={self._bool('proactive_reply_enabled', False)}\n"
                 f"provider={self._setting('provider', 'systemone_jev')}\n"
                 f"endpoint={self._setting('base_url', '')}{self._setting('systemone_path', '/v1/systemone')}\n"
                 f"model={self._setting('model', 'jev-latest')}\n"
-                f"tool_filter={self._bool('tool_filter_enabled', True)} subagent_filter={self._bool('subagent_filter_enabled', False)} "
-                f"tool_decision={self._bool('tool_decision_enabled', True)} subagent_decision={self._bool('subagent_decision_enabled', True)} "
+                f"tool_filter={self._bool('tool_filter_enabled', True)} mcp_filter={self._bool('mcp_filter_enabled', True)} subagent_filter={self._bool('subagent_filter_enabled', False)} "
+                f"tool_decision={self._bool('tool_decision_enabled', True)} mcp_decision={self._bool('mcp_decision_enabled', True)} subagent_decision={self._bool('subagent_decision_enabled', True)} "
                 f"threshold={self._float('tool_noul_threshold', DEFAULT_TOOL_NOUL_THRESHOLD):.3f}\n"
                 f"registered_tools={len(tools)} handoffs={handoffs} always_keep={len(self._setting('always_keep_tools', []) or [])}\n"
                 f"calls={self._call_count} failures={self._failure_count} latency_ms={self._last_call_latency_ms or 0:.1f}"
@@ -1699,6 +1796,7 @@ class DecisionPlugin(Star):
                         getattr(tool, "description", ""),
                     ),
                     "handoff": is_handoff_tool(tool),
+                    "mcp": is_mcp_tool(tool),
                     "active": tool_is_active(tool),
                     "builtin": name in builtin_names,
                     "origin_display": self._tool_origin(tool, builtin=name in builtin_names),
@@ -1716,6 +1814,7 @@ class DecisionPlugin(Star):
                         getattr(tool, "description", "") or "AstrBot 内置工具",
                     ),
                     "handoff": False,
+                    "mcp": False,
                     "active": tool_is_active(tool),
                     "builtin": True,
                     "origin_display": "Astrbot内置工具",
@@ -1728,6 +1827,7 @@ class DecisionPlugin(Star):
                     "name": DECISION_TOOL_NAME,
                     "description": "调用 Jev/SystemOne 对当前场景执行一次结构化判断；不会执行其他工具。",
                     "handoff": False,
+                    "mcp": False,
                     "active": True,
                     "builtin": False,
                     "origin_display": PLUGIN_DISPLAY_NAME,
@@ -1763,6 +1863,14 @@ class DecisionPlugin(Star):
             for item in (self._setting("always_keep_recommend_subagents", []) or [])
             if str(item) in always_keep_subagents
         ]
+        always_keep_mcp = [
+            str(item) for item in (self._setting("always_keep_mcp", []) or [])
+        ]
+        always_keep_recommend_mcp = [
+            str(item)
+            for item in (self._setting("always_keep_recommend_mcp", []) or [])
+            if str(item) in always_keep_mcp
+        ]
         proactive = {}
         for key, default in PROACTIVE_PAGE_DEFAULTS.items():
             value = self._setting(key, default)
@@ -1783,11 +1891,15 @@ class DecisionPlugin(Star):
                 "always_keep_recommend_tools": always_keep_recommend,
                 "always_keep_subagents": always_keep_subagents,
                 "always_keep_recommend_subagents": always_keep_recommend_subagents,
+                "always_keep_mcp": always_keep_mcp,
+                "always_keep_recommend_mcp": always_keep_recommend_mcp,
                 "jev_pre_prompt": self._policy(),
                 "main_llm_post_prompt": self._main_llm_post_prompt(),
                 "tool_filter_enabled": self._bool("tool_filter_enabled", True),
+                "mcp_filter_enabled": self._bool("mcp_filter_enabled", True),
                 "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
                 "tool_decision_enabled": self._bool("tool_decision_enabled", True),
+                "mcp_decision_enabled": self._bool("mcp_decision_enabled", True),
                 "subagent_decision_enabled": self._bool("subagent_decision_enabled", True),
                 "tools_scope": self._configured_scope_values("tools_scope"),
                 "tools_scope_blacklist": self._bool("tools_scope_blacklist", True),
@@ -1812,6 +1924,8 @@ class DecisionPlugin(Star):
             return error_response("request body must be an object", status_code=400)
         values = payload.get("always_keep_tools")
         recommendation_values = payload.get("always_keep_recommend_tools", [])
+        mcp_values = payload.get("always_keep_mcp", [])
+        mcp_recommendation_values = payload.get("always_keep_recommend_mcp", [])
         subagent_values = payload.get("always_keep_subagents", [])
         subagent_recommendation_values = payload.get("always_keep_recommend_subagents", [])
         if not isinstance(values, list) or any(not isinstance(item, str) for item in values):
@@ -1821,6 +1935,16 @@ class DecisionPlugin(Star):
         ):
             return error_response(
                 "always_keep_recommend_tools must be a string list", status_code=400
+            )
+        if not isinstance(mcp_values, list) or any(
+            not isinstance(item, str) for item in mcp_values
+        ):
+            return error_response("always_keep_mcp must be a string list", status_code=400)
+        if not isinstance(mcp_recommendation_values, list) or any(
+            not isinstance(item, str) for item in mcp_recommendation_values
+        ):
+            return error_response(
+                "always_keep_recommend_mcp must be a string list", status_code=400
             )
         if not isinstance(subagent_values, list) or any(
             not isinstance(item, str) for item in subagent_values
@@ -1835,8 +1959,10 @@ class DecisionPlugin(Star):
         jev_pre_prompt = payload.get("jev_pre_prompt")
         main_llm_post_prompt = payload.get("main_llm_post_prompt")
         tool_filter_enabled = payload.get("tool_filter_enabled")
+        mcp_filter_enabled = payload.get("mcp_filter_enabled")
         subagent_filter_enabled = payload.get("subagent_filter_enabled")
         tool_decision_enabled = payload.get("tool_decision_enabled")
+        mcp_decision_enabled = payload.get("mcp_decision_enabled")
         subagent_decision_enabled = payload.get("subagent_decision_enabled")
         tools_scope = payload.get("tools_scope")
         tools_scope_blacklist = payload.get("tools_scope_blacklist")
@@ -1847,10 +1973,14 @@ class DecisionPlugin(Star):
             return error_response("main_llm_post_prompt must be a string", status_code=400)
         if tool_filter_enabled is not None and not isinstance(tool_filter_enabled, bool):
             return error_response("tool_filter_enabled must be a boolean", status_code=400)
+        if mcp_filter_enabled is not None and not isinstance(mcp_filter_enabled, bool):
+            return error_response("mcp_filter_enabled must be a boolean", status_code=400)
         if subagent_filter_enabled is not None and not isinstance(subagent_filter_enabled, bool):
             return error_response("subagent_filter_enabled must be a boolean", status_code=400)
         if tool_decision_enabled is not None and not isinstance(tool_decision_enabled, bool):
             return error_response("tool_decision_enabled must be a boolean", status_code=400)
+        if mcp_decision_enabled is not None and not isinstance(mcp_decision_enabled, bool):
+            return error_response("mcp_decision_enabled must be a boolean", status_code=400)
         if subagent_decision_enabled is not None and not isinstance(
             subagent_decision_enabled, bool
         ):
@@ -1940,7 +2070,9 @@ class DecisionPlugin(Star):
         available = {
             str(getattr(tool, "name", ""))
             for tool in self._manager_tool_objects()
-            if getattr(tool, "name", None) and not is_handoff_tool(tool)
+            if getattr(tool, "name", None)
+            and not is_handoff_tool(tool)
+            and not is_mcp_tool(tool)
         }
         available.add(DECISION_TOOL_NAME)
         available.update(self._builtin_tool_names())
@@ -1954,6 +2086,25 @@ class DecisionPlugin(Star):
                 item.strip()
                 for item in recommendation_values
                 if item.strip() in cleaned and item.strip() in available
+            )
+        )[:500]
+        available_mcp = {
+            str(getattr(tool, "name", ""))
+            for tool in self._manager_tool_objects()
+            if getattr(tool, "name", None) and is_mcp_tool(tool)
+        }
+        cleaned_mcp = list(
+            dict.fromkeys(
+                item.strip()
+                for item in mcp_values
+                if item.strip() and item.strip() in available_mcp
+            )
+        )[:500]
+        cleaned_recommend_mcp = list(
+            dict.fromkeys(
+                item.strip()
+                for item in mcp_recommendation_values
+                if item.strip() in cleaned_mcp
             )
         )[:500]
         available_subagents = {
@@ -1979,16 +2130,22 @@ class DecisionPlugin(Star):
         detail_values.update(
             always_keep_tools=cleaned,
             always_keep_recommend_tools=cleaned_recommend,
+            always_keep_mcp=cleaned_mcp,
+            always_keep_recommend_mcp=cleaned_recommend_mcp,
             always_keep_subagents=cleaned_subagents,
             always_keep_recommend_subagents=cleaned_recommend_subagents,
             always_keep_tools_customized=True,
         )
         if tool_filter_enabled is not None:
             detail_values["tool_filter_enabled"] = tool_filter_enabled
+        if mcp_filter_enabled is not None:
+            detail_values["mcp_filter_enabled"] = mcp_filter_enabled
         if subagent_filter_enabled is not None:
             detail_values["subagent_filter_enabled"] = subagent_filter_enabled
         if tool_decision_enabled is not None:
             detail_values["tool_decision_enabled"] = tool_decision_enabled
+        if mcp_decision_enabled is not None:
+            detail_values["mcp_decision_enabled"] = mcp_decision_enabled
         if subagent_decision_enabled is not None:
             detail_values["subagent_decision_enabled"] = subagent_decision_enabled
         if tools_scope is not None:
@@ -2050,11 +2207,15 @@ class DecisionPlugin(Star):
                 "saved": True,
                 "always_keep_tools": cleaned,
                 "always_keep_recommend_tools": cleaned_recommend,
+                "always_keep_mcp": cleaned_mcp,
+                "always_keep_recommend_mcp": cleaned_recommend_mcp,
                 "always_keep_subagents": cleaned_subagents,
                 "always_keep_recommend_subagents": cleaned_recommend_subagents,
                 "tool_filter_enabled": self._bool("tool_filter_enabled", True),
+                "mcp_filter_enabled": self._bool("mcp_filter_enabled", True),
                 "subagent_filter_enabled": self._bool("subagent_filter_enabled", False),
                 "tool_decision_enabled": self._bool("tool_decision_enabled", True),
+                "mcp_decision_enabled": self._bool("mcp_decision_enabled", True),
                 "subagent_decision_enabled": self._bool("subagent_decision_enabled", True),
                 "tools_scope": self._configured_scope_values("tools_scope"),
                 "tools_scope_blacklist": self._bool("tools_scope_blacklist", True),
