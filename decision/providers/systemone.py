@@ -322,7 +322,7 @@ class SystemOneProvider(DecisionProvider):
                 )
                 if not retryable or attempt >= self.retries:
                     raise
-                # The interval is shared by Tools/SubAgents and proactive
+                # The interval is shared by Tools/MCP/SubAgents and proactive
                 # decisions. The caller's timeout still bounds each attempt.
                 if self.retry_logger is not None:
                     self.retry_logger(
