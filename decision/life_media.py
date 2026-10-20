@@ -97,23 +97,21 @@ def media_instruction(kind: str, low: int, high: int) -> str:
     label = KIND_LABELS[kind]
     if high <= 0:
         return ""
-    if low == high:
-        scope = f"恰好 {low} 个"
-    else:
-        scope = f"{low}~{high} 个"
     if kind == "audio":
+        # One audio request reads one text, so several clips would only repeat
+        # the same content; no count range is offered for audio.
         return (
-            f"本次主动发起可以附带{label}。若要开口，请调用 {tool} 工具生成，"
-            f"数量必须{scope}，由你根据内容自行决定；若此刻说话不如文字自然，也可以不发。"
+            f"本次主动发起可以附带{label}。若要开口，请调用 {tool} 工具生成一段，"
+            "由你根据内容自行决定说什么；若此刻说话不如文字自然，也可以不发。"
         )
     unit = "张" if kind == "photo" else "段"
     if low == high:
-        scope = f"恰好 {low} {unit}"
+        quantity = f"恰好 {low} {unit}"
     else:
-        scope = f"{low}~{high} {unit}"
+        quantity = f"{low}~{high} {unit}"
     return (
         f"本次主动发起可以附带{label}。若要分享，请调用 {tool} 工具生成，"
-        f"数量必须{scope}，由你根据场景自行决定；若此刻不适合分享，也可以不发。"
+        f"数量{quantity}，由你根据场景自行决定；若此刻不适合分享，也可以不发。"
     )
 
 
@@ -378,10 +376,16 @@ class LifeMedia:
                 usage["usage"][key] = quota + 1
                 await self.usage.save(usage)
                 self.last_call[umo] = time.monotonic()
-            # ``n`` lets one image request return several pictures; video and
-            # audio have no batch parameter, so they issue one call per item.
+            # ``n`` lets one image request return several pictures. Video has no
+            # batch parameter but each call is a fresh generation, so one call
+            # per item is meaningful. Audio is different: every call would read
+            # the same text, so a count above one would only produce duplicate
+            # clips, and it is capped at a single call.
             batched = "n" in signature.parameters
-            calls = 1 if batched else resolved_count
+            if kind == "audio":
+                calls = 1
+            else:
+                calls = 1 if batched else resolved_count
             results = []
             try:
                 if runtime.closed:

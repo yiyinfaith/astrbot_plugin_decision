@@ -162,7 +162,7 @@ def test_media_instruction_zero_high_is_empty(kind):
     assert media_instruction(kind, 1, 0) == ""
 
 
-@pytest.mark.parametrize("kind", MEDIA_KINDS)
+@pytest.mark.parametrize("kind", ["photo", "video"])
 def test_media_instruction_single_count(kind):
     text = media_instruction(kind, 2, 2)
     assert KIND_TOOLS[kind] in text
@@ -171,11 +171,22 @@ def test_media_instruction_single_count(kind):
     assert "~" not in text
 
 
-@pytest.mark.parametrize("kind", MEDIA_KINDS)
+@pytest.mark.parametrize("kind", ["photo", "video"])
 def test_media_instruction_range(kind):
     text = media_instruction(kind, 1, 3)
     assert "1~3" in text
     assert KIND_TOOLS[kind] in text
+
+
+def test_audio_instruction_has_no_count_range():
+    """One audio call reads one text, so a count range would only duplicate it."""
+
+    for low, high in ((1, 1), (1, 3), (2, 2)):
+        text = media_instruction("audio", low, high)
+        assert KIND_TOOLS["audio"] in text
+        assert "~" not in text
+        assert "恰好" not in text
+        assert "一段" in text
 
 
 def test_kind_tool_and_label_maps_are_complete():

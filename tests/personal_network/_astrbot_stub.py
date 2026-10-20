@@ -70,39 +70,86 @@ def file_response(path: Any, **kwargs: Any) -> dict[str, Any]:
     return {"path": str(path), **kwargs}
 
 
+class Plain:
+    """Stand-in for ``astrbot.api.message_components.Plain``."""
+
+    def __init__(self, text: str = "", **kwargs: Any):
+        self.text = text
+        self.type = "plain"
+        self.__dict__.update(kwargs)
+
+
+class Image:
+    """Stand-in for ``astrbot.api.message_components.Image``."""
+
+    def __init__(self, file: str = "", **kwargs: Any):
+        self.file = file
+        self.type = "image"
+        self.__dict__.update(kwargs)
+
+    @classmethod
+    def fromFileSystem(cls, path: Any) -> Image:
+        return cls(file=str(path))
+
+
+def _real_astrbot_available() -> bool:
+    """Return whether a genuine AstrBot distribution is importable.
+
+    ``find_spec`` raises when another test module has already installed a bare
+    ``ModuleType`` named ``astrbot`` (such a stub has no ``__spec__``), so a
+    missing spec is treated as "already stubbed" rather than as an error.
+    """
+
+    try:
+        return importlib.util.find_spec("astrbot") is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def install() -> None:
-    """Install AstrBot doubles when the real runtime is not importable."""
-    if importlib.util.find_spec("astrbot") is not None:
+    """Install AstrBot doubles when the real runtime is not importable.
+
+    Idempotent and additive: existing modules are reused and only missing
+    attributes are filled in. Recreating them would replace ``web.request``,
+    and ``PersonalNetworkService`` holds that object by value, so a second
+    install from another test module would silently break it.
+    """
+
+    if _real_astrbot_available():
         return
-    astrbot = ModuleType("astrbot")
-    astrbot.logger = logging.getLogger("tests.personal_network.astrbot")
-    api = ModuleType("astrbot.api")
+
+    def module(name: str) -> ModuleType:
+        existing = sys.modules.get(name)
+        if existing is None:
+            existing = ModuleType(name)
+            sys.modules[name] = existing
+        return existing
+
+    astrbot = module("astrbot")
+    if not hasattr(astrbot, "logger"):
+        astrbot.logger = logging.getLogger("tests.personal_network.astrbot")
+    api = module("astrbot.api")
     api.logger = astrbot.logger
-    web = ModuleType("astrbot.api.web")
+    web = module("astrbot.api.web")
     web.PluginUploadFile = PluginUploadFile
     web.json_response = json_response
     web.error_response = error_response
     web.file_response = file_response
-    web.request = RequestStub()
-    core = ModuleType("astrbot.core")
-    agent = ModuleType("astrbot.core.agent")
-    message = ModuleType("astrbot.core.agent.message")
+    if not isinstance(getattr(web, "request", None), RequestStub):
+        web.request = RequestStub()
+    components = module("astrbot.api.message_components")
+    components.Plain = Plain
+    components.Image = Image
+    core = module("astrbot.core")
+    agent = module("astrbot.core.agent")
+    message = module("astrbot.core.agent.message")
     message.TextPart = TextPart
     api.web = web
+    api.message_components = components
     core.agent = agent
     agent.message = message
     astrbot.api = api
     astrbot.core = core
-    sys.modules.update(
-        {
-            "astrbot": astrbot,
-            "astrbot.api": api,
-            "astrbot.api.web": web,
-            "astrbot.core": core,
-            "astrbot.core.agent": agent,
-            "astrbot.core.agent.message": message,
-        }
-    )
 
 
 def reset_request() -> RequestStub:
