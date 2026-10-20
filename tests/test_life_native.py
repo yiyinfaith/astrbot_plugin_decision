@@ -723,3 +723,16 @@ async def test_media_sent_then_new_message_does_not_save_unsent_final_text(nativ
     history = native.context.conversation_manager.update_conversation.call_args.kwargs["history"]
     assert "想和你分享这本书" not in str(history)
     assert any(message["role"] == "tool" for message in history)
+
+
+def test_life_chat_status_does_not_expose_other_conversations(native):
+    other = "qq:FriendMessage:private_other"
+    native.runtime.policy.ensure_state(other, "alice", native.plan, native.runtime._now())
+    native.runtime.audit = [
+        {"umo": UMO, "reason": "current"},
+        {"umo": other, "reason": "private_other_reason"},
+    ]
+    scoped = native.runtime.status(UMO)
+    assert list(scoped["sessions"]) == [UMO]
+    assert other not in str(scoped) and "private_other_reason" not in str(scoped)
+    assert other in native.runtime.status()["sessions"]

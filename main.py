@@ -2226,7 +2226,9 @@ class DecisionPlugin(Star):
             return
         runtime = await self._get_life_runtime()
         if action == "状态":
-            yield event.plain_result(json.dumps(runtime.status(), ensure_ascii=False))
+            yield event.plain_result(
+                json.dumps(runtime.status(str(event.unified_msg_origin)), ensure_ascii=False)
+            )
         elif action == "日程":
             async for result in runtime.show_schedule(event):
                 yield result

@@ -506,12 +506,18 @@ class LifeRuntime(VirtualLifeBase):
         if text:
             req.extra_user_content_parts.append(temporary_text(text))
 
-    def status(self):
+    def status(self, umo=None):
         return {
             "enabled": self.enabled,
-            "audit": self.audit[-30:],
+            "audit": [entry for entry in self.audit if umo is None or entry["umo"] == umo][-30:],
             "jobs": [
-                {"id": key, "at": at.isoformat()} for key, at in self.runtime.scheduled_jobs()
+                {"id": key, "at": at.isoformat()}
+                for key, at in self.runtime.scheduled_jobs()
+                if umo is None or key.startswith(f"pvd:{self._umo_hash(umo)}:")
             ],
-            "sessions": {key: value.to_dict() for key, value in self.storage.sessions.items()},
+            "sessions": {
+                key: value.to_dict()
+                for key, value in self.storage.sessions.items()
+                if umo is None or key == umo
+            },
         }
