@@ -279,7 +279,7 @@ async def test_dialogue_enhancement_scopes_and_output_pipeline_are_page_settings
                 "pipeline": {"steps": ["split(分段回复)"]},
                 "split": {"max_length": 240},
             },
-        }
+        },
     )
     result = await plugin.page_save_settings()
     assert result["saved"] is True
@@ -350,7 +350,9 @@ async def test_tools_scope_bypass_keeps_request_untouched_and_skips_jev(host, mo
     )
     evaluate = AsyncMock(side_effect=AssertionError("out-of-scope must not call Jev"))
     monkeypatch.setattr(plugin, "_evaluate", evaluate)
-    toolset = SimpleNamespace(tools=[ordinary], get_tool=lambda name: ordinary if name == ordinary.name else None)
+    toolset = SimpleNamespace(
+        tools=[ordinary], get_tool=lambda name: ordinary if name == ordinary.name else None
+    )
     req = SimpleNamespace(func_tool=toolset, system_prompt="persona")
     event = SimpleNamespace(
         unified_msg_origin="qq:GroupMessage:blocked-group",
@@ -1046,3 +1048,41 @@ async def test_matched_command_bypasses_jev_routing(host, monkeypatch):
     assert req.func_tool.tools == tools
     assert req.system_prompt == "persona"
     evaluate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_virtual_life_save_reload_only_in_data(host):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    life = host.module.normalize_life({})
+    life["media_settings"]["appearance"] = "white hair red eyes"
+    life["friend_settings"]["session_list"] = ["qq:FriendMessage:123"]
+    host.body.update(
+        life=life, message_interjection_enabled=False, always_keep_tools=["jev_decide"]
+    )
+    assert (await plugin.page_save_settings())["saved"] is True
+    reloaded = host.module.DecisionPlugin(host.context, host.config)
+    settings = await reloaded.page_settings()
+    assert settings["life"]["media_settings"]["appearance"] == "white hair red eyes"
+    assert not settings["message_interjection_enabled"]
+    assert "life" not in host.config
+    assert not host.path.is_relative_to(ROOT)
+    host.body["life"]["integration_settings"]["jev_threshold"] = 2
+    before = host.path.read_bytes()
+    assert (await plugin.page_save_settings())["status_code"] == 400
+    assert host.path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_direct_wake_bypasses_life_reply_waiting(host):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    runtime = SimpleNamespace(
+        enabled=True,
+        config={"schedule_settings": {"daily_schedule_generation_enable": True}},
+        queue_reply_delay=AsyncMock(),
+    )
+    plugin._life_runtime = runtime
+    plugin._command_handler_matched = lambda event: False
+    plugin._direct_reply_requested = lambda event: True
+    event = SimpleNamespace(get_extra=lambda key, default=None: default)
+    await plugin.life_waiting_request(event)
+    runtime.queue_reply_delay.assert_not_awaited()

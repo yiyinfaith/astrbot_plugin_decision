@@ -30,6 +30,7 @@ from .decision.context import (
     tool_is_active,
     tool_summary,
 )
+from .decision.life_config import life_schema, normalize_life, validate_umo
 from .decision.models import DecisionProviderError
 from .decision.proactive import (
     DEFAULT_REPLY_STARTERS,
@@ -104,6 +105,8 @@ DEFAULT_POLICY = (
     "不要生成最终回答，不要执行工具，不要发明候选名称。"
 )
 DETAIL_DEFAULTS: dict[str, Any] = {
+    "message_interjection_enabled": True,
+    "life": {},
     "always_keep_tools": [],
     "always_keep_recommend_tools": [],
     "always_keep_subagents": [],
@@ -139,11 +142,15 @@ DETAIL_DEFAULTS: dict[str, Any] = {
 }
 
 
+class DecisionFunctionTool(FunctionTool):
+    """Keep framework ownership, disable and reload tracking on this plugin."""
+
+
 @register(
     PLUGIN_NAME,
     "yiyinfaith",
     "jev决策综合插件：用 Jev 判断 Tool、MCP、Skill、SubAgent 和主动对话，并保留 AstrBot 主 LLM 的最终控制权。",
-    "0.1.0",
+    "0.2.0",
 )
 class DecisionPlugin(Star):
     """AstrBot integration layer for a provider-neutral decision engine."""
@@ -176,6 +183,11 @@ class DecisionPlugin(Star):
         self._ready = False
         self._active_reply_warning_emitted = False
         self._output_runtime: Any | None = None
+        self._life_runtime: Any | None = None
+        self._life_media: Any | None = None
+        self._life_lock = asyncio.Lock()
+        self._life_asset_lock = asyncio.Lock()
+        self._life_jobs: dict[str, dict[str, Any]] = {}
         self.proactive = ProactiveState(
             self._int("proactive_history_max_messages", 12),
             self._int("proactive_max_sessions", 500),
@@ -184,7 +196,7 @@ class DecisionPlugin(Star):
         self._call_count = 0
         self._failure_count = 0
 
-        self._decision_tool = FunctionTool(
+        self._decision_tool = DecisionFunctionTool(
             name=DECISION_TOOL_NAME,
             description=(
                 "Use the configured Decision Engine for one fast structured noul, choice, "
@@ -196,6 +208,66 @@ class DecisionPlugin(Star):
         # Context.add_llm_tools is the current AstrBot API. This tool is also
         # explicitly re-added to a request after filtering so it stays available.
         self.context.add_llm_tools(self._decision_tool)
+        self._life_tools = []
+        for name, description, handler, properties in (
+            (
+                "take_self_photo",
+                "拍摄并发送机器人自己的照片。通过 aigen 使用当前 AstrBot 人格的外貌参考图与今日穿搭；不是真实摄像头。",
+                self._take_self_photo,
+                {
+                    "scene": {
+                        "type": "string",
+                        "description": "拍摄场景、动作与构图，可留空使用当前活动。",
+                    }
+                },
+            ),
+            (
+                "take_self_video",
+                "拍摄并发送机器人自己的短视频。通过 aigen 保持外貌与今日穿搭；不访问真实摄像头。",
+                self._take_self_video,
+                {"scene": {"type": "string", "description": "视频场景、动作和镜头要求，可留空。"}},
+            ),
+            (
+                "get_virtual_daily_schedule",
+                "查询当前 AstrBot 人格的今日日程、穿搭和当前活动。",
+                self._get_virtual_daily_schedule,
+                {},
+            ),
+            (
+                "get_long_term_timeline",
+                "查询当前 AstrBot 人格已批准的长期生活阶段。",
+                self._get_long_term_timeline,
+                {},
+            ),
+            (
+                "add_schedule_requirement",
+                "仅当当前管理员明确要求时，为未来日期添加一次性日程要求。",
+                self._add_schedule_requirement,
+                {
+                    "date_range": {
+                        "type": "string",
+                        "description": "日期或区间，例如 2026-12-01..2026-12-03",
+                    },
+                    "requirement": {"type": "string", "description": "管理员要求，最多500字"},
+                },
+            ),
+        ):
+            parameters = {"type": "object", "properties": properties}
+            if name == "add_schedule_requirement":
+                parameters["required"] = ["date_range", "requirement"]
+            tool = DecisionFunctionTool(
+                name=name, description=description, parameters=parameters, handler=handler
+            )
+            self._life_tools.append(tool)
+            self.context.add_llm_tools(tool)
+        for endpoint, handler, methods in (
+            ("life", self.page_life, ["GET"]),
+            ("life/action", self.page_life_action, ["POST"]),
+            ("life/appearance", self.page_life_appearance, ["POST"]),
+        ):
+            self.context.register_web_api(
+                f"/{PLUGIN_NAME}/{endpoint}", handler, methods, "Virtual Life WebUI"
+            )
 
         self.context.register_web_api(
             f"/{PLUGIN_NAME}/tools",
@@ -298,6 +370,7 @@ class DecisionPlugin(Star):
             )
         self._ready = True
         await self._configure_output_runtime()
+        await self._configure_life_runtime()
         if not self.provider.api_key:
             logger.warning(
                 "Decision Engine API key is empty; tool filtering and proactive decisions are disabled."
@@ -306,9 +379,8 @@ class DecisionPlugin(Star):
     async def _configure_output_runtime(self) -> None:
         """Enable the vendored output pipeline only when explicitly selected."""
 
-        enabled = (
-            self._bool("conversation_flow_enabled", True)
-            and self._bool("output_enhancement_enabled", False)
+        enabled = self._bool("conversation_flow_enabled", True) and self._bool(
+            "output_enhancement_enabled", False
         )
         if not enabled:
             if self._output_runtime is not None:
@@ -339,6 +411,9 @@ class DecisionPlugin(Star):
         )
 
     async def terminate(self) -> None:
+        if self._life_runtime is not None:
+            await self._life_runtime.terminate()
+            self._life_runtime = None
         if self.provider is not None:
             await self.provider.close()
         self.provider = None
@@ -404,9 +479,7 @@ class DecisionPlugin(Star):
             ),
             "output_enhancement_enabled": self._bool("output_enhancement_enabled", False),
             "output_scope": [
-                str(item)
-                for item in (self._setting("output_scope", []) or [])
-                if str(item).strip()
+                str(item) for item in (self._setting("output_scope", []) or []) if str(item).strip()
             ],
             "output_scope_blacklist": self._bool("output_scope_blacklist", True),
             "output_pipeline": merged,
@@ -539,14 +612,29 @@ class DecisionPlugin(Star):
             runtime = str(context_config.get("computer_use_runtime", "local") or "local")
             values = SkillManager().list_skills(active_only=False, runtime=runtime)
             return list(values or [])
-        except (ImportError, AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError):
+        except (
+            ImportError,
+            AttributeError,
+            KeyError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ):
             logger.debug("Decision Engine could not enumerate AstrBot Skills.")
             return []
 
     def _tool_origin(self, tool: Any, *, builtin: bool = False) -> str:
         """Resolve the human-readable owner shown in the settings page."""
 
-        if getattr(tool, "name", None) == DECISION_TOOL_NAME:
+        if getattr(tool, "name", None) in {
+            DECISION_TOOL_NAME,
+            "take_self_photo",
+            "take_self_video",
+            "get_virtual_daily_schedule",
+            "get_long_term_timeline",
+            "add_schedule_requirement",
+        }:
             return PLUGIN_DISPLAY_NAME
         if builtin or self._is_builtin_tool(tool):
             return "Astrbot内置工具"
@@ -596,9 +684,7 @@ class DecisionPlugin(Star):
                 stars = []
             for star in stars or []:
                 root_name = str(
-                    getattr(star, "root_dir_name", "")
-                    or getattr(star, "module_path", "")
-                    or ""
+                    getattr(star, "root_dir_name", "") or getattr(star, "module_path", "") or ""
                 ).strip()
                 if root_name == plugin_name or str(getattr(star, "name", "")) == plugin_name:
                     return str(
@@ -756,7 +842,9 @@ class DecisionPlugin(Star):
             bucket_handoffs = [tool for kind, tool, _ in bucket if kind == "handoff"]
             bucket_questions = {qid: dict(questions[qid]) for _, _, qid in bucket}
             return (
-                self._state_for_request(req, bucket_tools, bucket_mcp, bucket_skills, bucket_handoffs),
+                self._state_for_request(
+                    req, bucket_tools, bucket_mcp, bucket_skills, bucket_handoffs
+                ),
                 bucket_questions,
             )
 
@@ -836,7 +924,8 @@ class DecisionPlugin(Star):
                 str(getattr(skill, "name", ""))
                 for skill in getattr(outcome, "selected_skills", [])
                 if getattr(skill, "name", None)
-            ) or "无",
+            )
+            or "无",
             ", ".join(selected_subagents) or "无",
             ", ".join(outcome.recommended_tools) or "无",
             ", ".join(getattr(outcome, "recommended_mcp", [])) or "无",
@@ -880,14 +969,8 @@ class DecisionPlugin(Star):
         skill_decision_enabled = self._bool("skill_decision_enabled", True)
         subagent_decision_enabled = self._bool("subagent_decision_enabled", True)
         original = list(tool_set.tools)
-        handoffs = [
-            tool for tool in original if is_handoff_tool(tool) and tool_is_active(tool)
-        ]
-        mcp_tools = [
-            tool
-            for tool in original
-            if is_mcp_tool(tool) and tool_is_active(tool)
-        ]
+        handoffs = [tool for tool in original if is_handoff_tool(tool) and tool_is_active(tool)]
+        mcp_tools = [tool for tool in original if is_mcp_tool(tool) and tool_is_active(tool)]
         skills = [skill for skill in self._skill_objects() if tool_is_active(skill)]
         if not original and not skills:
             return
@@ -949,9 +1032,9 @@ class DecisionPlugin(Star):
             if str(name).strip()
         }
         always_keep_mcp.update(
-            name for name in configured_tool_keeps if any(
-                str(getattr(tool, "name", "")) == name for tool in mcp_tools
-            )
+            name
+            for name in configured_tool_keeps
+            if any(str(getattr(tool, "name", "")) == name for tool in mcp_tools)
         )
         always_keep_recommend_mcp = {
             str(name).strip()
@@ -1310,16 +1393,12 @@ class DecisionPlugin(Star):
                     continue
                 if isinstance(component, At):
                     target_id = str(
-                        getattr(component, "qq", None)
-                        or getattr(component, "target", None)
-                        or ""
+                        getattr(component, "qq", None) or getattr(component, "target", None) or ""
                     ).strip()
                     if target_id.lower() == "all":
                         continue
                     if target_id:
-                        target_name = str(
-                            getattr(component, "name", None) or target_id
-                        ).strip()
+                        target_name = str(getattr(component, "name", None) or target_id).strip()
                         targets.append((target_id, target_name or target_id))
                 elif isinstance(component, Reply):
                     reply_to_id = str(
@@ -1496,11 +1575,11 @@ class DecisionPlugin(Star):
         """
 
         configured = self._setting(values_key, [])
-        values = {
-            str(item).strip()
-            for item in configured
-            if str(item).strip()
-        } if isinstance(configured, (list, tuple, set)) else set()
+        values = (
+            {str(item).strip() for item in configured if str(item).strip()}
+            if isinstance(configured, (list, tuple, set))
+            else set()
+        )
         matched = bool(self._event_scope_candidates(event) & values)
         blacklist = self._bool(blacklist_key, default_blacklist)
         return (not matched) if blacklist else matched
@@ -1573,6 +1652,8 @@ class DecisionPlugin(Star):
     async def proactive_reply(self, event: AstrMessageEvent):
         """Use Jev to decide whether AstrBot's normal Agent should interject."""
 
+        if not self._bool("message_interjection_enabled", True):
+            return
         if not self._bool("proactive_reply_enabled", False):
             return
         if not self._proactive_whitelist_allows(event):
@@ -1698,9 +1779,7 @@ class DecisionPlugin(Star):
                         # fail, use the proactive analysis interval instead
                         # of zero so an API outage cannot trigger one new
                         # request for every incoming message.
-                        no_reply_cooldown=self._float(
-                            "no_reply_cooldown_seconds", 3.0
-                        ),
+                        no_reply_cooldown=self._float("no_reply_cooldown_seconds", 3.0),
                     )
                     logger.warning(
                         "Decision Engine proactive check closed after failure: %s", _safe_error(exc)
@@ -1832,6 +1911,8 @@ class DecisionPlugin(Star):
 
     @filter.on_llm_response()
     async def remember_bot_response(self, event: AstrMessageEvent, response: Any) -> None:
+        if event.get_extra("decision_life_proactive", False):
+            return
         if not self._bool("proactive_reply_enabled", False):
             return
         if event.get_message_type() not in {
@@ -2004,6 +2085,307 @@ class DecisionPlugin(Star):
         )
         return json_response({"tools": tools})
 
+    async def _get_life_runtime(self):
+        async with self._life_lock:
+            if self._life_runtime is None:
+                from .decision.life_runtime import LifeRuntime
+
+                settings = normalize_life(dict(self._setting("life", {}) or {}))
+                runtime = LifeRuntime(self, settings)
+                try:
+                    await runtime.initialize()
+                except BaseException:
+                    await runtime.terminate()
+                    raise
+                self._life_runtime = runtime
+            return self._life_runtime
+
+    async def _configure_life_runtime(self):
+        settings = normalize_life(dict(self._setting("life", {}) or {}))
+        if self._life_runtime:
+            async with self._life_lock:
+                await self._life_runtime.terminate()
+                self._life_runtime = None
+        if (
+            self._bool("proactive_reply_enabled", False)
+            and settings["integration_settings"]["enable"]
+        ):
+            await self._get_life_runtime()
+
+    def _get_life_media(self):
+        if self._life_media is None:
+            from .decision.life_media import LifeMedia
+
+            self._life_media = LifeMedia(
+                self,
+                self._settings_path.parent.parent / "plugin_data" / PLUGIN_NAME / "virtual_life",
+            )
+        return self._life_media
+
+    async def _take_self_photo(self, event: AstrMessageEvent, scene: str = "") -> str:
+        return await self._get_life_media().capture(event, scene=scene)
+
+    async def _take_self_video(self, event: AstrMessageEvent, scene: str = "") -> str:
+        return await self._get_life_media().capture(event, scene=scene, video=True)
+
+    async def _get_virtual_daily_schedule(self, event: AstrMessageEvent) -> str:
+        runtime = await self._get_life_runtime()
+        return await runtime.get_virtual_daily_schedule(event)
+
+    async def _get_long_term_timeline(self, event: AstrMessageEvent) -> str:
+        runtime = await self._get_life_runtime()
+        return await runtime.get_long_term_timeline(event)
+
+    async def _add_schedule_requirement(
+        self, event: AstrMessageEvent, date_range: str, requirement: str
+    ) -> str:
+        if getattr(event, "role", "member") != "admin":
+            return "只有管理员可以添加日程要求。"
+        runtime = await self._get_life_runtime()
+        return await runtime._add_schedule_requirement(event, date_range, requirement)
+
+    @filter.event_message_type(
+        EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE, priority=1100
+    )
+    async def life_observe_message(self, event: AstrMessageEvent):
+        if event.get_extra("decision_life_proactive", False):
+            return
+        if self._life_runtime:
+            if self._command_handler_matched(event):
+                self._life_runtime._mark_conversation_activity(str(event.unified_msg_origin))
+                return
+            await self._life_runtime.record_incoming(event)
+
+    @filter.on_llm_request(priority=1100)
+    async def life_inject_state(self, event: AstrMessageEvent, req: ProviderRequest):
+        if self._life_runtime and not self._command_handler_matched(event):
+            if (
+                self._life_runtime.enabled
+                and not event.get_extra("decision_life_proactive", False)
+                and not event.get_extra("decision_life_counted", False)
+            ):
+                await self._life_runtime.mark_agent_active(event, None)
+                event.set_extra("decision_life_counted", True)
+            await self._life_runtime.inject_cached_state(event, req)
+
+    @getattr(filter, "on_waiting_llm_request", lambda **kw: lambda fn: fn)(priority=1100)
+    async def life_waiting_request(self, event: AstrMessageEvent):
+        if (
+            not self._life_runtime
+            or not self._life_runtime.enabled
+            or self._command_handler_matched(event)
+        ):
+            return
+        if not self._life_runtime.config["schedule_settings"]["daily_schedule_generation_enable"]:
+            return
+        # Explicit summons keep the immediate native reply contract.
+        if event.get_extra("decision_life_proactive", False) or self._direct_reply_requested(event):
+            return
+        at_bot, reply_bot, _, _ = self._message_address_flags(event)
+        if at_bot or reply_bot:
+            return
+        await self._life_runtime.queue_reply_delay(event)
+
+    @getattr(filter, "on_agent_begin", lambda **kw: lambda fn: fn)()
+    async def life_agent_begin(self, event, run_context):
+        if (
+            self._life_runtime
+            and not event.get_extra("decision_life_proactive", False)
+            and not event.get_extra("decision_life_counted", False)
+        ):
+            await self._life_runtime.mark_agent_active(event, run_context)
+            event.set_extra("decision_life_counted", True)
+
+    @getattr(filter, "on_agent_done", lambda **kw: lambda fn: fn)()
+    async def life_agent_done(self, event, run_context, response):
+        if self._life_runtime and event.get_extra("decision_life_counted", False):
+            event.set_extra("decision_life_counted", False)
+            await self._life_runtime.defer_agent_release(event, run_context, response)
+
+    @getattr(filter, "after_message_sent", lambda **kw: lambda fn: fn)()
+    async def life_after_send(self, event):
+        if self._life_runtime and not event.get_extra("decision_life_proactive", False):
+            await self._life_runtime.mark_active_conversation(event)
+
+    @filter.on_llm_response()
+    async def life_track_response(self, event, response):
+        if self._life_runtime:
+            await self._life_runtime.track_delayed_llm_response(event, response)
+            if not hasattr(filter, "on_agent_done"):
+                await self.life_agent_done(event, None, response)
+
+    @filter.command("生活")
+    async def life_command(self, event: AstrMessageEvent, action: str = "状态"):
+        if action not in {"状态", "日程", "穿搭", "立即"}:
+            yield event.plain_result(
+                "用法：/生活 状态｜日程｜穿搭｜立即（管理员）；其他设置请打开插件 WebUI。"
+            )
+            return
+        if action == "立即" and getattr(event, "role", "member") != "admin":
+            yield event.plain_result("只有管理员可以请求立即发起。")
+            return
+        runtime = await self._get_life_runtime()
+        if action == "状态":
+            yield event.plain_result(json.dumps(runtime.status(), ensure_ascii=False))
+        elif action == "日程":
+            async for result in runtime.show_schedule(event):
+                yield result
+        elif action == "穿搭":
+            async for result in runtime.show_outfit(event):
+                yield result
+        else:
+            persona, plan = await runtime._ensure_plan_for_umo(event.unified_msg_origin)
+            sent, reason = await runtime._attempt_unsolicited(
+                event.unified_msg_origin,
+                persona,
+                plan,
+                "管理员请求此刻自然地发起一次聊天",
+                "manual",
+            )
+            yield event.plain_result("已发起。" if sent else f"本次未发起：{reason}")
+        event.stop_event()
+
+    async def page_life(self):
+        from astrbot.api.web import json_response
+
+        providers = []
+        getter = getattr(self.context, "get_all_providers", None)
+        if callable(getter):
+            for provider in getter():
+                try:
+                    meta = provider.meta()
+                    providers.append({"id": meta.id, "name": meta.id})
+                except (AttributeError, RuntimeError, TypeError):
+                    continue
+        return json_response(
+            {
+                "providers": providers,
+                "schema": life_schema(),
+                "settings": normalize_life(dict(self._setting("life", {}) or {})),
+                "status": self._life_runtime.status()
+                if self._life_runtime
+                else {"enabled": False, "jobs": [], "audit": [], "sessions": {}},
+                "tasks": self._life_jobs,
+                "aigen_available": self._get_life_media().aigen() is not None,
+            }
+        )
+
+    async def page_life_appearance(self):
+        from astrbot.api.web import error_response, json_response, request
+
+        payload = await request.json(default={})
+        try:
+            if not isinstance(payload, Mapping):
+                raise ValueError("请求必须是对象")
+            runtime = await self._get_life_runtime()
+            umo = validate_umo(str(payload.get("umo", "")))
+            from astrbot.core.platform.message_session import MessageSession
+
+            MessageSession.from_str(umo)
+            persona = await runtime.personas.resolve(umo)
+            store = self._get_life_media().appearance
+            async with self._life_asset_lock:
+                if payload.get("action") == "upload":
+                    await store.upload(
+                        persona.id, payload.get("name", "reference"), payload.get("data_url", "")
+                    )
+                elif payload.get("action") == "delete":
+                    await store.remove(persona.id, str(payload.get("id", "")))
+                elif payload.get("action", "list") != "list":
+                    raise ValueError("未知外貌操作")
+                return json_response(
+                    {
+                        "persona_id": persona.id,
+                        "images": await store.list(persona.id, previews=True),
+                    }
+                )
+        except (ValueError, OSError, TypeError) as exc:
+            return error_response(_safe_error(exc), status_code=400)
+
+    async def page_life_action(self):
+        from astrbot.api.web import error_response, json_response, request
+
+        payload = await request.json(default={})
+        if not isinstance(payload, Mapping):
+            return error_response("请求必须是对象", status_code=400)
+        allowed = {
+            "inspect",
+            "generate",
+            "rewrite_schedule",
+            "rewrite_outfit",
+            "add_requirement",
+            "generate_timeline",
+            "regenerate_timeline",
+            "import_timeline",
+            "approve_timeline",
+            "reject_timeline",
+            "settle_delay",
+            "initiate",
+            "render_schedule",
+            "render_outfit",
+            "render_timeline",
+            "render_stage",
+        }
+        action, umo = str(payload.get("action", "")), str(payload.get("umo", ""))
+        if action not in allowed:
+            return error_response("未知生活操作", status_code=400)
+        try:
+            from astrbot.core.platform.message_session import MessageSession
+
+            validate_umo(umo)
+            MessageSession.from_str(umo)
+            runtime = await self._get_life_runtime()
+        except (ValueError, RuntimeError) as exc:
+            return error_response(_safe_error(exc), status_code=400)
+        import uuid
+
+        ident = uuid.uuid4().hex
+        self._life_jobs[ident] = {"state": "running", "action": action, "umo": umo}
+        while len(self._life_jobs) > 30:
+            removable = next(
+                (key for key, value in self._life_jobs.items() if value["state"] != "running"), None
+            )
+            if removable is None:
+                self._life_jobs.pop(ident, None)
+                return error_response("已有太多后台操作，请稍后再试", status_code=429)
+            self._life_jobs.pop(removable)
+
+        async def run():
+            try:
+                from .decision.life_actions import perform_life_action
+
+                async with runtime.action_lock:
+                    value = await perform_life_action(
+                        runtime,
+                        umo,
+                        action,
+                        str(payload.get("text", ""))[:50000],
+                        str(payload.get("date_range", "")),
+                    )
+                self._life_jobs[ident].update(state="done", result=value)
+                if action in {
+                    "generate",
+                    "rewrite_schedule",
+                    "rewrite_outfit",
+                    "generate_timeline",
+                    "regenerate_timeline",
+                    "import_timeline",
+                    "approve_timeline",
+                    "reject_timeline",
+                    "add_requirement",
+                }:
+                    self._life_jobs[ident]["inspection"] = await perform_life_action(
+                        runtime, umo, "inspect"
+                    )
+            except asyncio.CancelledError:
+                self._life_jobs[ident].update(state="cancelled")
+                raise
+            except Exception as exc:
+                self._life_jobs[ident].update(state="error", error=_safe_error(exc))
+
+        runtime.spawn(run())
+        return json_response({"task_id": ident})
+
     async def page_settings(self):
         from astrbot.api.web import json_response
 
@@ -2025,17 +2407,13 @@ class DecisionPlugin(Star):
             for item in (self._setting("always_keep_recommend_subagents", []) or [])
             if str(item) in always_keep_subagents
         ]
-        always_keep_mcp = [
-            str(item) for item in (self._setting("always_keep_mcp", []) or [])
-        ]
+        always_keep_mcp = [str(item) for item in (self._setting("always_keep_mcp", []) or [])]
         always_keep_recommend_mcp = [
             str(item)
             for item in (self._setting("always_keep_recommend_mcp", []) or [])
             if str(item) in always_keep_mcp
         ]
-        always_keep_skills = [
-            str(item) for item in (self._setting("always_keep_skills", []) or [])
-        ]
+        always_keep_skills = [str(item) for item in (self._setting("always_keep_skills", []) or [])]
         always_keep_recommend_skills = [
             str(item)
             for item in (self._setting("always_keep_recommend_skills", []) or [])
@@ -2058,6 +2436,8 @@ class DecisionPlugin(Star):
         return json_response(
             {
                 "always_keep_tools": always_keep,
+                "message_interjection_enabled": self._bool("message_interjection_enabled", True),
+                "life": normalize_life(dict(self._setting("life", {}) or {})),
                 "always_keep_recommend_tools": always_keep_recommend,
                 "always_keep_subagents": always_keep_subagents,
                 "always_keep_recommend_subagents": always_keep_recommend_subagents,
@@ -2096,6 +2476,15 @@ class DecisionPlugin(Star):
         payload = await request.json(default={})
         if not isinstance(payload, Mapping):
             return error_response("request body must be an object", status_code=400)
+        life_values = None
+        if "life" in payload:
+            try:
+                life_values = normalize_life(payload["life"])
+            except (ValueError, TypeError) as exc:
+                return error_response(str(exc), status_code=400)
+        interjection = payload.get("message_interjection_enabled")
+        if interjection is not None and not isinstance(interjection, bool):
+            return error_response("消息接话开关必须是布尔值", status_code=400)
         values = payload.get("always_keep_tools")
         recommendation_values = payload.get("always_keep_recommend_tools", [])
         mcp_values = payload.get("always_keep_mcp", [])
@@ -2262,9 +2651,7 @@ class DecisionPlugin(Star):
         available = {
             str(getattr(tool, "name", ""))
             for tool in self._manager_tool_objects()
-            if getattr(tool, "name", None)
-            and not is_handoff_tool(tool)
-            and not is_mcp_tool(tool)
+            if getattr(tool, "name", None) and not is_handoff_tool(tool) and not is_mcp_tool(tool)
         }
         available.add(DECISION_TOOL_NAME)
         available.update(self._builtin_tool_names())
@@ -2294,9 +2681,7 @@ class DecisionPlugin(Star):
         )[:500]
         cleaned_recommend_mcp = list(
             dict.fromkeys(
-                item.strip()
-                for item in mcp_recommendation_values
-                if item.strip() in cleaned_mcp
+                item.strip() for item in mcp_recommendation_values if item.strip() in cleaned_mcp
             )
         )[:500]
         available_skills = {
@@ -2338,6 +2723,10 @@ class DecisionPlugin(Star):
         detail_values = {
             key: self._setting(key, default) for key, default in DETAIL_DEFAULTS.items()
         }
+        if life_values is not None:
+            detail_values["life"] = life_values
+        if interjection is not None:
+            detail_values["message_interjection_enabled"] = interjection
         detail_values.update(
             always_keep_tools=cleaned,
             always_keep_recommend_tools=cleaned_recommend,
@@ -2419,6 +2808,12 @@ class DecisionPlugin(Star):
             self._int("proactive_max_sessions", 500),
         )
         await self._configure_output_runtime()
+        if life_values is not None:
+            try:
+                await self._configure_life_runtime()
+            except Exception as exc:
+                logger.error("Decision Engine 生活设置已保存，后台启动失败：%s", _safe_error(exc))
+                return json_response({"saved": True, "runtime_warning": _safe_error(exc)})
         return json_response(
             {
                 "saved": True,

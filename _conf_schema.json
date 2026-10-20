@@ -2,7 +2,9 @@
   "provider": {
     "type": "string",
     "description": "决策服务",
-    "options": ["systemone_jev"],
+    "options": [
+      "systemone_jev"
+    ],
     "default": "systemone_jev"
   },
   "base_url": {
@@ -68,7 +70,7 @@
   "proactive_reply_enabled": {
     "type": "bool",
     "description": "主动对话",
-    "hint": "只对白名单内的群聊和私聊启用主动对话判断。详细配置在插件 WebUI。",
+    "hint": "控制消息接话与主动发起两个模块。详细配置在插件 WebUI，包括接话范围、虚拟生活和主动发起订阅。",
     "default": false
   },
   "conversation_flow_enabled": {

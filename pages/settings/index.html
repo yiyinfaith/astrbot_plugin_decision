@@ -282,6 +282,25 @@
         .tool-controls { justify-content: flex-start; }
         .save-bar { right: 12px; left: 12px; justify-content: space-between; }
       }
+      .life-subnav { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:7px; border:1px solid #ffffff40; border-radius:24px; background:linear-gradient(135deg,#ffffff15,#bfb3ff0c); backdrop-filter:blur(24px); box-shadow:inset 0 1px 0 #ffffff45,0 12px 40px #02061740; margin-bottom:24px; }
+      .life-subnav button { border:1px solid transparent; border-radius:18px; padding:15px 20px; color:#d8ddf5; background:#1c2144; font-size:16px; font-weight:650; cursor:pointer; transition:background .22s,transform .22s,box-shadow .22s; }
+      .life-subnav button.selected { color:#fff; background:linear-gradient(125deg,#2460c5,#6752b6); border-color:#aebaff85; box-shadow:inset 0 1px 0 #ffffff60,0 5px 20px #3156d14a; }
+      .life-subnav button span { display:block; font-size:12px; font-weight:400; margin-top:5px; color:#e0e5ff; }
+      .life-page .status-pill { white-space:nowrap; flex-shrink:0; }
+      .life-page { display:grid; gap:24px; } .life-intro { display:flex; align-items:center; gap:20px; } .life-intro p { color:#bdc7e4; max-width:800px; line-height:1.7; }
+      .life-config-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; align-items:start; } .life-config-section { min-width:0; }
+      .life-config-section summary { cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:18px; font-weight:650; } .life-config-section summary small { color:#adb8d7; font-size:12px; font-weight:400; }
+      .life-setting-fields { padding-top:15px; } .life-setting-fields details { margin:16px 0; padding:15px; border-radius:16px; border:1px solid #ffffff20; background:#ffffff06; } .life-setting-fields details summary { font-size:15px; }
+      .life-setting-fields select { width:100%; padding:12px; border:1px solid #ffffff30; border-radius:12px; color:#f1f4ff; background:#202644; } .life-setting-fields option { color:#f1f4ff; background:#202644; }
+      .life-actions { display:flex; flex-wrap:wrap; gap:10px; margin:16px 0; } .life-persona { padding:13px 15px; color:#a9d9ff; border:1px solid #9ac8ff40; border-radius:12px; background:#243451; }
+      .life-reference-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:16px; margin-top:24px; } .life-reference { border-radius:20px; overflow:hidden; border:1px solid #ffffff30; background:#131a34; }
+      .life-reference img { display:block; width:100%; height:180px; object-fit:cover; } .life-reference>div { padding:10px; } .life-reference span { display:block; font-size:12px; overflow-wrap:anywhere; }
+      .life-upload { display:flex; min-height:180px; padding:20px; flex-direction:column; justify-content:center; gap:15px; border:1px dashed #97c4ffaa; border-radius:20px; color:#c8e0ff; background:linear-gradient(150deg,#273e63,#22203e); cursor:pointer; } .life-upload small { color:#b1bed8; line-height:1.7; } .life-upload input { max-width:100%; font-size:12px; }
+      .life-today { display:grid; grid-template-columns:1fr 1.2fr; gap:24px; padding:24px; border-radius:22px; border:1px solid #ffffff30; background:linear-gradient(150deg,#8dafff10,#d5acff10); margin:24px 0; }
+      .life-outfit-chips { display:flex; flex-wrap:wrap; gap:8px; } .life-outfit-chips span { border-radius:12px; padding:7px 10px; font-size:12px; background:#536c9633; color:#d9e7ff; }
+      .life-timeline { margin:0; padding:0; list-style:none; } .life-timeline li { display:flex; gap:15px; padding:10px 0; border-bottom:1px solid #ffffff16; } .life-timeline time { color:#a5caff; font-size:12px; white-space:nowrap; padding-top:3px; } .life-timeline small { display:block; color:#aeb9d3; margin-top:5px; }
+      .life-json { white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; padding:15px; font-size:12px; line-height:1.6; color:#d5e1fa; background:#10162bcc; border-radius:14px; } .life-task { border-top:1px solid #ffffff20; padding:16px 0; } .life-result-image { max-width:100%; max-height:650px; object-fit:contain; border-radius:15px; }
+      @media(max-width:760px) { .life-config-grid,.life-today { grid-template-columns:1fr; } .life-subnav button { padding:12px 8px; font-size:14px; } .life-subnav button span { font-size:10px; } .life-intro { display:block; } .life-intro .status-pill { margin-top:12px; } }
     </style>
   </head>
   <body>
@@ -341,9 +360,12 @@
         </section>
         </section>
 
-        <section v-show="activeTab === 'proactive'" class="section-grid">
+        <section v-show="activeTab === 'proactive'" class="proactive-page">
+          <div class="life-subnav" role="tablist" aria-label="主动对话模式"><button type="button" :class="{selected: proactiveTab === 'reactive'}" @click="proactiveTab = 'reactive'" role="tab" :aria-selected="proactiveTab === 'reactive'">消息接话<span>收到消息后，自然参与对话</span></button><button type="button" :class="{selected: proactiveTab === 'initiative'}" @click="proactiveTab = 'initiative'" role="tab" :aria-selected="proactiveTab === 'initiative'">主动发起<span>有自己的生活，也会主动联系</span></button></div>
+          <div v-show="proactiveTab === 'reactive'" class="section-grid">
           <div class="glass-card">
             <div class="card-heading"><div><div class="section-kicker">Proactive Chat</div><h2>主动对话策略</h2><p>主动对话总开关在 AstrBot 原生配置页；这里配置触发范围和判断方式。</p></div></div>
+            <div class="switch-row"><div class="switch-copy"><strong>启用消息接话</strong><small>仅控制收到消息后的 Jev 接话判断，不影响主动发起。</small></div><label class="switch"><input v-model="messageInterjection" type="checkbox"><span class="switch-track"></span></label></div>
             <div class="scope-mode"><div><strong>{{ form.proactive.proactive_scope_blacklist ? '主动对话黑名单' : '主动对话白名单' }}</strong><small>{{ form.proactive.proactive_scope_blacklist ? '名单内不进行主动对话；名单为空时全部应用。' : '只对名单内会话进行主动对话；名单为空时全部不应用。' }}</small></div><button class="scope-toggle" type="button" @click="form.proactive.proactive_scope_blacklist = !form.proactive.proactive_scope_blacklist">{{ form.proactive.proactive_scope_blacklist ? '黑名单' : '白名单' }}</button></div>
             <div class="field"><label>{{ form.proactive.proactive_scope_blacklist ? '不应用主动对话的会话' : '应用主动对话的会话' }} <span>每行一个群聊 ID、私聊用户 ID 或 unified_msg_origin</span></label><textarea v-model="form.proactive.proactive_whitelist" class="list-editor" placeholder="群聊 ID\n私聊用户 ID"></textarea></div>
             <div class="two-col"><div class="field"><label>直接回复前缀</label><input v-model="form.proactive.direct_reply_prefixes" type="text" placeholder="/、@"></div><div class="field"><label>机器人昵称</label><input v-model="form.proactive.proactive_alias" type="text" placeholder="AI|助手"></div></div>
@@ -355,6 +377,23 @@
             <div class="two-col"><div class="field"><label>回复冷却（秒）</label><input v-model.number="form.proactive.cooldown_seconds" type="number" min="0" step="1"></div><div class="field"><label>回复窗口（秒）</label><input v-model.number="form.proactive.reply_window_seconds" type="number" min="1" step="1"></div><div class="field"><label>窗口最多回复</label><input v-model.number="form.proactive.max_replies_per_window" type="number" min="0" step="1"></div><div class="field"><label>历史消息数</label><input v-model.number="form.proactive.proactive_history_max_messages" type="number" min="2" step="1"></div><div class="field"><label>最多会话数</label><input v-model.number="form.proactive.proactive_max_sessions" type="number" min="1" step="1"></div><div class="field"><label>观测超时（秒）</label><input v-model.number="form.proactive.observation_timeout_seconds" type="number" min="1" step="1"></div></div>
             <div class="field"><label>复读检测：条数 / 窗口秒数</label><div class="two-col"><input v-model.number="form.proactive.echo_detection_threshold" type="number" min="2" step="1"><input v-model.number="form.proactive.echo_detection_window_seconds" type="number" min="1" step="1"></div></div>
             <div class="field"><label>密集对话：消息数 / 窗口秒数 / 最少参与人数</label><div class="two-col"><input v-model.number="form.proactive.dense_conversation_threshold" type="number" min="1" step="1"><input v-model.number="form.proactive.dense_conversation_window_seconds" type="number" min="1" step="1"><input v-model.number="form.proactive.min_participant_count" type="number" min="1" step="1"></div></div>
+          </div>
+          </div>
+          <div v-show="proactiveTab === 'initiative'" class="life-page">
+            <div class="glass-card life-intro"><div><div class="section-kicker">A life of their own</div><h2>主动发起 · 虚拟生活</h2><p>日程、穿搭与生活状态按当前 AstrBot 人格共享；私聊和群聊各自管理额度与回应状态。Jev 判断通过后，由原生 Agent 开口。先打开原生配置页的“主动对话”，再开启下方“启用主动发起”并填写会话订阅；所有修改需保存。</p></div><span class="status-pill">{{ lifeStatus.enabled ? '后台已运行' : '后台未启用' }}</span></div>
+            <div class="life-workspace glass-card">
+              <div class="card-heading"><div><div class="section-kicker">Today &amp; Appearance</div><h2>今日生活与外貌</h2><p>先选择会话，页面自动读取其当前人格。参考图只绑定这个人格，照片与视频使用今日穿搭。</p></div><span class="status-pill">aigen {{ aigenAvailable ? '已连接' : '未连接' }}</span></div>
+              <div class="two-col"><div class="field"><label>目标会话 <span>填写 /sid 获取的完整 UMO</span></label><input type="text" v-model="lifeUmo" placeholder="aiocqhttp:FriendMessage:用户ID" list="life-sessions"><datalist id="life-sessions"><option v-for="umo in lifeSessions" :key="umo" :value="umo"></option></datalist></div><div class="field"><label>当前人格</label><div class="life-persona">{{ appearancePersona || '选择会话后点击读取' }}</div></div></div>
+              <div class="life-actions"><button class="button secondary" :disabled="lifeBusy" @click="inspectLife">读取生活与外貌</button><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('generate')">生成今日内容</button><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('rewrite_schedule')">重写日程</button><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('rewrite_outfit')">重写穿搭</button></div>
+              <p class="hint">操作使用已保存的设置；修改配置后请先保存。生成与重写会请求日程模型，不会自动发送聊天消息。</p>
+              <div class="field"><label>补充要求 / 长期阶段自然语言要求</label><textarea v-model="lifeActionText" placeholder="例如今天穿浅色休闲服，下午在书店。导入阶段时填写完整 JSON。"></textarea></div>
+              <div class="life-reference-grid"><div v-for="image in appearanceImages" :key="image.id" class="life-reference"><img :src="image.preview" :alt="image.name"><div><span>{{ image.name }}</span><button class="button ghost" :disabled="lifeBusy" @click="removeAppearance(image.id)">删除</button></div></div><label class="life-upload"><span>＋ 上传外貌参考图</span><small>PNG / JPEG / WebP · 每张最多 8MB · 每人格最多 5 张</small><input type="file" accept="image/png,image/jpeg,image/webp" :disabled="lifeBusy" @change="uploadAppearance"></label></div>
+              <div v-if="lifeInspection.plan" class="life-today"><div><h3>{{ lifeInspection.plan.theme || '今日生活' }}</h3><p>{{ lifeInspection.plan.mood }}</p><p v-if="lifeInspection.plan.outfit">{{ lifeInspection.plan.outfit.summary }}</p><div class="life-outfit-chips" v-if="lifeInspection.plan.outfit"><span v-for="(item,idx) in lifeInspection.plan.outfit.items" :key="idx">{{ item.name }} · {{ item.details }}</span></div></div><ol class="life-timeline"><li v-for="item in lifeInspection.plan.timeline" :key="item.id"><time>{{ item.start }}—{{ item.end }}</time><div><strong>{{ item.activity }}</strong><small>{{ item.location }} {{ item.state }}</small></div></li></ol></div>
+              <div class="life-actions"><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('render_schedule')">日程图片</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('render_outfit')">穿搭图片</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('render_timeline')">长期阶段图片</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('render_stage')">当前阶段详情</button><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('initiate')">请求立即发起（会发送）</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('settle_delay')">结算回复等待</button></div>
+            </div>
+            <div class="life-config-grid"><details v-for="(group,key) in lifeSchema" :key="key" class="glass-card life-config-section" :open="['integration_settings','schedule_settings','media_settings'].includes(key)"><summary><span>{{ cleanLifeLabel(group.description || key) }}</span><small>{{ Object.keys(group.items || {}).length }} 项设置</small></summary><life-settings v-if="lifeConfig[key]" :schema="group.items" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings></details></div>
+            <div class="glass-card"><div class="card-heading"><div><div class="section-kicker">Long-term continuity</div><h2>长期时间表与一次性要求</h2><p>长期阶段支持草稿、批准、拒绝、重生成和 JSON 导入；日程要求只在指定日期首次成功生成后消费。</p></div></div><div class="life-actions"><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('generate_timeline')">生成追加草稿</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('regenerate_timeline')">生成替换草稿</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('import_timeline')">从要求框导入 JSON</button><button class="button secondary" :disabled="lifeBusy || !lifeInspection.draft" @click="lifeAction('approve_timeline')">批准草稿</button><button class="button ghost" :disabled="lifeBusy || !lifeInspection.draft" @click="lifeAction('reject_timeline')">拒绝 / 按意见重写</button></div><div class="field"><label>未来日期或区间</label><input type="text" v-model="lifeDateRange" placeholder="2026-12-01..2026-12-03"></div><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('add_requirement')">添加一次性日程要求</button><details v-if="lifeInspection.timeline || lifeInspection.draft"><summary>查看已批准阶段与待批准草稿</summary><pre class="life-json">{{ JSON.stringify({timeline:lifeInspection.timeline,draft:lifeInspection.draft,requirements:lifeInspection.requirements},null,2) }}</pre></details></div>
+            <div class="glass-card"><div class="card-heading"><div><div class="section-kicker">Runtime</div><h2>运行与操作结果</h2><p>{{ lifeMessage || '配置保存在 AstrBot 数据目录；后台主动发送默认关闭。' }}</p></div><button class="button ghost" @click="refreshLife">刷新状态</button></div><div v-for="(task,id) in lifeTasks" :key="id" class="life-task"><strong>{{ task.action }} · {{ task.state }}</strong><p v-if="task.error">{{ task.error }}</p><template v-if="Array.isArray(task.result)"><template v-for="(part,idx) in task.result" :key="idx"><img v-if="part.type === 'image'" class="life-result-image" :src="part.src" alt="生活查询图片"><pre v-else class="life-json">{{ part.text }}</pre></template></template><pre v-else-if="task.result" class="life-json">{{ typeof task.result === 'object' ? JSON.stringify(task.result,null,2) : task.result }}</pre></div><details><summary>查看计划任务与最近 Jev 决策</summary><pre class="life-json">{{ JSON.stringify(lifeStatus,null,2) }}</pre></details></div>
           </div>
         </section>
 
@@ -524,7 +563,7 @@
         dense_conversation_threshold: 30, dense_conversation_window_seconds: 600, min_participant_count: 2
       };
       const TOOL_THRESHOLD_DEFAULT = .65;
-      createApp({
+      const app = createApp({
         data() {
           return {
             loading: true,
@@ -532,6 +571,10 @@
             glassReady: false,
             saving: false,
             activeTab: 'tools',
+            proactiveTab: 'reactive', messageInterjection: true,
+            lifeConfig: {}, lifeSchema: {}, lifeProviders: [], lifeStatus: {}, lifeTasks: {},
+            lifeUmo: '', lifeActionText: '', lifeDateRange: '', lifeMessage: '', lifeBusy: false,
+            appearancePersona: '', appearanceImages: [], lifeInspection: {}, aigenAvailable: false, lifePoll: null, lifeInspectTask: '', lifeAppliedTask: '',
             toolSearch: '',
             statusText: '加载中…',
             saveState: '',
@@ -598,6 +641,7 @@
           };
         },
         computed: {
+          lifeSessions() { return [...new Set([...(this.lifeConfig.friend_settings?.session_list || []), ...(this.lifeConfig.group_settings?.session_list || []), ...Object.keys(this.lifeStatus.sessions || {})])]; },
           toolsEnabled() { return this.toolsEnabledValue; },
           proactiveEnabled() { return this.proactiveEnabledValue; },
           flowEnabled() { return this.flowEnabledValue; },
@@ -613,6 +657,56 @@
           groupedSubagents() { const map = new Map(); for (const t of this.subagentVisibleTools) { const key = t.origin_display || '未知来源'; if (!map.has(key)) map.set(key, []); map.get(key).push(t); } return [...map.entries()].map(([origin,items]) => ({origin,items})); }
         },
         methods: {
+          cleanLifeLabel(text) { return String(text || '').replace(/^[^\p{L}\p{N}]+/u, ''); },
+          async refreshLife() {
+            try {
+              const bridge = await waitForBridge(); const result = payloadOf(await bridge.apiGet('life'));
+              this.lifeStatus = result.status || {}; this.lifeTasks = result.tasks || {}; this.aigenAvailable = result.aigen_available === true;
+              const running = Object.values(this.lifeTasks).some(task => task.state === 'running');
+              if (this.lifePoll) clearTimeout(this.lifePoll);
+              if (running) this.lifePoll = setTimeout(() => this.refreshLife(), 2000);
+            } catch(e) { this.lifeMessage = `读取后台状态失败：${e.message || e}`; }
+          },
+          async inspectLife() {
+            if (!this.lifeUmo.trim()) { this.lifeMessage = '请先填写完整会话 UMO。'; return; }
+            this.lifeBusy = true;
+            try {
+              const bridge = await waitForBridge(); const result = payloadOf(await bridge.apiPost('life/appearance',{umo:this.lifeUmo.trim(),action:'list'}));
+              this.appearancePersona = result.persona_id; this.appearanceImages = result.images || [];
+              await this.lifeAction('inspect');
+            } catch(e) { this.lifeMessage = `读取失败：${e.message || e}`; }
+            finally { this.lifeBusy = false; }
+          },
+          async lifeAction(action) {
+            if (!this.lifeUmo.trim()) { this.lifeMessage = '请先填写完整会话 UMO。'; return; }
+            this.lifeBusy = true;
+            try {
+              const bridge = await waitForBridge(); const result = payloadOf(await bridge.apiPost('life/action',{umo:this.lifeUmo.trim(), action, text:this.lifeActionText, date_range:this.lifeDateRange}));
+              if (!result.task_id) throw new Error('服务器未返回任务编号');
+              this.lifeMessage = '操作已进入后台，可在下方查看结果。';
+              if (action === 'inspect') this.lifeInspectTask = result.task_id;
+              await this.refreshLife();
+            } catch(e) { this.lifeMessage = `操作失败：${e.message || e}`; }
+            finally { this.lifeBusy = false; }
+          },
+          async uploadAppearance(event) {
+            const file = event.target.files?.[0]; if (!file) return;
+            if (!this.lifeUmo.trim()) { this.lifeMessage = '请先填写会话 UMO，以便绑定其当前人格。'; event.target.value = ''; return; }
+            if (file.size > 8*1024*1024) { this.lifeMessage = '参考图不能超过 8MB。'; event.target.value = ''; return; }
+            this.lifeBusy = true;
+            try {
+              const data = await new Promise((resolve,reject)=>{ const reader=new FileReader(); reader.onload=()=>resolve(reader.result); reader.onerror=()=>reject(new Error('文件读取失败')); reader.readAsDataURL(file); });
+              const bridge = await waitForBridge(); const result = payloadOf(await bridge.apiPost('life/appearance',{umo:this.lifeUmo.trim(),action:'upload',name:file.name,data_url:data}));
+              this.appearancePersona = result.persona_id; this.appearanceImages = result.images || []; this.lifeMessage = '外貌参考图已保存到 AstrBot 数据目录。';
+            } catch(e) { this.lifeMessage = `上传失败：${e.message || e}`; }
+            finally { this.lifeBusy = false; event.target.value = ''; }
+          },
+          async removeAppearance(id) {
+            this.lifeBusy = true;
+            try { const bridge=await waitForBridge(); const result=payloadOf(await bridge.apiPost('life/appearance',{umo:this.lifeUmo.trim(),action:'delete',id})); this.appearanceImages=result.images || []; }
+            catch(e) { this.lifeMessage=`删除失败：${e.message || e}`; }
+            finally { this.lifeBusy = false; }
+          },
           outputStepEnabled(key) { const list = this.outputConfig?.pipeline?.steps || []; return list.some(item => String(item).split('(', 1)[0].trim() === key); },
           toggleOutputStep(key) { const pipeline = this.form.dialogue_enhancement.output_pipeline.pipeline; const list = Array.isArray(pipeline.steps) ? [...pipeline.steps] : []; const index = list.findIndex(item => String(item).split('(', 1)[0].trim() === key); if (index >= 0) list.splice(index, 1); else { const label = this.outputStepOptions.find(item => item.key === key)?.label || key; list.push(`${key}(${label})`); } pipeline.steps = list; },
           outputLlmStepEnabled(key) { const list = this.outputConfig?.pipeline?.llm_steps || []; return list.some(item => String(item).split('(', 1)[0].trim() === key); },
@@ -663,11 +757,15 @@
             const skillSelect = document.getElementById('skillSelectGlass');
             const skillClear = document.getElementById('skillClearGlass');
             if (!nav?.setTabs || !slider?.setState || !ring?.setState || !ordinarySelect?.setButtons || !ordinaryClear?.setButtons || !mcpSelect?.setButtons || !mcpClear?.setButtons || !subagentSelect?.setButtons || !subagentClear?.setButtons || !skillSelect?.setButtons || !skillClear?.setButtons) return;
-            nav.setTabs([[
-              {label:'Tool/MCP/Skill/SubAgent 决策', icon:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z', viewport:24},
+            const navMedia = window.matchMedia('(max-width:600px)');
+            const updateNavLabels = () => { nav.setTabs([[
+              {label:navMedia.matches ? '能力决策' : 'Tool/MCP/Skill/SubAgent 决策', icon:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z', viewport:24},
               {label:'主动对话', icon:'M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z', viewport:24},
               {label:'对话流增强', icon:'M22.7 19l-9.1-9.1a6 6 0 0 0-7.7-7.7l3.8 3.8-3.7 3.7-3.8-3.8a6 6 0 0 0 7.7 7.7l9.1 9.1z', viewport:24}
-            ]]);
+            ]]); this.syncGlassNav(); };
+            this._navMedia=navMedia; this._navLabelChange=updateNavLabels;
+            navMedia.addEventListener('change',updateNavLabels);
+            updateNavLabels();
             nav.addEventListener('lg-statechange', e => {
               const index = e.detail?.selectedTab;
               if (!nav.dataset.syncing && Number.isInteger(index) && this.tabs[index]) this.activeTab = this.tabs[index].id;
@@ -731,7 +829,7 @@
               const dialogue = JSON.parse(JSON.stringify(this.form.dialogue_enhancement));
               dialogue.conversation_flow_scope = this.scopeList(dialogue.conversation_flow_scope);
               dialogue.output_scope = this.scopeList(dialogue.output_scope);
-              const body = {always_keep_tools: Array.from(this.selectedKeep, String), always_keep_recommend_tools: Array.from(this.selectedRecommend, String), always_keep_mcp: Array.from(this.selectedKeepMcp, String), always_keep_recommend_mcp: Array.from(this.selectedRecommendMcp, String), always_keep_skills: Array.from(this.selectedKeepSkills, String), always_keep_recommend_skills: Array.from(this.selectedRecommendSkills, String), always_keep_subagents: Array.from(this.selectedKeepSubagents, String), always_keep_recommend_subagents: Array.from(this.selectedRecommendSubagents, String), jev_pre_prompt: String(this.form.jev_pre_prompt ?? ''), main_llm_post_prompt: String(this.form.main_llm_post_prompt ?? ''), tool_decision_enabled: this.form.tool_decision_enabled === true, mcp_decision_enabled: this.form.mcp_decision_enabled === true, skill_decision_enabled: this.form.skill_decision_enabled === true, subagent_decision_enabled: this.form.subagent_decision_enabled === true, tool_filter_enabled: this.form.tool_filter_enabled === true, mcp_filter_enabled: this.form.mcp_filter_enabled === true, skill_filter_enabled: this.form.skill_filter_enabled === true, subagent_filter_enabled: this.form.subagent_filter_enabled === true, tools_scope: this.scopeList(this.form.tools_scope), tools_scope_blacklist: this.form.tools_scope_blacklist === true, tool_noul_threshold: numberOr(this.form.tool_noul_threshold, TOOL_THRESHOLD_DEFAULT), proactive, dialogue_enhancement: dialogue};
+              const body = {life: JSON.parse(JSON.stringify(this.lifeConfig)), message_interjection_enabled: this.messageInterjection, always_keep_tools: Array.from(this.selectedKeep, String), always_keep_recommend_tools: Array.from(this.selectedRecommend, String), always_keep_mcp: Array.from(this.selectedKeepMcp, String), always_keep_recommend_mcp: Array.from(this.selectedRecommendMcp, String), always_keep_skills: Array.from(this.selectedKeepSkills, String), always_keep_recommend_skills: Array.from(this.selectedRecommendSkills, String), always_keep_subagents: Array.from(this.selectedKeepSubagents, String), always_keep_recommend_subagents: Array.from(this.selectedRecommendSubagents, String), jev_pre_prompt: String(this.form.jev_pre_prompt ?? ''), main_llm_post_prompt: String(this.form.main_llm_post_prompt ?? ''), tool_decision_enabled: this.form.tool_decision_enabled === true, mcp_decision_enabled: this.form.mcp_decision_enabled === true, skill_decision_enabled: this.form.skill_decision_enabled === true, subagent_decision_enabled: this.form.subagent_decision_enabled === true, tool_filter_enabled: this.form.tool_filter_enabled === true, mcp_filter_enabled: this.form.mcp_filter_enabled === true, skill_filter_enabled: this.form.skill_filter_enabled === true, subagent_filter_enabled: this.form.subagent_filter_enabled === true, tools_scope: this.scopeList(this.form.tools_scope), tools_scope_blacklist: this.form.tools_scope_blacklist === true, tool_noul_threshold: numberOr(this.form.tool_noul_threshold, TOOL_THRESHOLD_DEFAULT), proactive, dialogue_enhancement: dialogue};
               const result = payloadOf(await activeBridge.apiPost('settings/save', JSON.parse(JSON.stringify(body))));
               if (result.saved !== true) throw new Error('服务器未确认保存成功');
               if (Array.isArray(result.always_keep_tools)) this.selectedKeep = result.always_keep_tools.map(String);
@@ -742,17 +840,20 @@
               if (Array.isArray(result.always_keep_recommend_skills)) this.selectedRecommendSkills = result.always_keep_recommend_skills.map(String);
               if (Array.isArray(result.always_keep_subagents)) this.selectedKeepSubagents = result.always_keep_subagents.map(String);
               if (Array.isArray(result.always_keep_recommend_subagents)) this.selectedRecommendSubagents = result.always_keep_recommend_subagents.map(String);
-              this.statusText = '已保存'; this.saveState = 'ok';
+              this.statusText = result.runtime_warning ? `已保存，后台启动失败：${result.runtime_warning}` : '已保存'; this.saveState = result.runtime_warning ? 'error' : 'ok'; this.refreshLife();
             } catch (e) { this.statusText = `保存失败：${e.message || e}`; this.saveState = 'error'; }
             finally { this.saving = false; }
           },
           async load() {
             try {
               const activeBridge = await waitForBridge(); await activeBridge.ready();
-              const [rawToolData, rawSettings] = await Promise.all([activeBridge.apiGet('tools'), activeBridge.apiGet('settings')]);
+              const [rawToolData, rawSettings, rawLife] = await Promise.all([activeBridge.apiGet('tools'), activeBridge.apiGet('settings'), activeBridge.apiGet('life')]);
+              const life = payloadOf(rawLife); if (!life.schema || !life.settings) throw new Error('生活设置未完整加载，已阻止保存');
+              this.lifeSchema = life.schema; this.lifeConfig = life.settings; this.lifeProviders = life.providers || []; this.lifeStatus = life.status || {}; this.lifeTasks = life.tasks || {}; this.aigenAvailable = life.aigen_available === true;
               const toolData = payloadOf(rawToolData); const settings = payloadOf(rawSettings);
               if (!Array.isArray(toolData.tools) || !settings || typeof settings !== 'object' || Array.isArray(settings) || !Array.isArray(settings.always_keep_tools)) throw new Error('服务器返回的数据格式无效');
               this.tools = normalizeTools(toolData);
+              this.messageInterjection = settings.message_interjection_enabled !== false;
               this.selectedKeep = settings.always_keep_tools.map(String);
               this.selectedRecommend = Array.isArray(settings.always_keep_recommend_tools) ? settings.always_keep_recommend_tools.map(String) : [];
               this.selectedKeepMcp = Array.isArray(settings.always_keep_mcp) ? settings.always_keep_mcp.map(String) : [];
@@ -771,11 +872,23 @@
           }
         },
         watch: {
+          lifeUmo() { this.lifeInspection={}; this.appearanceImages=[]; this.appearancePersona=''; this.lifeInspectTask=''; this.lifeAppliedTask=''; },
+          lifeTasks: {deep:true, handler(tasks) { for (const [id,task] of Object.entries(tasks).reverse()) { if (task.umo !== this.lifeUmo.trim() || task.state !== 'done') continue; const inspection=task.inspection || (task.action === 'inspect' ? task.result : null); if (inspection) { if (id !== this.lifeAppliedTask) { this.lifeAppliedTask=id; this.lifeInspection=inspection; this.appearancePersona=inspection.persona_id || this.appearancePersona; } break; } } }},
           'form.tool_noul_threshold'() { this.syncThresholdGlass(); this.syncDecisionRing(); },
           activeTab() { this.syncGlassNav(); }
         },
+        beforeUnmount() { if (this.lifePoll) clearTimeout(this.lifePoll); if(this._navMedia && this._navLabelChange) this._navMedia.removeEventListener('change',this._navLabelChange); },
         mounted() { this.load(); nextTick(() => this.initGlass().catch(() => { this.glassReady = false; })); }
-      }).mount('#app');
+      });
+      app.component('life-settings', {
+        name: 'LifeSettings', props: ['schema','value','providers'],
+        methods: {
+          label(text) { return String(text || '').replace(/^[^\p{L}\p{N}]+/u, ''); },
+          set(key,node,raw) { this.value[key] = node.type === 'list' ? String(raw).split('\n').map(s=>s.trim()).filter(Boolean) : ['int','float'].includes(node.type) ? Number(raw) : raw; }
+        },
+        template: `<div class="life-setting-fields"><template v-for="(node,key) in schema" :key="key"><details v-if="node.type === 'object'"><summary>{{ label(node.description || key) }}</summary><life-settings :schema="node.items" :value="value[key]" :providers="providers"></life-settings></details><div v-else-if="node.type === 'bool'" class="switch-row"><div class="switch-copy"><strong>{{ label(node.description || key) }}</strong><small v-if="node.hint">{{ node.hint }}</small></div><label class="switch"><input type="checkbox" :aria-label="label(node.description || key)" v-model="value[key]"><span class="switch-track"></span></label></div><div v-else class="field"><label>{{ label(node.description || key) }}</label><select :aria-label="label(node.description || key)" v-if="key.includes('llm_provider')" v-model="value[key]"><option value="">{{ key === 'schedule_llm_provider' ? '沿用 AstrBot 默认模型' : '沿用当前会话模型' }}</option><option v-for="provider in providers" :key="provider.id" :value="provider.id">{{ provider.name || provider.id }}</option><option v-if="value[key] && !providers.some(p=>p.id === value[key])" :value="value[key]">{{ value[key] }}</option></select><select :aria-label="label(node.description || key)" v-else-if="node.options" v-model="value[key]"><option v-for="(option,idx) in node.options" :key="option" :value="option">{{ node.labels?.[idx] || option }}</option></select><textarea :aria-label="label(node.description || key)" v-else-if="node.type === 'list'" :value="(value[key] || []).join(String.fromCharCode(10))" @input="set(key,node,$event.target.value)" class="list-editor" placeholder="每行一个"></textarea><textarea :aria-label="label(node.description || key)" v-else-if="node.type === 'text' || String(value[key] || '').length > 120" :value="value[key]" @input="set(key,node,$event.target.value)" spellcheck="false"></textarea><input v-else :aria-label="label(node.description || key)" :type="['int','float'].includes(node.type) ? 'number' : 'text'" :step="node.type === 'float' ? '0.01' : '1'" :value="value[key]" @input="set(key,node,$event.target.value)"><p v-if="node.hint" class="hint">{{ node.hint }}</p></div></template></div>`
+      });
+      app.mount('#app');
     </script>
   </body>
 </html>

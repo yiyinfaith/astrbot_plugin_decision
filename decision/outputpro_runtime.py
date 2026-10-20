@@ -164,6 +164,10 @@ class OutputPipelineRuntime:
                 timestamp=timestamp,
             )
             await self._pipeline.run(context)
+            if getattr(event, "set_extra", None):
+                from .outputpro.core.model import StepName
+
+                event.set_extra("decision_output_handled", self._plugin_config.pipeline.is_enabled_step(StepName.SPLIT))
         except Exception as exc:
             # Output enhancement is fail-open.  A formatting step must never
             # prevent AstrBot from sending the original response.

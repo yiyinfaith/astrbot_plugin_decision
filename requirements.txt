@@ -3,3 +3,7 @@ emoji
 pillowmd
 jieba>=0.42.1
 pypinyin>=0.54.0
+APScheduler>=3.10,<4.0
+holidays>=0.40
+lunar_python>=1.4.8,<2.0
+Pillow>=10

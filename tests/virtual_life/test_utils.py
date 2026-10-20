@@ -1,0 +1,167 @@
+# Adapted upstream regression tests; see decision/virtual_life/NOTICE.md.
+import unittest
+from dataclasses import replace
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
+from decision.virtual_life.core.models import DailyPlan
+from decision.virtual_life.core.utils import (
+    format_outfit,
+    format_plan,
+    format_timeline,
+    next_available_at,
+    parse_schedule_date_range,
+    timeline_item_at,
+)
+
+from .fixtures import outfit_payload
+
+
+class UtilsTests(unittest.TestCase):
+    def setUp(self):
+        self.plan = DailyPlan.from_dict(
+            {
+                "date": "2026-07-14",
+                "persona_id": "alice",
+                "theme": "日常",
+                "mood": "平静",
+                "outfit": outfit_payload(),
+                "timeline": [
+                    {
+                        "id": "sleep",
+                        "start": "00:00",
+                        "end": "08:00",
+                        "activity": "睡觉",
+                        "state": "sleep",
+                        "availability": "blocked",
+                    },
+                    {
+                        "id": "busy",
+                        "start": "08:00",
+                        "end": "12:00",
+                        "activity": "工作",
+                        "state": "focus",
+                        "availability": "low",
+                    },
+                    {
+                        "id": "free",
+                        "start": "12:00",
+                        "end": "24:00",
+                        "activity": "休息",
+                        "state": "available",
+                        "availability": "high",
+                    },
+                ],
+                "proactive_windows": [],
+                "budget_bonus": {"private": 0, "group": 0},
+            }
+        )
+        self.tz = ZoneInfo("Asia/Shanghai")
+
+    def test_current_item_and_next_available(self):
+        now = datetime(2026, 7, 14, 9, 0, tzinfo=self.tz)
+        self.assertEqual(timeline_item_at(self.plan, now).id, "busy")
+        self.assertEqual(next_available_at(self.plan, now).hour, 12)
+
+    def test_split_query_fallbacks(self):
+        now = datetime(2026, 7, 14, 9, 0, tzinfo=self.tz)
+        timeline = format_timeline(
+            self.plan,
+            now,
+            {
+                "stage": {
+                    "name": "暑期阶段",
+                    "start_date": "2026-07-01",
+                    "end_date": "2026-08-31",
+                },
+                "active_periods": [
+                    {
+                        "name": "考试周",
+                        "start_date": "2026-07-13",
+                        "end_date": "2026-07-19",
+                        "constraints": ["减少娱乐"],
+                    }
+                ],
+                "holidays": [{"name": "纪念日"}],
+            },
+        )
+        outfit = format_outfit(self.plan)
+        self.assertIn("当前时段：08:00-12:00", timeline)
+        self.assertIn("今日主题：日常", timeline)
+        self.assertIn("心情状态：平静", timeline)
+        self.assertIn("当前大时间段：暑期阶段", timeline)
+        self.assertIn("特殊时间段：考试周", timeline)
+        self.assertIn("今日节日：纪念日", timeline)
+        self.assertNotIn("穿搭风格", timeline)
+        self.assertIn("穿搭风格：日常休闲风", outfit)
+        self.assertIn("今日主题：日常", outfit)
+        self.assertIn("今日心情：平静", outfit)
+        self.assertNotIn("24 小时时间轴", outfit)
+
+    def test_timeline_fallback_without_stage_is_explicit(self):
+        timeline = format_timeline(
+            self.plan,
+            datetime(2026, 7, 14, 9, 0, tzinfo=self.tz),
+            {"stage": None, "active_periods": [], "holidays": []},
+        )
+        self.assertIn("当前大时间段：暂无当前阶段", timeline)
+
+    def test_schedule_only_format_omits_outfit(self):
+        content = format_plan(replace(self.plan, outfit=None))
+
+        self.assertIn("日程：", content)
+        self.assertNotIn("穿搭：", content)
+        self.assertNotIn("当前大时间段", content)
+
+    def test_outfit_only_format_omits_schedule_identity(self):
+        content = format_plan(
+            replace(
+                self.plan,
+                theme="",
+                mood="",
+                timeline=(),
+                proactive_windows=(),
+            )
+        )
+
+        self.assertIn("穿搭风格：", content)
+        self.assertNotIn("今日主题", content)
+        self.assertNotIn("今日日程", content)
+
+    def test_schedule_requirement_date_defaults(self):
+        reference = date(2026, 7, 27)
+        self.assertEqual(
+            parse_schedule_date_range("2026-08-03", reference),
+            (date(2026, 8, 3), date(2026, 8, 3)),
+        )
+        self.assertEqual(
+            parse_schedule_date_range("8-3", reference),
+            (date(2026, 8, 3), date(2026, 8, 3)),
+        )
+        self.assertEqual(
+            parse_schedule_date_range("29", reference),
+            (date(2026, 7, 29), date(2026, 7, 29)),
+        )
+
+    def test_schedule_requirement_range_rolls_month_and_year(self):
+        reference = date(2026, 7, 27)
+        self.assertEqual(
+            parse_schedule_date_range("29..2", reference),
+            (date(2026, 7, 29), date(2026, 8, 2)),
+        )
+        self.assertEqual(
+            parse_schedule_date_range("12-29..1-2", reference),
+            (date(2026, 12, 29), date(2027, 1, 2)),
+        )
+        self.assertEqual(
+            parse_schedule_date_range("2026-12-29..2", reference),
+            (date(2026, 12, 29), date(2027, 1, 2)),
+        )
+
+    def test_schedule_requirement_explicit_reverse_range_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "结束日期不能早于开始日期"):
+            parse_schedule_date_range("2026-08-03..2026-08-02", date(2026, 7, 27))
+
+
+if __name__ == "__main__":
+    unittest.main()
