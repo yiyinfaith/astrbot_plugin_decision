@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>人际网络 · jev决策综合插件</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div id="app" class="app-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <div class="brand-mark">人</div>
+          <div>
+            <h1>人际网络</h1>
+            <p id="network-summary">0 个人物 · 0 条关系</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <label class="persona-picker">
+            <span>人格</span>
+            <select id="persona-select"></select>
+          </label>
+          <label class="switch-control">
+            <input id="network-enabled" type="checkbox" />
+            <span class="switch-track" aria-hidden="true"></span>
+            <span>启用</span>
+          </label>
+          <button id="refresh-button" class="icon-button" type="button" title="刷新" aria-label="刷新">↻</button>
+          <button id="export-button" class="icon-button" type="button" title="导出" aria-label="导出">↓</button>
+          <button id="import-button" class="icon-button" type="button" title="导入" aria-label="导入">↑</button>
+          <input id="import-file" type="file" accept="application/json,.json" hidden />
+        </div>
+      </header>
+
+      <nav class="tabs" aria-label="视图">
+        <button class="tab active" type="button" data-view="graph">关系网络</button>
+        <button class="tab" type="button" data-view="people">人物卡片</button>
+      </nav>
+
+      <main>
+        <section id="graph-view" class="view active">
+          <div class="graph-toolbar">
+            <div class="search-field">
+              <span aria-hidden="true">⌕</span>
+              <input id="graph-search" type="search" placeholder="搜索人物或关系" />
+            </div>
+            <select id="status-filter" aria-label="关系状态">
+              <option value="">全部状态</option>
+              <option value="active">进行中</option>
+              <option value="uncertain">不确定</option>
+              <option value="ended">已结束</option>
+            </select>
+            <button id="fit-button" class="tool-button" type="button"><span aria-hidden="true">◎</span><span>适应画布</span></button>
+            <button id="add-life-event-button" class="tool-button" type="button"><span aria-hidden="true">＋</span><span>添加经历</span></button>
+            <button id="add-relation-button" class="tool-button" type="button"><span aria-hidden="true">＋</span><span>添加关系</span></button>
+          </div>
+          <div class="graph-workspace">
+            <div id="graph-canvas" class="graph-canvas">
+              <div id="network-graph" role="img" aria-label="人物关系网络"></div>
+              <svg id="connection-overlay" class="connection-overlay" aria-hidden="true">
+                <line id="connection-line" x1="0" y1="0" x2="0" y2="0"></line>
+              </svg>
+              <button id="connection-handle" class="connection-handle hidden" type="button" title="拖到另一人物以添加关系" aria-label="拖拽添加关系">＋</button>
+            </div>
+            <aside id="inspector" class="inspector empty">
+              <div class="empty-state">
+                <div class="empty-glyph">⌁</div>
+                <h2>未选择项目</h2>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="people-view" class="view">
+          <div class="people-toolbar">
+            <div class="search-field">
+              <span aria-hidden="true">⌕</span>
+              <input id="people-search" type="search" placeholder="搜索人物" />
+            </div>
+            <div class="people-actions">
+              <button id="merge-button" class="secondary-button" type="button">合并人物</button>
+              <button id="generate-network-button" class="secondary-button" type="button">应用人格生成</button>
+              <button id="add-person-button" class="primary-button" type="button"><span aria-hidden="true">＋</span><span>添加人物</span></button>
+            </div>
+          </div>
+          <div id="people-grid" class="people-grid"></div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+
+    <dialog id="character-dialog">
+      <form id="character-form" method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">人物信息</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <input id="character-id" type="hidden" />
+        <div class="form-grid">
+          <label><span>姓名</span><input id="character-name" maxlength="100" required /></label>
+          <div class="full alias-field">
+            <div class="field-heading">
+              <span>人物别名</span>
+              <button id="add-alias-button" class="secondary-button compact-button" type="button">添加别名</button>
+            </div>
+            <div id="character-aliases" class="alias-editor"></div>
+          </div>
+          <label class="full"><span>身份简介</span><textarea id="character-bio" maxlength="4000"></textarea></label>
+          <label class="full"><span>性格</span><textarea id="character-personality" maxlength="4000"></textarea></label>
+          <label><span>偏好</span><textarea id="character-preferences" maxlength="4000"></textarea></label>
+          <label><span>重要事实</span><textarea id="character-facts" maxlength="4000"></textarea></label>
+          <label class="full"><span>管理员备注</span><textarea id="character-notes" maxlength="4000"></textarea></label>
+        </div>
+        <div class="dialog-actions">
+          <button id="delete-character-button" class="danger-button hidden" type="button">删除人物</button>
+          <span class="dialog-spacer"></span>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="relationship-dialog">
+      <form id="relationship-form" method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">关系信息</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <input id="relationship-id" type="hidden" />
+        <div class="form-grid">
+          <label><span>关系主体（谁的）</span><select id="relationship-source" required></select></label>
+          <label><span>关联人物（是谁）</span><select id="relationship-target" required></select></label>
+          <label><span>关联人物的身份</span><input id="relationship-type" maxlength="100" required /></label>
+          <label><span>状态</span><select id="relationship-status"><option value="active">进行中</option><option value="uncertain">不确定</option><option value="ended">已结束</option></select></label>
+          <label class="full"><span>关系亲密度</span><div class="range-row"><input id="relationship-strength" type="range" min="0" max="100" value="0" /><output id="strength-output">0</output></div></label>
+          <label class="full"><span>关系描述</span><textarea id="relationship-description" maxlength="2000"></textarea></label>
+        </div>
+        <div class="dialog-actions">
+          <button id="delete-relationship-button" class="danger-button hidden" type="button">删除</button>
+          <span class="dialog-spacer"></span>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="life-event-dialog">
+      <form id="life-event-form" method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">人生经历</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <input id="life-event-id" type="hidden" />
+        <div class="form-grid">
+          <label><span>发生时间</span><input id="life-event-time" type="datetime-local" required /></label>
+          <label><span>类型</span><input id="life-event-type" maxlength="100" required placeholder="见面、通话、聚餐、争执" /></label>
+          <label class="full"><span>参与人物</span><select id="life-event-participants" multiple required></select></label>
+          <label><span>重要度</span><div class="range-row"><input id="life-event-importance" type="range" min="0" max="100" value="50" /><output id="life-event-importance-output">50</output></div></label>
+          <label><span>情绪基调</span><input id="life-event-tone" maxlength="100" placeholder="温暖、紧张、平静" /></label>
+          <label class="full"><span>经历摘要</span><textarea id="life-event-summary" maxlength="2000" required></textarea></label>
+        </div>
+        <div class="dialog-actions">
+          <button id="delete-life-event-button" class="danger-button hidden" type="button">删除经历</button>
+          <span class="dialog-spacer"></span>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="merge-dialog">
+      <form id="merge-form" method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">合并人物</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="form-grid">
+          <label><span>保留人物</span><select id="merge-target" required></select></label>
+          <label><span>重复人物</span><select id="merge-duplicate" required></select></label>
+        </div>
+        <div class="dialog-actions">
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button class="primary-button" type="submit">合并人物</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="generation-dialog" class="generation-dialog">
+      <form method="dialog">
+        <div class="dialog-title-row">
+          <div>
+            <h2 class="dialog-title">应用人格生成关系网</h2>
+            <p class="dialog-subtitle" id="generation-persona-name"></p>
+          </div>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <section class="generation-settings">
+          <label><span>生成人数</span><input id="generation-count" type="number" min="1" max="32" value="6" required /></label>
+          <label><span>关系密度</span><select id="generation-density"><option value="sparse">稀疏</option><option value="balanced" selected>均衡</option><option value="rich">丰富</option></select></label>
+          <label class="checkbox-field"><input id="generation-fill-existing" type="checkbox" /><span>补全现有人物的空白资料</span></label>
+          <button id="generation-submit" class="primary-button" type="button">生成草稿</button>
+          <label class="generation-hint"><span>额外生成要求（可选）</span><textarea id="generation-hint" maxlength="2000"></textarea></label>
+        </section>
+        <section id="generation-result" class="generation-result hidden">
+          <div id="generation-errors" class="generation-errors hidden"></div>
+          <details id="generation-raw-panel" class="generation-raw-panel">
+            <summary>模型返回与 JSON 修正</summary>
+            <textarea id="generation-raw" spellcheck="false" aria-label="模型返回 JSON"></textarea>
+            <div class="generation-raw-actions">
+              <button id="generation-validate" class="secondary-button" type="button">校验修改</button>
+            </div>
+            <details class="generation-expected">
+              <summary>预期结果</summary>
+              <pre id="generation-expected"></pre>
+            </details>
+          </details>
+          <div id="generation-preview" class="generation-preview hidden">
+            <section>
+              <div class="section-heading"><h3>人物草稿</h3><span id="generation-character-count"></span></div>
+              <div id="generation-characters" class="generation-items"></div>
+            </section>
+            <section>
+              <div class="section-heading"><h3>关系草稿</h3><span id="generation-relationship-count"></span></div>
+              <div id="generation-relationships" class="generation-items"></div>
+            </section>
+          </div>
+        </section>
+        <div class="dialog-actions">
+          <span id="generation-status" class="dialog-status"></span>
+          <span class="dialog-spacer"></span>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button id="generation-apply" class="primary-button" type="button" disabled>确认应用</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="confirm-dialog" class="confirm-dialog">
+      <form method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">确认操作</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <p id="confirm-message" class="confirm-message"></p>
+        <div class="dialog-actions">
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button id="confirm-submit" class="danger-button" type="button">确认</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="./vendor/cytoscape.min.js"></script>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

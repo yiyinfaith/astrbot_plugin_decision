@@ -1054,7 +1054,7 @@ async def test_matched_command_bypasses_jev_routing(host, monkeypatch):
 async def test_virtual_life_save_reload_only_in_data(host):
     plugin = host.module.DecisionPlugin(host.context, host.config)
     life = host.module.normalize_life({})
-    life["media_settings"]["appearance"] = "white hair red eyes"
+    life["appearance_settings"]["description"] = "white hair red eyes"
     life["friend_settings"]["session_list"] = ["qq:FriendMessage:123"]
     host.body.update(
         life=life, message_interjection_enabled=False, always_keep_tools=["jev_decide"]
@@ -1062,7 +1062,7 @@ async def test_virtual_life_save_reload_only_in_data(host):
     assert (await plugin.page_save_settings())["saved"] is True
     reloaded = host.module.DecisionPlugin(host.context, host.config)
     settings = await reloaded.page_settings()
-    assert settings["life"]["media_settings"]["appearance"] == "white hair red eyes"
+    assert settings["life"]["appearance_settings"]["description"] == "white hair red eyes"
     assert not settings["message_interjection_enabled"]
     assert "life" not in host.config
     assert not host.path.is_relative_to(ROOT)
@@ -1086,3 +1086,55 @@ async def test_direct_wake_bypasses_life_reply_waiting(host):
     event = SimpleNamespace(get_extra=lambda key, default=None: default)
     await plugin.life_waiting_request(event)
     runtime.queue_reply_delay.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "network,expect_update,expect_query",
+    [
+        ({"enable": False}, False, False),
+        ({"enable": True}, True, True),
+        ({"enable": True, "enable_llm_update_tool": False}, False, True),
+        ({"enable": True, "enable_llm_query_tool": False}, True, False),
+        ({"enable": True, "enable_llm_update_tool": False, "enable_llm_query_tool": False},
+         False, False),
+    ],
+)
+async def test_network_tool_visibility_follows_its_switches(
+    host, network, expect_update, expect_query
+):
+    """The merged network tools are hidden per request, not per registration."""
+
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    life = host.module.normalize_life({})
+    life["personal_network_integration"] = {**life["personal_network_integration"], **network}
+    plugin._detail_settings["life"] = life
+
+    names = [
+        "take_photo",
+        "take_video",
+        "send_voice",
+        "update_personal_network",
+        "query_personal_network",
+    ]
+    tools = [SimpleNamespace(name=name) for name in names]
+    toolset = SimpleNamespace(
+        tools=list(tools),
+        remove_tool=lambda name: toolset.tools.__setitem__(
+            slice(None), [t for t in toolset.tools if t.name != name]
+        ),
+    )
+    request = SimpleNamespace(func_tool=toolset)
+
+    settings = plugin._network_settings()
+    enabled = bool(settings.get("enable", False))
+    plugin._hide_network_tools(
+        request,
+        update=not (enabled and settings.get("enable_llm_update_tool", True)),
+        query=not (enabled and settings.get("enable_llm_query_tool", True)),
+    )
+    visible = {tool.name for tool in request.func_tool.tools}
+    assert ("update_personal_network" in visible) is expect_update
+    assert ("query_personal_network" in visible) is expect_query
+    # The media tools are never touched by the network gate.
+    assert {"take_photo", "take_video", "send_voice"} <= visible

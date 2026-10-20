@@ -18,9 +18,8 @@ def life_schema() -> dict[str, Any]:
     )
     schema["integration_settings"] = {
         "type": "object",
-        "description": "主动发起与 Jev",
+        "description": "🚀 主动发起与 Jev",
         "items": {
-            "enable": {"type": "bool", "description": "启用主动发起", "default": False},
             "jev_threshold": {"type": "float", "description": "主动发起阈值", "default": 0.7},
             "quiet_start": {"type": "string", "description": "免打扰开始", "default": "23:00"},
             "quiet_end": {"type": "string", "description": "免打扰结束", "default": "07:00"},
@@ -42,34 +41,30 @@ def life_schema() -> dict[str, Any]:
             },
         },
     }
-    schema["media_settings"] = {
-        "type": "object",
-        "description": "拍照与拍视频 · aigen 联动",
-        "items": {
-            "enable": {"type": "bool", "description": "允许拍照和拍视频", "default": True},
-            "appearance": {"type": "text", "description": "外貌补充", "default": ""},
-            "image_aspect_ratio": {"type": "string", "description": "照片比例", "default": "3:4"},
-            "video_aspect_ratio": {"type": "string", "description": "视频比例", "default": "9:16"},
-            "video_duration": {"type": "int", "description": "视频时长（秒）", "default": 5},
-            "cooldown_seconds": {"type": "int", "description": "拍摄冷却（秒）", "default": 60},
-            "daily_limit": {"type": "int", "description": "每会话每日拍摄上限", "default": 5},
-            "prompt": {
-                "type": "text",
-                "description": "拍摄提示词",
-                "default": "生成角色本人的{kind}。参考图用于保持脸部、发色、瞳色等外貌身份；服装必须采用今日穿搭，覆盖参考图中的旧服装。\n外貌：{appearance}\n今日穿搭：{outfit}\n当前活动：{activity}\n拍摄要求：{scene}",
-            },
-        },
-    }
+    # The merged page owns a fixed, user-facing order: the master switch and the
+    # private/group scope come first, then the day-to-day life cards, then the
+    # remaining advanced groups.
     return {
         key: schema[key]
         for key in (
             "integration_settings",
+            "friend_settings",
+            "group_settings",
             "schedule_settings",
             "media_settings",
+            "appearance_settings",
             *[
                 k
                 for k in schema
-                if k not in {"integration_settings", "schedule_settings", "media_settings"}
+                if k
+                not in {
+                    "integration_settings",
+                    "friend_settings",
+                    "group_settings",
+                    "schedule_settings",
+                    "media_settings",
+                    "appearance_settings",
+                }
             ],
         )
     }
@@ -166,6 +161,22 @@ def normalize_life(value: Any) -> dict[str, Any]:
         raise ValueError("后台并发请设置为 1 到 8")
     if not 1 <= out["media_settings"]["video_duration"] <= 120:
         raise ValueError("视频时长须在 1 到 120 秒之间")
+    media = out["media_settings"]
+    for key in ("photo_probability", "video_probability", "audio_probability"):
+        if not 0 <= media[key] <= 1:
+            raise ValueError("主动发起多媒体概率须在 0 到 1 之间")
+    for kind in ("photo", "video", "audio"):
+        low, high = media[f"{kind}_count_min"], media[f"{kind}_count_max"]
+        if low > high:
+            raise ValueError("多媒体数量下限不能大于上限")
+        if not 0 <= low <= 10 or not 0 <= high <= 10:
+            raise ValueError("多媒体数量须在 0 到 10 之间")
+    if media["audio_mode"] not in {"朗读", "提示词"}:
+        raise ValueError("音频模式选项无效")
+    if not 0 <= media["cooldown_seconds"] <= 3600:
+        raise ValueError("生成冷却须在 0 到 3600 秒之间")
+    if not 0 <= media["daily_limit"] <= 200:
+        raise ValueError("每日生成上限须在 0 到 200 之间")
     if out["delivery_settings"]["sleep_exception_probability"] > 1:
         raise ValueError("睡眠异常概率须在 0 到 1 之间")
     if out["personal_network_integration"]["new_character_probability"] > 1 or any(
@@ -188,6 +199,24 @@ def normalize_life(value: Any) -> dict[str, Any]:
         raise ValueError("日程图片宽度须为 320 到 2400")
     if out["delivery_settings"]["recent_chat_messages"] > 100:
         raise ValueError("最近聊天参考最多 100 条")
+    network = out["personal_network_integration"]
+    if not 1 <= network["pronoun_history_messages"] <= 100:
+        raise ValueError("代词回溯消息数量须在 1 到 100 之间")
+    if not 1 <= network["context_max_characters"] <= 20:
+        raise ValueError("单次注入人物上限须在 1 到 20 之间")
+    if not 1 <= network["context_max_relationships"] <= 50:
+        raise ValueError("单次注入关系上限须在 1 到 50 之间")
+    if not 500 <= network["context_max_chars"] <= 12000:
+        raise ValueError("单次注入字符上限须在 500 到 12000 之间")
+    if not 500 <= network["max_context_chars"] <= 12000:
+        raise ValueError("关系上下文字符上限须在 500 到 12000 之间")
+    if network["context_injection_position"] not in {"system_prompt", "user_content"}:
+        raise ValueError("关系注入位置选项无效")
+    for pattern in network["pronoun_patterns"]:
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise ValueError(f"代词匹配规则不是合法正则：{pattern}") from exc
     if out["reply_delay_settings"]["max_delay_seconds"] > 86400:
         raise ValueError("回复等待最长为 86400 秒")
     for key in ("image_aspect_ratio", "video_aspect_ratio"):

@@ -90,7 +90,7 @@ class StubProvider(Provider):
             return LLMResponse(
                 role="assistant",
                 completion_text="",
-                tools_call_name=["take_self_photo"],
+                tools_call_name=["take_photo"],
                 tools_call_args=[{"scene": "bookstore"}],
                 tools_call_ids=["photo_1"],
             )
@@ -151,7 +151,7 @@ def native(tmp_path, monkeypatch):
         _message_address_flags=lambda e: (False, False, False, False),
     )
     settings = life_defaults()
-    settings["integration_settings"].update(enable=True, quiet_start="00:00", quiet_end="00:00")
+    settings["integration_settings"].update(quiet_start="00:00", quiet_end="00:00")
     settings["friend_settings"]["session_list"] = [UMO]
     settings["delivery_settings"]["availability_probabilities"] = {
         key: 1.0 for key in ("high", "normal", "low", "blocked")
@@ -427,7 +427,7 @@ async def test_real_native_photo_tool_loop_preserves_final_reply(native):
         return '{"status":"completed","media_type":"image"}'
 
     tool = FunctionTool(
-        name="take_self_photo",
+        name="take_photo",
         description="photo",
         parameters={"type": "object", "properties": {"scene": {"type": "string"}}},
         handler=photo,
@@ -624,11 +624,14 @@ async def test_dynamic_tools_have_real_plugin_ownership(native, tmp_path, monkey
         plugin = module.DecisionPlugin(native.context, Config())
         assert {t.name for t in tools} == {
             "jev_decide",
-            "take_self_photo",
-            "take_self_video",
+            "take_photo",
+            "take_video",
+            "send_voice",
             "get_virtual_daily_schedule",
             "get_long_term_timeline",
             "add_schedule_requirement",
+            "update_personal_network",
+            "query_personal_network",
         }
         assert all(t.handler_module_path == module.__name__ for t in tools)
         assert all(t.__module__ == module.__name__ for t in tools)
@@ -710,7 +713,7 @@ async def test_media_sent_then_new_message_does_not_save_unsent_final_text(nativ
         return '{"status":"completed","media_type":"image"}'
 
     tool = FunctionTool(
-        name="take_self_photo",
+        name="take_photo",
         description="photo",
         parameters={"type": "object", "properties": {"scene": {"type": "string"}}},
         handler=photo,
@@ -736,3 +739,29 @@ def test_life_chat_status_does_not_expose_other_conversations(native):
     assert list(scoped["sessions"]) == [UMO]
     assert other not in str(scoped) and "private_other_reason" not in str(scoped)
     assert other in native.runtime.status()["sessions"]
+
+
+def test_proactive_runtime_follows_per_kind_switches(native):
+    """主动发起 has no master switch: the per-kind switches decide."""
+
+    runtime = native.runtime
+    runtime.closed = False
+
+    runtime.config["friend_settings"]["enable"] = True
+    runtime.config["group_settings"]["enable"] = False
+    assert runtime.enabled is True
+
+    runtime.config["friend_settings"]["enable"] = False
+    runtime.config["group_settings"]["enable"] = True
+    assert runtime.enabled is True
+
+    runtime.config["friend_settings"]["enable"] = False
+    runtime.config["group_settings"]["enable"] = False
+    assert runtime.enabled is False
+
+    # A leftover legacy master switch must never re-enable or disable it.
+    runtime.config["integration_settings"]["enable"] = True
+    assert runtime.enabled is False
+    runtime.config["friend_settings"]["enable"] = True
+    runtime.config["integration_settings"]["enable"] = False
+    assert runtime.enabled is True

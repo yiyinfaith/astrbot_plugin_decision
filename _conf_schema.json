@@ -70,7 +70,7 @@
   "proactive_reply_enabled": {
     "type": "bool",
     "description": "主动对话",
-    "hint": "控制消息接话与主动发起两个模块。详细配置在插件 WebUI，包括接话范围、虚拟生活和主动发起订阅。",
+    "hint": "控制消息接话与主动发起两个模块。详细配置在插件 WebUI，包括接话范围、虚拟生活、主动发起订阅与人际网络。",
     "default": false
   },
   "conversation_flow_enabled": {

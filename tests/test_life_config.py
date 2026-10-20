@@ -11,7 +11,6 @@ from decision.life_config import life_defaults, life_schema, normalize_life, val
 def test_defaults_roundtrip_and_independent_copies():
     defaults = life_defaults()
     assert normalize_life(defaults) == defaults
-    assert not defaults["integration_settings"]["enable"]
     assert not defaults["reply_delay_settings"]["enable"]
     defaults["creative_pool"]["themes"].clear()
     assert life_defaults()["creative_pool"]["themes"]

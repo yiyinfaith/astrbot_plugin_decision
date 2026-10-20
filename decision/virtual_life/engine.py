@@ -188,27 +188,30 @@ class VirtualLifeBase:
                 self._active_agent_counts[umo] = count - 1
 
     def _personal_network_plugin(self):
+        """Return the merged Personal Network service, if enabled.
+
+        Personal Network now lives inside this plugin, so there is no separate
+        star to look up; the owner exposes a ready-to-use service instance.
+        """
+
         settings = self.config.get("personal_network_integration", {}) or {}
         if not settings.get("enable", False):
             return None
-        getter = getattr(self.context, "get_registered_star", None)
-        metadata = getter("astrbot_plugin_personal_network") if callable(getter) else None
-        plugin = (
-            metadata.star_cls if metadata and metadata.activated and metadata.star_cls else None
-        )
+        getter = getattr(self.owner, "_get_personal_network", None)
+        service = getter() if callable(getter) else None
         required_methods = {
             "get_context_for_plugin",
             "record_life_event_from_plugin",
         }
-        if plugin is None or any(not hasattr(plugin, method) for method in required_methods):
+        if service is None or any(not hasattr(service, method) for method in required_methods):
             if not self._personal_network_unavailable_logged:
                 logger.warning(
-                    "[Virtual Life] Personal Network integration is enabled but a compatible plugin is unavailable."
+                    "[Virtual Life] Personal Network integration is enabled but unavailable."
                 )
                 self._personal_network_unavailable_logged = True
             return None
         self._personal_network_unavailable_logged = False
-        return plugin
+        return service
 
     async def _generate_new_character(self, persona: PersonaContext) -> str:
         """Possibly generate a new virtual character and write it to Personal Network.
@@ -261,7 +264,7 @@ class VirtualLifeBase:
                         "description": char["relationship_description"],
                     }
                 ],
-                source="astrbot_plugin_virtual_life",
+                source="astrbot_plugin_decision",
             )
             if not result.get("updated"):
                 logger.warning(
@@ -393,7 +396,7 @@ class VirtualLifeBase:
                         occurred_at=ended_at.isoformat(),
                         importance=50,
                         emotional_tone=plan.mood,
-                        source="astrbot_plugin_virtual_life",
+                        source="astrbot_plugin_decision",
                         source_key=f"{plan.date}:{item.id}",
                     )
                 except ValueError as exc:

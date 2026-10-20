@@ -288,6 +288,10 @@
       .life-subnav button span { display:block; font-size:12px; font-weight:400; margin-top:5px; color:#e0e5ff; }
       .life-page .status-pill { white-space:nowrap; flex-shrink:0; }
       .life-page { display:grid; gap:24px; } .life-intro { display:flex; align-items:center; gap:20px; } .life-intro p { color:#bdc7e4; max-width:800px; line-height:1.7; }
+      /* Paired cards (私聊主动/群聊主动 and 外貌参考图/人际网络) sit side by side
+         so four long forms do not stack into one very tall column. */
+      .life-pair { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; align-items:start; }
+      .life-pair > .glass-card { min-width:0; }
       .life-config-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; align-items:start; } .life-config-section { min-width:0; }
       .life-config-section summary { cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:18px; font-weight:650; } .life-config-section summary small { color:#adb8d7; font-size:12px; font-weight:400; }
       .life-setting-fields { padding-top:15px; } .life-setting-fields details { margin:16px 0; padding:15px; border-radius:16px; border:1px solid #ffffff20; background:#ffffff06; } .life-setting-fields details summary { font-size:15px; }
@@ -300,7 +304,15 @@
       .life-outfit-chips { display:flex; flex-wrap:wrap; gap:8px; } .life-outfit-chips span { border-radius:12px; padding:7px 10px; font-size:12px; background:#536c9633; color:#d9e7ff; }
       .life-timeline { margin:0; padding:0; list-style:none; } .life-timeline li { display:flex; gap:15px; padding:10px 0; border-bottom:1px solid #ffffff16; } .life-timeline time { color:#a5caff; font-size:12px; white-space:nowrap; padding-top:3px; } .life-timeline small { display:block; color:#aeb9d3; margin-top:5px; }
       .life-json { white-space:pre-wrap; overflow-wrap:anywhere; max-height:420px; overflow:auto; padding:15px; font-size:12px; line-height:1.6; color:#d5e1fa; background:#10162bcc; border-radius:14px; } .life-task { border-top:1px solid #ffffff20; padding:16px 0; } .life-result-image { max-width:100%; max-height:650px; object-fit:contain; border-radius:15px; }
-      @media(max-width:760px) { .life-config-grid,.life-today { grid-template-columns:1fr; } .life-subnav button { padding:12px 8px; font-size:14px; } .life-subnav button span { font-size:10px; } .life-intro { display:block; } .life-intro .status-pill { margin-top:12px; } }
+      .life-intro-actions { display:flex; align-items:center; gap:16px; flex-shrink:0; } .life-intro-switch { display:flex; align-items:center; gap:10px; max-width:260px; } .life-intro-switch small { margin:0; color:#a9b6d4; font-size:11px; line-height:1.55; }
+      /* The picker list is rendered in flow rather than as an overlay: a glass
+         card clips its children (overflow:hidden) and later cards painted over
+         an absolutely positioned list. In flow it can never be hidden or cover
+         another control. */
+      .life-picker { position:relative; } .life-picker-list { margin-top:8px; max-height:260px; overflow:auto; padding:6px; border:1px solid #ffffff30; border-radius:16px; background:#151d38f5; box-shadow:0 12px 32px #02061780; }
+      .life-picker-list button { display:block; width:100%; padding:9px 11px; border:0; border-radius:11px; color:#e8f0ff; background:transparent; text-align:left; } .life-picker-list button:hover, .life-picker-list button.active { background:linear-gradient(120deg,#315fb54d,#6a4fd04d); }
+      .life-picker-list strong { display:block; font-size:12.5px; overflow-wrap:anywhere; } .life-picker-list small { display:block; margin-top:3px; color:#9fb2cf; font-size:11px; line-height:1.5; overflow-wrap:anywhere; } .life-picker-empty { padding:10px 11px; color:#93a4c0; font-size:12px; }
+      @media(max-width:760px) { .life-config-grid,.life-today,.life-pair { grid-template-columns:1fr; } .life-subnav button { padding:12px 8px; font-size:14px; } .life-subnav button span { font-size:10px; } .life-intro { display:block; } .life-intro .status-pill { margin-top:12px; } .life-intro-actions { flex-wrap:wrap; margin-top:12px; } .life-intro-switch { max-width:none; } }
     </style>
   </head>
   <body>
@@ -380,18 +392,51 @@
           </div>
           </div>
           <div v-show="proactiveTab === 'initiative'" class="life-page">
-            <div class="glass-card life-intro"><div><div class="section-kicker">A life of their own</div><h2>主动发起 · 虚拟生活</h2><p>日程、穿搭与生活状态按当前 AstrBot 人格共享；私聊和群聊各自管理额度与回应状态。Jev 判断通过后，由原生 Agent 开口。先打开原生配置页的“主动对话”，再开启下方“启用主动发起”并填写会话订阅；所有修改需保存。</p></div><span class="status-pill">{{ lifeStatus.enabled ? '后台已运行' : '后台未启用' }}</span></div>
+            <div class="glass-card life-intro"><div><div class="section-kicker">A life of their own</div><h2>主动发起 · 虚拟生活</h2><p>日程、穿搭与生活状态按当前 AstrBot 人格共享；私聊和群聊各自管理额度与回应状态。Jev 判断通过后，由原生 Agent 开口。是否主动发起完全由下方「私聊主动」「群聊主动」两个开关控制；所有修改需保存。</p></div><div class="life-intro-actions"><span class="status-pill">{{ lifeStatus.enabled ? '后台已运行' : '后台未启用' }}</span></div></div>
+            <div class="life-pair">
+            <div v-if="lifeConfig.friend_settings" class="glass-card">
+              <div class="card-heading"><div><div class="section-kicker">Private Chat</div><h2>私聊主动</h2><p>控制虚拟生活是否、以及多久才在私聊里主动开口；名单模式决定下方名单的含义。</p></div><span class="status-pill">{{ lifeConfig.friend_settings.enable ? '已启用' : '未启用' }}</span></div>
+              <div class="switch-row"><div class="switch-copy"><strong>启用私聊主动</strong><small>关闭后私聊完全不会主动发起，但仍会正常接话。</small></div><label class="switch"><input type="checkbox" aria-label="启用私聊主动" v-model="lifeConfig.friend_settings.enable"><span class="switch-track"></span></label></div>
+              <div class="scope-mode"><div><strong>{{ lifeConfig.friend_settings.session_blacklist ? '私聊主动黑名单' : '私聊主动白名单' }}</strong><small>{{ lifeConfig.friend_settings.session_blacklist ? '名单内的私聊不会主动发起；名单为空时全部私聊都会主动发起。' : '只对名单内的私聊主动发起；名单为空时全部私聊都不会主动发起。' }}</small></div><button class="scope-toggle" type="button" @click="toggleScope('friend_settings')">{{ lifeConfig.friend_settings.session_blacklist ? '黑名单' : '白名单' }}</button></div>
+              <div class="field"><label>{{ lifeConfig.friend_settings.session_blacklist ? '不主动发起的私聊会话' : '允许主动发起的私聊会话' }} <span>每行一个完整 UMO</span></label><textarea :value="listText('friend_settings','session_list')" @input="setScopeList('friend_settings','session_list',$event.target.value)" class="list-editor" placeholder="aiocqhttp:FriendMessage:用户ID"></textarea></div>
+              <div class="two-col"><div class="field"><label>最短沉默时间 <span>分钟</span></label><input v-model.number="lifeConfig.friend_settings.idle_min_minutes" type="number" min="1" step="1"></div><div class="field"><label>最长沉默时间 <span>分钟</span></label><input v-model.number="lifeConfig.friend_settings.idle_max_minutes" type="number" min="1" step="1"></div><div class="field"><label>发送冷却 <span>分钟</span></label><input v-model.number="lifeConfig.friend_settings.cooldown_minutes" type="number" min="0" step="1"></div><div class="field"><label>日预算下限</label><input v-model.number="lifeConfig.friend_settings.daily_budget_min" type="number" min="0" step="1"></div><div class="field"><label>日预算上限</label><input v-model.number="lifeConfig.friend_settings.daily_budget_max" type="number" min="0" step="1"></div><div class="field"><label>LLM 额外预算</label><input v-model.number="lifeConfig.friend_settings.llm_bonus_max" type="number" min="0" step="1"></div><div class="field"><label>日硬上限 <span>不超过 100</span></label><input v-model.number="lifeConfig.friend_settings.daily_hard_max" type="number" min="0" max="100" step="1"></div></div>
+              <p class="hint">白名单 + 空名单 = 全部不主动；黑名单 + 空名单 = 全部主动。名单里只能填私聊 UMO（FriendMessage）。</p>
+            </div>
+            <div v-if="lifeConfig.group_settings" class="glass-card">
+              <div class="card-heading"><div><div class="section-kicker">Group Chat</div><h2>群聊主动</h2><p>控制虚拟生活是否、以及多久才在群聊里主动开口；名单模式决定下方名单的含义。</p></div><span class="status-pill">{{ lifeConfig.group_settings.enable ? '已启用' : '未启用' }}</span></div>
+              <div class="switch-row"><div class="switch-copy"><strong>启用群聊主动</strong><small>关闭后群聊完全不会主动发起，但仍会正常接话。</small></div><label class="switch"><input type="checkbox" aria-label="启用群聊主动" v-model="lifeConfig.group_settings.enable"><span class="switch-track"></span></label></div>
+              <div class="scope-mode"><div><strong>{{ lifeConfig.group_settings.session_blacklist ? '群聊主动黑名单' : '群聊主动白名单' }}</strong><small>{{ lifeConfig.group_settings.session_blacklist ? '名单内的群聊不会主动发起；名单为空时全部群聊都会主动发起。' : '只对名单内的群聊主动发起；名单为空时全部群聊都不会主动发起。' }}</small></div><button class="scope-toggle" type="button" @click="toggleScope('group_settings')">{{ lifeConfig.group_settings.session_blacklist ? '黑名单' : '白名单' }}</button></div>
+              <div class="field"><label>{{ lifeConfig.group_settings.session_blacklist ? '不主动发起的群聊会话' : '允许主动发起的群聊会话' }} <span>每行一个完整 UMO</span></label><textarea :value="listText('group_settings','session_list')" @input="setScopeList('group_settings','session_list',$event.target.value)" class="list-editor" placeholder="aiocqhttp:GroupMessage:群号"></textarea></div>
+              <div class="two-col"><div class="field"><label>最短沉默时间 <span>分钟</span></label><input v-model.number="lifeConfig.group_settings.idle_min_minutes" type="number" min="1" step="1"></div><div class="field"><label>最长沉默时间 <span>分钟</span></label><input v-model.number="lifeConfig.group_settings.idle_max_minutes" type="number" min="1" step="1"></div><div class="field"><label>发送冷却 <span>分钟</span></label><input v-model.number="lifeConfig.group_settings.cooldown_minutes" type="number" min="0" step="1"></div><div class="field"><label>日预算下限</label><input v-model.number="lifeConfig.group_settings.daily_budget_min" type="number" min="0" step="1"></div><div class="field"><label>日预算上限</label><input v-model.number="lifeConfig.group_settings.daily_budget_max" type="number" min="0" step="1"></div><div class="field"><label>LLM 额外预算</label><input v-model.number="lifeConfig.group_settings.llm_bonus_max" type="number" min="0" step="1"></div><div class="field"><label>日硬上限 <span>不超过 100</span></label><input v-model.number="lifeConfig.group_settings.daily_hard_max" type="number" min="0" max="100" step="1"></div></div>
+              <p class="hint">白名单 + 空名单 = 全部不主动；黑名单 + 空名单 = 全部主动。名单里只能填群聊 UMO（GroupMessage）。</p>
+            </div>
+            </div>
             <div class="life-workspace glass-card">
-              <div class="card-heading"><div><div class="section-kicker">Today &amp; Appearance</div><h2>今日生活与外貌</h2><p>先选择会话，页面自动读取其当前人格。参考图只绑定这个人格，照片与视频使用今日穿搭。</p></div><span class="status-pill">aigen {{ aigenAvailable ? '已连接' : '未连接' }}</span></div>
-              <div class="two-col"><div class="field"><label>目标会话 <span>填写 /sid 获取的完整 UMO</span></label><input type="text" v-model="lifeUmo" placeholder="aiocqhttp:FriendMessage:用户ID" list="life-sessions"><datalist id="life-sessions"><option v-for="umo in lifeSessions" :key="umo" :value="umo"></option></datalist></div><div class="field"><label>当前人格</label><div class="life-persona">{{ appearancePersona || '选择会话后点击读取' }}</div></div></div>
+              <div class="card-heading"><div><div class="section-kicker">Today &amp; Appearance</div><h2>今日生活与外貌</h2><p>先选择会话，页面按该会话解析并读取当前人格；参考图按人格保存，照片与视频使用今日穿搭。</p></div><span class="status-pill">aigen {{ aigenAvailable ? '已连接' : '未连接' }}</span></div>
+              <div class="two-col"><div class="field"><label>目标会话 <span>可搜索选择，也可直接粘贴完整 UMO</span></label><div class="life-picker"><input type="text" :value="sessionSearch" :disabled="lifeBusy" placeholder="搜索会话标题 / 平台，或粘贴 aiocqhttp:FriendMessage:用户ID" autocomplete="off" aria-label="目标会话" @focus="showSessionList = true" @input="onSessionInput($event.target.value)" @keydown.esc="showSessionList = false" @blur="hidePicker('session')"><div v-if="showSessionList" class="life-picker-list"><button v-for="row in filteredSessions" :key="row.umo" type="button" :class="{active: row.umo === lifeUmo}" @mousedown.prevent="pickSession(row)"><strong>{{ row.title || row.umo }}</strong><small>{{ [row.platform, row.message_type, row.persona_name, row.umo].filter(Boolean).join(' · ') }}</small></button><div v-if="!filteredSessions.length" class="life-picker-empty">没有匹配的会话；可直接粘贴完整 UMO。</div></div></div><p class="hint">会话列表来自 AstrBot 的会话；选中的 UMO 决定读取哪个人格的生活与外貌。当前实际 UMO：{{ lifeUmo || '未选择' }}</p></div><div class="field"><label>当前人格</label><div class="life-persona">{{ appearancePersona || '选择会话后点击读取' }}</div><p class="hint">当前人格由所选会话决定，不可在此直接修改。</p></div></div>
               <div class="life-actions"><button class="button secondary" :disabled="lifeBusy" @click="inspectLife">读取生活与外貌</button><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('generate')">生成今日内容</button><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('rewrite_schedule')">重写日程</button><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('rewrite_outfit')">重写穿搭</button></div>
               <p class="hint">操作使用已保存的设置；修改配置后请先保存。生成与重写会请求日程模型，不会自动发送聊天消息。</p>
               <div class="field"><label>补充要求 / 长期阶段自然语言要求</label><textarea v-model="lifeActionText" placeholder="例如今天穿浅色休闲服，下午在书店。导入阶段时填写完整 JSON。"></textarea></div>
-              <div class="life-reference-grid"><div v-for="image in appearanceImages" :key="image.id" class="life-reference"><img :src="image.preview" :alt="image.name"><div><span>{{ image.name }}</span><button class="button ghost" :disabled="lifeBusy" @click="removeAppearance(image.id)">删除</button></div></div><label class="life-upload"><span>＋ 上传外貌参考图</span><small>PNG / JPEG / WebP · 每张最多 8MB · 每人格最多 5 张</small><input type="file" accept="image/png,image/jpeg,image/webp" :disabled="lifeBusy" @change="uploadAppearance"></label></div>
               <div v-if="lifeInspection.plan" class="life-today"><div><h3>{{ lifeInspection.plan.theme || '今日生活' }}</h3><p>{{ lifeInspection.plan.mood }}</p><p v-if="lifeInspection.plan.outfit">{{ lifeInspection.plan.outfit.summary }}</p><div class="life-outfit-chips" v-if="lifeInspection.plan.outfit"><span v-for="(item,idx) in lifeInspection.plan.outfit.items" :key="idx">{{ item.name }} · {{ item.details }}</span></div></div><ol class="life-timeline"><li v-for="item in lifeInspection.plan.timeline" :key="item.id"><time>{{ item.start }}—{{ item.end }}</time><div><strong>{{ item.activity }}</strong><small>{{ item.location }} {{ item.state }}</small></div></li></ol></div>
               <div class="life-actions"><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('render_schedule')">日程图片</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('render_outfit')">穿搭图片</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('render_timeline')">长期阶段图片</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('render_stage')">当前阶段详情</button><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('initiate')">请求立即发起（会发送）</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('settle_delay')">结算回复等待</button></div>
             </div>
-            <div class="life-config-grid"><details v-for="(group,key) in lifeSchema" :key="key" class="glass-card life-config-section" :open="['integration_settings','schedule_settings','media_settings'].includes(key)"><summary><span>{{ cleanLifeLabel(group.description || key) }}</span><small>{{ Object.keys(group.items || {}).length }} 项设置</small></summary><life-settings v-if="lifeConfig[key]" :schema="group.items" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings></details></div>
+            <div class="life-pair">
+            <div class="glass-card">
+              <div class="card-heading"><div><div class="section-kicker">Appearance References</div><h2>外貌参考图（按人格）</h2><p>参考图按 AstrBot 人格保存，与具体会话无关；换会话不会换参考图，换人格才会。</p></div></div>
+              <div class="field"><label>目标人格 <span>可搜索选择</span></label><div class="life-picker"><input type="text" v-model="personaSearch" :disabled="lifeBusy" placeholder="搜索人格 ID" autocomplete="off" aria-label="目标人格" @focus="showPersonaList = true" @input="showPersonaList = true" @keydown.esc="showPersonaList = false" @blur="hidePicker('persona')"><div v-if="showPersonaList" class="life-picker-list"><button v-for="row in filteredPersonas" :key="row.id" type="button" :class="{active: row.id === appearancePersonaId}" @mousedown.prevent="pickPersona(row)"><strong>{{ row.name || row.id }}</strong><small>{{ row.id }}</small></button><div v-if="!filteredPersonas.length" class="life-picker-empty">没有匹配的人格。</div></div></div></div>
+              <div class="life-reference-grid"><div v-for="image in appearanceImages" :key="image.id" class="life-reference"><img :src="image.preview" :alt="image.name"><div><span>{{ image.name }}</span><button class="button ghost" :disabled="lifeBusy" @click="removeAppearance(image.id)">删除</button></div></div><label class="life-upload"><span>＋ 上传外貌参考图</span><small>PNG / JPEG / WebP · 每张最多 8MB · 每人格最多 5 张</small><input type="file" accept="image/png,image/jpeg,image/webp" :disabled="lifeBusy" @change="uploadAppearance"></label></div>
+              <div v-if="lifeConfig.appearance_settings" class="field"><label>外貌补充描述 <span>只用于描述参考图中人物的外貌与参考穿搭</span></label><textarea v-model="lifeConfig.appearance_settings.description" spellcheck="false" placeholder="只写参考图无法体现的外貌信息，例如身高、体型、发型细节、常戴饰品。"></textarea></div>
+              <div v-if="lifeConfig.appearance_settings" class="switch-row"><div class="switch-copy"><strong>无今日穿搭时沿用参考图穿搭</strong><small>开启后，当天尚未生成穿搭时，拍照与拍视频会沿用参考图中的服装。</small></div><label class="switch"><input type="checkbox" aria-label="无今日穿搭时沿用参考图穿搭" v-model="lifeConfig.appearance_settings.use_reference_outfit"><span class="switch-track"></span></label></div>
+              <p class="hint">参考图按人格保存，与具体会话无关；参考图中的穿搭作为该人格的默认穿搭；若几张参考图穿搭不一致，插件不做额外处理。</p>
+              <p v-if="!appearancePersonaId" class="hint">请先在上方选择一个目标人格，再上传参考图。</p>
+            </div>
+            <div v-if="lifeConfig.personal_network_integration && lifeSchema.personal_network_integration" class="glass-card">
+              <div class="card-heading"><div><div class="section-kicker">Personal Network</div><h2>人际网络</h2><p>人际网络已并入本插件，无需再安装 astrbot_plugin_personal_network。关系上下文会按下方设置注入对话，虚拟生活生成新人物时也走同一份数据。</p></div><button class="button secondary" type="button" @click="openNetworkPage">打开人际网络管理</button></div>
+              <life-settings :schema="lifeSchema.personal_network_integration.items" :value="lifeConfig.personal_network_integration" :providers="lifeProviders"></life-settings>
+              <p class="hint">管理页用于维护人物、关系与共同经历；数据保存在 AstrBot 数据目录，与本页共用同一份人格。</p>
+            </div>
+            </div>
+            <div class="life-config-grid"><details v-for="(group,key) in lifeConfigGroups" :key="key" class="glass-card life-config-section" :open="['integration_settings','schedule_settings','media_settings'].includes(key)"><summary><span>{{ cleanLifeLabel(group.description || key) }}</span><small>{{ Object.keys(group.items || {}).length }} 项设置</small></summary><life-settings v-if="lifeConfig[key]" :schema="group.items" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><p v-if="key === 'media_settings'" class="hint">三项概率独立掷骰，判定为“生成多媒体”后只会从已启用的种类里挑一种发送，数量由模型在配置区间内决定。</p></details></div>
             <div class="glass-card"><div class="card-heading"><div><div class="section-kicker">Long-term continuity</div><h2>长期时间表与一次性要求</h2><p>长期阶段支持草稿、批准、拒绝、重生成和 JSON 导入；日程要求只在指定日期首次成功生成后消费。</p></div></div><div class="life-actions"><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('generate_timeline')">生成追加草稿</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('regenerate_timeline')">生成替换草稿</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('import_timeline')">从要求框导入 JSON</button><button class="button secondary" :disabled="lifeBusy || !lifeInspection.draft" @click="lifeAction('approve_timeline')">批准草稿</button><button class="button ghost" :disabled="lifeBusy || !lifeInspection.draft" @click="lifeAction('reject_timeline')">拒绝 / 按意见重写</button></div><div class="field"><label>未来日期或区间</label><input type="text" v-model="lifeDateRange" placeholder="2026-12-01..2026-12-03"></div><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('add_requirement')">添加一次性日程要求</button><details v-if="lifeInspection.timeline || lifeInspection.draft"><summary>查看已批准阶段与待批准草稿</summary><pre class="life-json">{{ JSON.stringify({timeline:lifeInspection.timeline,draft:lifeInspection.draft,requirements:lifeInspection.requirements},null,2) }}</pre></details></div>
             <div class="glass-card"><div class="card-heading"><div><div class="section-kicker">Runtime</div><h2>运行与操作结果</h2><p>{{ lifeMessage || '配置保存在 AstrBot 数据目录；后台主动发送默认关闭。' }}</p></div><button class="button ghost" @click="refreshLife">刷新状态</button></div><div v-for="(task,id) in lifeTasks" :key="id" class="life-task"><strong>{{ task.action }} · {{ task.state }}</strong><p v-if="task.error">{{ task.error }}</p><template v-if="Array.isArray(task.result)"><template v-for="(part,idx) in task.result" :key="idx"><img v-if="part.type === 'image'" class="life-result-image" :src="part.src" alt="生活查询图片"><pre v-else class="life-json">{{ part.text }}</pre></template></template><pre v-else-if="task.result" class="life-json">{{ typeof task.result === 'object' ? JSON.stringify(task.result,null,2) : task.result }}</pre></div><details><summary>查看计划任务与最近 Jev 决策</summary><pre class="life-json">{{ JSON.stringify(lifeStatus,null,2) }}</pre></details></div>
           </div>
@@ -574,7 +619,8 @@
             proactiveTab: 'reactive', messageInterjection: true,
             lifeConfig: {}, lifeSchema: {}, lifeProviders: [], lifeStatus: {}, lifeTasks: {},
             lifeUmo: '', lifeActionText: '', lifeDateRange: '', lifeMessage: '', lifeBusy: false,
-            appearancePersona: '', appearanceImages: [], lifeInspection: {}, aigenAvailable: false, lifePoll: null, lifeInspectTask: '', lifeAppliedTask: '',
+            appearancePersona: '', appearanceImages: [], appearancePersonaId: '', personaOptions: [], sessionOptions: [], sessionSearch: '', personaSearch: '', showSessionList: false, showPersonaList: false,
+            lifeInspection: {}, aigenAvailable: false, lifePoll: null, lifeInspectTask: '', lifeAppliedTask: '',
             toolSearch: '',
             statusText: '加载中…',
             saveState: '',
@@ -642,6 +688,11 @@
         },
         computed: {
           lifeSessions() { return [...new Set([...(this.lifeConfig.friend_settings?.session_list || []), ...(this.lifeConfig.group_settings?.session_list || []), ...Object.keys(this.lifeStatus.sessions || {})])]; },
+          // friend/group/network/appearance render as dedicated cards above, so
+          // the generic grid must not repeat them.
+          lifeConfigGroups() { const skip = new Set(['friend_settings', 'group_settings', 'personal_network_integration', 'appearance_settings']); return Object.fromEntries(Object.entries(this.lifeSchema || {}).filter(([key]) => !skip.has(key))); },
+          filteredSessions() { const q = this.sessionSearch.trim().toLowerCase(); const rows = this.sessionOptions || []; if (!q) return rows.slice(0, 60); return rows.filter(row => `${row.title || ''} ${row.umo || ''} ${row.platform || ''} ${row.message_type || ''} ${row.persona_name || ''}`.toLowerCase().includes(q)).slice(0, 60); },
+          filteredPersonas() { const q = this.personaSearch.trim().toLowerCase(); const rows = this.personaOptions || []; if (!q) return rows.slice(0, 60); return rows.filter(row => `${row.name || ''} ${row.id || ''}`.toLowerCase().includes(q)).slice(0, 60); },
           toolsEnabled() { return this.toolsEnabledValue; },
           proactiveEnabled() { return this.proactiveEnabledValue; },
           flowEnabled() { return this.flowEnabledValue; },
@@ -658,6 +709,41 @@
         },
         methods: {
           cleanLifeLabel(text) { return String(text || '').replace(/^[^\p{L}\p{N}]+/u, ''); },
+          async refreshOptions() {
+            try {
+              const bridge = await waitForBridge();
+              const [rawPersonas, rawSessions] = await Promise.all([bridge.apiGet('life/personas'), bridge.apiGet('life/sessions')]);
+              const personas = payloadOf(rawPersonas).personas; const sessions = payloadOf(rawSessions).sessions;
+              if (Array.isArray(personas)) this.personaOptions = personas.filter(row => row && row.id).map(row => ({id:String(row.id), name:String(row.name || row.id)}));
+              if (Array.isArray(sessions)) this.sessionOptions = sessions.filter(row => row && row.umo).map(row => ({umo:String(row.umo), title:String(row.title || ''), platform:String(row.platform || ''), message_type:String(row.message_type || ''), persona_id:String(row.persona_id || ''), persona_name:String(row.persona_name || '')}));
+            } catch(e) { this.lifeMessage = `会话/人格列表读取失败：${e.message || e}（仍可直接粘贴 UMO 或人格 ID）`; }
+          },
+          listText(group, key) { const value = this.lifeConfig?.[group]?.[key]; return Array.isArray(value) ? value.join('\n') : String(value || ''); },
+          setScopeList(group, key, raw) { if (!this.lifeConfig[group]) return; this.lifeConfig[group][key] = String(raw || '').split('\n').map(item => item.trim()).filter(Boolean); },
+          toggleScope(group) { const settings = this.lifeConfig?.[group]; if (settings) settings.session_blacklist = !settings.session_blacklist; },
+          hidePicker(kind) { if (kind === 'session') this.showSessionList = false; else this.showPersonaList = false; },
+          onSessionInput(raw) { const value = String(raw || ''); this.sessionSearch = value; this.showSessionList = true; const trimmed = value.trim(); this.lifeUmo = this.sessionOptions.some(row => row.umo === trimmed) ? trimmed : (/\S+:\S+:\S+/.test(trimmed) ? trimmed : ''); },
+          pickSession(row) { this.showSessionList = false; this.sessionSearch = row.title || row.umo; this.lifeUmo = row.umo; },
+          async pickPersona(row) { this.showPersonaList = false; this.personaSearch = row.name || row.id; this.appearancePersonaId = row.id; await this.loadAppearance(row.id); },
+          networkPageUrl() {
+            try {
+              const path = String(window.location.pathname || ''); const marker = '/settings';
+              const index = path.lastIndexOf(marker);
+              if (index >= 0) return `${path.slice(0, index)}/network/`;
+            } catch(e) { /* fall through to the known plugin path */ }
+            return '/plugin/astrbot_plugin_decision/network/';
+          },
+          openNetworkPage() { window.open(this.networkPageUrl(), '_blank'); },
+          async loadAppearance(personaId) {
+            const target = String(personaId || '').trim();
+            if (!target) { this.appearanceImages = []; return; }
+            this.lifeBusy = true;
+            try {
+              const bridge = await waitForBridge(); const result = payloadOf(await bridge.apiPost('life/appearance',{action:'list', persona_id:target}));
+              this.appearancePersonaId = result.persona_id || target; this.appearanceImages = result.images || [];
+            } catch(e) { this.appearanceImages = []; this.lifeMessage = `读取外貌参考图失败：${e.message || e}`; }
+            finally { this.lifeBusy = false; }
+          },
           async refreshLife() {
             try {
               const bridge = await waitForBridge(); const result = payloadOf(await bridge.apiGet('life'));
@@ -666,13 +752,14 @@
               if (this.lifePoll) clearTimeout(this.lifePoll);
               if (running) this.lifePoll = setTimeout(() => this.refreshLife(), 2000);
             } catch(e) { this.lifeMessage = `读取后台状态失败：${e.message || e}`; }
+            await this.refreshOptions();
           },
           async inspectLife() {
-            if (!this.lifeUmo.trim()) { this.lifeMessage = '请先填写完整会话 UMO。'; return; }
+            if (!this.lifeUmo.trim()) { this.lifeMessage = '请先选择会话或填写完整会话 UMO。'; return; }
             this.lifeBusy = true;
             try {
               const bridge = await waitForBridge(); const result = payloadOf(await bridge.apiPost('life/appearance',{umo:this.lifeUmo.trim(),action:'list'}));
-              this.appearancePersona = result.persona_id; this.appearanceImages = result.images || [];
+              this.appearancePersona = result.persona_id; this.appearancePersonaId = result.persona_id || this.appearancePersonaId; this.appearanceImages = result.images || [];
               await this.lifeAction('inspect');
             } catch(e) { this.lifeMessage = `读取失败：${e.message || e}`; }
             finally { this.lifeBusy = false; }
@@ -691,19 +778,20 @@
           },
           async uploadAppearance(event) {
             const file = event.target.files?.[0]; if (!file) return;
-            if (!this.lifeUmo.trim()) { this.lifeMessage = '请先填写会话 UMO，以便绑定其当前人格。'; event.target.value = ''; return; }
+            if (!this.appearancePersonaId) { this.lifeMessage = '请先选择人格，参考图按人格保存。'; event.target.value = ''; return; }
             if (file.size > 8*1024*1024) { this.lifeMessage = '参考图不能超过 8MB。'; event.target.value = ''; return; }
             this.lifeBusy = true;
             try {
               const data = await new Promise((resolve,reject)=>{ const reader=new FileReader(); reader.onload=()=>resolve(reader.result); reader.onerror=()=>reject(new Error('文件读取失败')); reader.readAsDataURL(file); });
-              const bridge = await waitForBridge(); const result = payloadOf(await bridge.apiPost('life/appearance',{umo:this.lifeUmo.trim(),action:'upload',name:file.name,data_url:data}));
-              this.appearancePersona = result.persona_id; this.appearanceImages = result.images || []; this.lifeMessage = '外貌参考图已保存到 AstrBot 数据目录。';
+              const bridge = await waitForBridge(); const result = payloadOf(await bridge.apiPost('life/appearance',{persona_id:this.appearancePersonaId,action:'upload',name:file.name,data_url:data}));
+              this.appearancePersonaId = result.persona_id || this.appearancePersonaId; this.appearanceImages = result.images || []; this.lifeMessage = '外貌参考图已保存到 AstrBot 数据目录。';
             } catch(e) { this.lifeMessage = `上传失败：${e.message || e}`; }
             finally { this.lifeBusy = false; event.target.value = ''; }
           },
           async removeAppearance(id) {
+            if (!this.appearancePersonaId) { this.lifeMessage = '请先选择人格。'; return; }
             this.lifeBusy = true;
-            try { const bridge=await waitForBridge(); const result=payloadOf(await bridge.apiPost('life/appearance',{umo:this.lifeUmo.trim(),action:'delete',id})); this.appearanceImages=result.images || []; }
+            try { const bridge=await waitForBridge(); const result=payloadOf(await bridge.apiPost('life/appearance',{persona_id:this.appearancePersonaId,action:'delete',id})); this.appearanceImages=result.images || []; }
             catch(e) { this.lifeMessage=`删除失败：${e.message || e}`; }
             finally { this.lifeBusy = false; }
           },
@@ -867,13 +955,16 @@
               this.form.proactive = {...defaults, ...(settings.proactive || {})}; this.form.proactive.proactive_whitelist = (settings.proactive?.proactive_whitelist || []).join('\n'); this.form.proactive.direct_reply_prefixes = (settings.proactive?.direct_reply_prefixes || ['/', '@']).join(', ');
               const incoming = settings.dialogue_enhancement || {}; this.form.dialogue_enhancement = {...this.form.dialogue_enhancement, ...incoming}; this.form.dialogue_enhancement.conversation_flow_scope = (incoming.conversation_flow_scope || []).join('\n'); this.form.dialogue_enhancement.output_scope = (incoming.output_scope || []).join('\n'); if (incoming.output_pipeline) this.form.dialogue_enhancement.output_pipeline = incoming.output_pipeline;
               this.toolsEnabledValue = settings.tools_subagents_decision_enabled !== false; this.proactiveEnabledValue = settings.proactive_reply_enabled === true; this.flowEnabledValue = settings.conversation_flow_enabled !== false; this.loaded = true; this.statusText = `已加载 ${this.tools.length} 个能力`; this.syncThresholdGlass();
+              await this.refreshOptions();
+              const personaId = String(this.appearancePersonaId || this.lifeConfig?.appearance_settings?.persona_id || '').trim();
+              if (personaId) { this.appearancePersonaId = personaId; this.personaSearch = personaId; await this.loadAppearance(personaId); }
             } catch (e) { this.statusText = `加载失败：${e.message || e}`; this.saveState = 'error'; }
             finally { this.loading = false; }
           }
         },
         watch: {
-          lifeUmo() { this.lifeInspection={}; this.appearanceImages=[]; this.appearancePersona=''; this.lifeInspectTask=''; this.lifeAppliedTask=''; },
-          lifeTasks: {deep:true, handler(tasks) { for (const [id,task] of Object.entries(tasks).reverse()) { if (task.umo !== this.lifeUmo.trim() || task.state !== 'done') continue; const inspection=task.inspection || (task.action === 'inspect' ? task.result : null); if (inspection) { if (id !== this.lifeAppliedTask) { this.lifeAppliedTask=id; this.lifeInspection=inspection; this.appearancePersona=inspection.persona_id || this.appearancePersona; } break; } } }},
+          lifeUmo() { this.lifeInspection={}; this.appearanceImages=[]; this.appearancePersona=''; this.appearancePersonaId=''; this.personaSearch=''; this.lifeInspectTask=''; this.lifeAppliedTask=''; },
+          lifeTasks: {deep:true, handler(tasks) { for (const [id,task] of Object.entries(tasks).reverse()) { if (task.umo !== this.lifeUmo.trim() || task.state !== 'done') continue; const inspection=task.inspection || (task.action === 'inspect' ? task.result : null); if (inspection) { if (id !== this.lifeAppliedTask) { this.lifeAppliedTask=id; this.lifeInspection=inspection; this.appearancePersona=inspection.persona_id || this.appearancePersona; if (inspection.persona_id && inspection.persona_id !== this.appearancePersonaId) { this.appearancePersonaId=inspection.persona_id; this.personaSearch=inspection.persona_id; this.loadAppearance(inspection.persona_id); } } break; } } }},
           'form.tool_noul_threshold'() { this.syncThresholdGlass(); this.syncDecisionRing(); },
           activeTab() { this.syncGlassNav(); }
         },

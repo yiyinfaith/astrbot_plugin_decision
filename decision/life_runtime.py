@@ -153,10 +153,20 @@ class LifeRuntime(VirtualLifeBase):
 
     @property
     def enabled(self):
+        """The runtime is live whenever the module is on and either kind is on.
+
+        There is no separate master switch: 私聊主动 and 群聊主动 own their own
+        enable flags, and the per-session predicate decides whether a specific
+        conversation may be contacted.
+        """
+
         return (
             not self.closed
             and self.owner._bool("proactive_reply_enabled", False)
-            and self.config["integration_settings"]["enable"]
+            and any(
+                (self.config.get(key, {}) or {}).get("enable", False)
+                for key in ("friend_settings", "group_settings")
+            )
         )
 
     async def terminate(self):
@@ -275,8 +285,27 @@ class LifeRuntime(VirtualLifeBase):
             targeted = at_bot or reply_bot
         if targeted:
             state.unanswered_count = 0
-        self._schedule_idle(umo)
+        if umo in self._schedule_available_umos:
+            self._schedule_idle(umo)
+        else:
+            # A whitelist enumerates its sessions, but a blacklist has no list
+            # to enumerate: the first inbound message is what discovers the
+            # conversation. Schedule it here so an empty blacklist still works.
+            await self._ensure_scheduled(umo)
         await self.storage.save_sessions()
+
+    async def _ensure_scheduled(self, umo: str) -> None:
+        """Give a newly discovered conversation its plan and schedule jobs."""
+
+        if umo in self._schedule_available_umos:
+            return
+        try:
+            persona, plan = await self._ensure_plan_for_umo(umo)
+        except Exception as exc:
+            self.record_audit(umo, False, f"日程准备失败：{str(exc)[:120]}")
+            return
+        if persona is not None and plan is not None and plan.has_schedule:
+            await self._schedule_session(umo, persona, plan)
 
     async def _run_idle(self, umo):
         if not self.enabled or not self.policy.is_enabled(umo):
@@ -468,8 +497,9 @@ class LifeRuntime(VirtualLifeBase):
         relationship = await self._personal_network_context(persona.id)
         if relationship:
             prompt += "\n" + relationship
-        if self.config["media_settings"]["enable"]:
-            prompt += "\n需要分享自己的照片或视频时，可使用 take_self_photo / take_self_video；它们会参考外貌图片与今日穿搭。"
+        media = self._proactive_media_instruction()
+        if media:
+            prompt += "\n" + media
         sent = await dispatch_life_agent(self, umo, prompt, generation, persona.id, intent)
         if sent:
             self.offline.pop(umo.split(":", 1)[0], None)
@@ -477,6 +507,32 @@ class LifeRuntime(VirtualLifeBase):
             umo, sent, f"Jev 通过，候选：{intent}" if sent else "生成期间会话更新或消息未发送"
         )
         return sent
+
+    def _proactive_media_instruction(self) -> str:
+        """Roll the per-kind media probabilities for one proactive delivery.
+
+        Every enabled kind is rolled independently; at most one kind is then
+        attached so a single proactive message never mixes several media types.
+        The chosen range is enforced again inside the tool handler.
+        """
+
+        from .life_media import KIND_LABELS, choose_proactive_media, media_instruction
+
+        settings = self.config.get("media_settings", {}) or {}
+        choice = choose_proactive_media(settings)
+        if choice is None:
+            return ""
+        kind, low, high = choice
+        if high <= 0:
+            return ""
+        instruction = media_instruction(kind, low, high)
+        logger.info(
+            "Decision Engine 主动发起附带多媒体：%s（%s~%s）",
+            KIND_LABELS.get(kind, kind),
+            low,
+            high,
+        )
+        return instruction
 
     async def inject_cached_state(self, event, req):
         if not self.enabled:

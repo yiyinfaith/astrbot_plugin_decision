@@ -27,22 +27,48 @@ class ProactivePolicy:
         key = "group_settings" if session_kind(umo) == "group" else "friend_settings"
         return self.config.get(key, {}) or {}
 
+    def _allows(self, settings: dict, umo: str) -> bool:
+        """Apply the per-kind black/white list semantics.
+
+        Whitelist (default) + empty list means no conversation.  Blacklist +
+        empty list means every conversation, which is why a blacklist never
+        consults the list to decide that a session is *enabled*.
+        """
+
+        if not settings.get("enable", False):
+            return False
+        sessions = {
+            str(value).strip() for value in settings.get("session_list", []) if str(value).strip()
+        }
+        matched = str(umo).strip() in sessions
+        return (not matched) if settings.get("session_blacklist", False) else matched
+
     def enabled_sessions(self) -> list[str]:
         sessions: list[str] = []
         for key in ("friend_settings", "group_settings"):
             settings = self.config.get(key, {}) or {}
             if not settings.get("enable", False):
                 continue
-            sessions.extend(
+            # A blacklist cannot enumerate "every conversation", so known
+            # runtime sessions are folded in and then filtered by the same
+            # predicate the scheduler uses.
+            candidates = [
                 str(value).strip()
                 for value in settings.get("session_list", [])
                 if str(value).strip()
+            ]
+            if settings.get("session_blacklist", False):
+                candidates.extend(self.storage.sessions.keys())
+            sessions.extend(
+                umo
+                for umo in candidates
+                if session_kind(umo) == ("group" if key == "group_settings" else "friend")
+                and self._allows(settings, umo)
             )
         return list(dict.fromkeys(sessions))
 
     def is_enabled(self, umo: str) -> bool:
-        settings = self.settings_for(umo)
-        return bool(settings.get("enable", False) and umo in settings.get("session_list", []))
+        return self._allows(self.settings_for(umo), umo)
 
     def subscribe(self, umo: str) -> bool:
         settings = self.settings_for(umo)

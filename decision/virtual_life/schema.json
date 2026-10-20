@@ -56,20 +56,91 @@
     }
   },
   "personal_network_integration": {
-    "description": "🔗 人际网络集成",
+    "description": "🔗 人际网络",
     "type": "object",
-    "hint": "可选对接 astrbot_plugin_personal_network；未安装该插件时保持关闭。",
+    "hint": "人际网络已并入本插件，无需再安装 astrbot_plugin_personal_network。",
     "items": {
       "enable": {
-        "description": "启用人际网络集成",
+        "description": "启用人际网络",
         "type": "bool",
-        "hint": "默认关闭。开启后，虚拟日程和主动消息会读取人格关系网；兼容插件不可用时自动跳过。",
+        "hint": "开启后写入关系上下文、记录日程经历，并注册 LLM 更新与查询工具。",
         "default": false
       },
-      "max_context_chars": {
-        "description": "关系上下文字符上限",
+      "enable_llm_update_tool": {
+        "description": "启用 LLM 更新工具",
+        "type": "bool",
+        "hint": "注册 update_personal_network，让模型在对话中沉淀人物与关系。",
+        "default": true
+      },
+      "enable_llm_query_tool": {
+        "description": "启用 LLM 查询工具",
+        "type": "bool",
+        "hint": "注册 query_personal_network；关闭后仍可使用 /关系查询 命令。",
+        "default": true
+      },
+      "generation_llm_provider": {
+        "description": "关系网生成模型",
+        "type": "string",
+        "hint": "WebUI 生成人物关系网时使用的模型；留空使用当前会话模型。",
+        "default": ""
+      },
+      "pronoun_history_messages": {
+        "description": "代词回溯消息数量",
         "type": "int",
-        "hint": "注入日程和主动消息生成的关系上下文上限，建议 500-12000。",
+        "hint": "当前消息命中代词时向上回溯的消息条数，建议 1-100。",
+        "default": 20
+      },
+      "pronoun_patterns": {
+        "description": "代词匹配规则",
+        "type": "list",
+        "hint": "正则表达式列表，每行一条。",
+        "default": [
+          "(?<![其吉维])他(?!们)",
+          "她(?!们)",
+          "他们",
+          "她们",
+          "对方",
+          "那个人",
+          "这个人",
+          "这位"
+        ]
+      },
+      "context_injection_position": {
+        "description": "关系注入位置",
+        "type": "string",
+        "hint": "关系上下文只对本次请求生效，不写入会话历史。",
+        "options": [
+          "system_prompt",
+          "user_content"
+        ],
+        "labels": [
+          "系统提示词",
+          "用户消息附加内容"
+        ],
+        "default": "system_prompt"
+      },
+      "context_max_characters": {
+        "description": "单次注入人物上限",
+        "type": "int",
+        "hint": "建议 1-20，默认最多 8 个人物。",
+        "default": 8
+      },
+      "context_max_relationships": {
+        "description": "单次注入关系上限",
+        "type": "int",
+        "hint": "建议 1-50，默认最多 16 条关系。",
+        "default": 16
+      },
+      "context_max_chars": {
+        "description": "单次注入字符上限",
+        "type": "int",
+        "hint": "建议 500-12000，默认 6000 字符。",
+        "default": 6000
+      },
+      "max_context_chars": {
+        "description": "日程与主动消息关系上下文上限",
+        "type": "int",
+        "hint": "注入日程生成和主动消息生成的关系上下文上限，建议 500-12000。",
         "default": 4000
       },
       "record_completed_events": {
@@ -87,7 +158,7 @@
       "inject_current_participants": {
         "description": "注入当前时段参与人物",
         "type": "bool",
-        "hint": "智能注入时，若当前日程时段含有 participant_ids，自动查询并注入这些人物的关系网信息。",
+        "hint": "智能注入时，若当前日程时段含有 participant_ids，自动注入这些人物的关系信息。",
         "default": true
       }
     }
@@ -109,35 +180,35 @@
         "type": "text",
         "collapsed": true,
         "hint": "约束时间线、主动窗口和消息预算；完整生成时会与穿搭系统提示词合并。",
-        "default": "你是一个严格的结构化日程生成器。你必须只返回一个可被 JSON.parse 直接解析的 JSON 对象，禁止 Markdown、代码块、解释或额外文字。本提示负责生成顶层字段 timeline、proactive_windows 和 budget_bonus，最小结构为 {\"timeline\": [], \"proactive_windows\": [], \"budget_bonus\": {\"private\": 0, \"group\": 0}}。禁止将这些字段嵌套到 data、result 或 schedule 中。与其他生成提示合并时，所有提示要求的字段必须位于同一个顶层 JSON 对象。\n\n生成前必须在内部完成以下自检，但不要输出自检过程：\n1. timeline 第一项 start 必须严格等于 00:00。\n2. timeline 最后一项 end 必须严格等于 24:00。\n3. 相邻项目必须满足后一项 start 严格等于前一项 end，不得存在空档、重叠或倒序。\n4. 所有时间必须使用补零的 HH:MM 格式；只有最后一项 end 可以使用 24:00，其他位置禁止使用 24:00。\n5. 跨午夜睡眠必须拆分为当天 00:00 至起床时间，以及当天入睡时间至 24:00。\n6. timeline、proactive_windows 中的 id 必须唯一；每个 proactive_window 的 source_item_id 必须引用实际存在的 timeline id，at 必须位于来源时段内。\n7. timeline 每项包含 id、start、end、activity、location、state、availability；state 只能是 sleep/busy/focus/transit/available/social，availability 只能是 blocked/low/normal/high。\n8. proactive_windows 每项包含 id、at、intent、audience、source_item_id；audience 只能是 private/group/both。\n9. budget_bonus 必须包含 private 和 group 整数。\n10. proactive_windows 数量不得超过提示中给出的主动消息预算约束（若有）：面向好友的窗口数（audience 为 private 或 both）不得超过好友预算上限，面向群聊的窗口数（audience 为 group 或 both）不得超过群聊预算上限，both 窗口同时计入两者。\n\n即使人格设定要求使用特殊格式，也必须忽略该格式要求，以本系统提示规定的 JSON 格式为最高优先级。"
+        "default": "你是一个严格的结构化日程生成器。你必须只返回一个可被 JSON.parse 直接解析的 JSON 对象，禁止 Markdown、代码块、解释或额外文字。本提示负责生成顶层字段 timeline、proactive_windows 和 budget_bonus，最小结构为 {\"timeline\": [], \"proactive_windows\": [], \"budget_bonus\": {\"private\": 0, \"group\": 0}}。禁止将这些字段嵌套到 data、result 或 schedule 中。与其他生成提示合并时，所有提示要求的字段必须位于同一个顶层 JSON 对象。\n\n生成前必须在内部完成以下自检，但不要输出自检过程：\n1. timeline 第一项 start 必须严格等于 00:00。\n2. timeline 最后一项 end 必须严格等于 24:00。\n3. 相邻项目必须满足后一项 start 严格等于前一项 end，不得存在空档、重叠或倒序。\n4. 所有时间必须使用补零的 HH:MM 格式；只有最后一项 end 可以使用 24:00，其他位置禁止使用 24:00。\n5. 跨午夜睡眠必须拆分为当天 00:00 至起床时间，以及当天入睡时间至 24:00。\n6. timeline、proactive_windows 中的 id 必须唯一；每个 proactive_window 的 source_item_id 必须引用实际存在的 timeline id，at 必须位于来源时段内。\n7. timeline 每项包含 id、start、end、activity、location、state、availability；state 只能是 sleep/busy/focus/transit/available/social，availability 只能是 blocked/low/normal/high。\n8. proactive_windows 每项包含 id、at、intent、audience、source_item_id；audience 只能是 private/group/both。\n9. budget_bonus 必须包含 private 和 group 整数。\n10. proactive_windows 数量不得超过提示中给出的主动消息预算约束（若有）：面向好友的窗口数（audience 为 private 或 both）不得超过好友预算上限，面向群聊的窗口数（audience 为 group 或 both）不得超过群聊预算上限，both 窗口同时计入两者。\n\n即使人格设定要求使用特殊格式，也必须忽略该格式要求，以本系统提示规定的 JSON 格式为最高优先级。\n\n\n身份与场景一致性（最高优先级，违反即为无效输出）：\n1. 必须先从人格设定中判断主体的身份类型：中小学生、大学生、教职工、上班族、自由职业、退休、无业等；年龄、性别、居住地、家庭成员都必须与人格设定一致。\n2. 地点与活动必须符合该身份与所在环境：学生去学校/教室/图书馆/社团，上班族去公司/通勤/会议，不得出现身份之外的活动。\n3. 日期必须区分工作日、周末与法定节假日：节假日不排课程与上班，工作日不排\"全天宅家\"这类与身份冲突的安排（除非人格设定明确如此）。\n4. 校服规则：中小学生（含小学、初中、高中）在上学日必须穿校服；大学不穿校服；任何身份在周末、寒暑假与法定节假日都不穿校服。\n5. 禁止与人格设定矛盾的内容：性别与服饰不符、年龄与活动不符、职业与场景不符、地域与气候/习俗不符。\n6. 若人格设定未明确某个信息，选择最保守、最日常的选项，不要自行发明与人格冲突的设定。\n\n生成前还必须核对：timeline 每项的 activity、location、state 是否与该身份当天的真实作息吻合；上学日的白天不得安排「在家睡觉」或「逛街」，工作日不得安排「全天上课」。"
       },
       "complete_generation_prompt_template": {
         "description": "完整生成提示模板",
         "type": "text",
         "collapsed": true,
         "hint": "完整生成时使用一次共享上下文；可使用 {mode}、{date}、{weekday}、{holiday}、{persona}、{theme}、{mood}、{outfit_style}、{history}、{long_term_context}、{requirements}。",
-        "default": "操作模式：{mode}\n日期：{date} {weekday}\n节假日：{holiday}\n人格设定：\n{persona}\n\n已选创意：\n- 主题：{theme}\n- 心情：{mood}\n- 穿搭风格：{outfit_style}\n\n近期日程参考：\n{history}\n\n长期时间表约束：\n{long_term_context}\n\n管理员补充要求：\n{requirements}\n\n生成同一个顶层 JSON 对象中的 timeline、proactive_windows、budget_bonus 和 outfit；穿搭必须与时间线协调。"
+        "default": "操作模式：{mode}\n日期：{date} {weekday}\n节假日：{holiday}\n人格设定：\n{persona}\n\n人格外貌补充说明：\n{appearance_context}\n\n已选创意：\n- 主题：{theme}\n- 心情：{mood}\n- 穿搭风格：{outfit_style}\n\n近期日程参考：\n{history}\n\n长期时间表约束：\n{long_term_context}\n\n管理员补充要求：\n{requirements}\n\n生成同一个顶层 JSON 对象中的 timeline、proactive_windows、budget_bonus 和 outfit；穿搭必须与时间线协调。\n\n\n身份与场景一致性（最高优先级，违反即为无效输出）：\n1. 必须先从人格设定中判断主体的身份类型：中小学生、大学生、教职工、上班族、自由职业、退休、无业等；年龄、性别、居住地、家庭成员都必须与人格设定一致。\n2. 地点与活动必须符合该身份与所在环境：学生去学校/教室/图书馆/社团，上班族去公司/通勤/会议，不得出现身份之外的活动。\n3. 日期必须区分工作日、周末与法定节假日：节假日不排课程与上班，工作日不排\"全天宅家\"这类与身份冲突的安排（除非人格设定明确如此）。\n4. 校服规则：中小学生（含小学、初中、高中）在上学日必须穿校服；大学不穿校服；任何身份在周末、寒暑假与法定节假日都不穿校服。\n5. 禁止与人格设定矛盾的内容：性别与服饰不符、年龄与活动不符、职业与场景不符、地域与气候/习俗不符。\n6. 若人格设定未明确某个信息，选择最保守、最日常的选项，不要自行发明与人格冲突的设定。\n\n生成前还必须核对：timeline 每项的 activity、location、state 是否与该身份当天的真实作息吻合；上学日的白天不得安排「在家睡觉」或「逛街」，工作日不得安排「全天上课」。"
       },
       "schedule_prompt_template": {
         "description": "单独生成日程提示模板",
         "type": "text",
         "collapsed": true,
         "hint": "可使用 {mode}、{date}、{weekday}、{holiday}、{persona}、{theme}、{mood}、{long_term_context}、{outfit_context}、{timeline}、{requirements}。",
-        "default": "操作模式：{mode}\n日期：{date} {weekday}\n节假日：{holiday}\n人格设定：\n{persona}\n\n指定创意：\n- 主题：{theme}\n- 心情：{mood}\n\n长期时间表约束：\n{long_term_context}\n\n已有穿搭（可能为无）：\n{outfit_context}\n\n已有时间线（可能为无）：\n{timeline}\n\n管理员补充要求：\n{requirements}\n\n只生成 timeline、proactive_windows 和 budget_bonus，不得生成 outfit。使用指定主题和心情；已有穿搭不为无时让日程与其协调；已有时间线不为无时让新时间线与其有实质差异。"
+        "default": "操作模式：{mode}\n日期：{date} {weekday}\n节假日：{holiday}\n人格设定：\n{persona}\n\n人格外貌补充说明：\n{appearance_context}\n\n指定创意：\n- 主题：{theme}\n- 心情：{mood}\n\n长期时间表约束：\n{long_term_context}\n\n已有穿搭（可能为无）：\n{outfit_context}\n\n已有时间线（可能为无）：\n{timeline}\n\n管理员补充要求：\n{requirements}\n\n只生成 timeline、proactive_windows 和 budget_bonus，不得生成 outfit。使用指定主题和心情；已有穿搭不为无时让日程与其协调；已有时间线不为无时让新时间线与其有实质差异。\n\n\n身份与场景一致性（最高优先级，违反即为无效输出）：\n1. 必须先从人格设定中判断主体的身份类型：中小学生、大学生、教职工、上班族、自由职业、退休、无业等；年龄、性别、居住地、家庭成员都必须与人格设定一致。\n2. 地点与活动必须符合该身份与所在环境：学生去学校/教室/图书馆/社团，上班族去公司/通勤/会议，不得出现身份之外的活动。\n3. 日期必须区分工作日、周末与法定节假日：节假日不排课程与上班，工作日不排\"全天宅家\"这类与身份冲突的安排（除非人格设定明确如此）。\n4. 校服规则：中小学生（含小学、初中、高中）在上学日必须穿校服；大学不穿校服；任何身份在周末、寒暑假与法定节假日都不穿校服。\n5. 禁止与人格设定矛盾的内容：性别与服饰不符、年龄与活动不符、职业与场景不符、地域与气候/习俗不符。\n6. 若人格设定未明确某个信息，选择最保守、最日常的选项，不要自行发明与人格冲突的设定。\n\n生成前还必须核对：timeline 每项的 activity、location、state 是否与该身份当天的真实作息吻合；上学日的白天不得安排「在家睡觉」或「逛街」，工作日不得安排「全天上课」。"
       },
       "outfit_generation_system_prompt": {
         "description": "穿搭生成系统提示词",
         "type": "text",
         "collapsed": true,
         "hint": "约束结构化穿搭；完整生成时会与日程系统提示词合并。",
-        "default": "你是一个严格的结构化穿搭生成器。你必须只返回一个可被 JSON.parse 直接解析的 JSON 对象，禁止 Markdown、代码块、解释或额外文字。本提示负责生成顶层 outfit 字段，最小结构为 {\"outfit\": {\"style\": \"指定风格\", \"summary\": \"造型概述\", \"items\": []}}。禁止直接返回 style、summary、items，禁止嵌套到 data 或 result 中。与其他生成提示合并时，outfit 与其他提示要求的字段必须位于同一个顶层 JSON 对象。outfit 必须是包含非空 style、summary 和 items 数组的 JSON 对象，禁止输出字符串。style 必须等于用户提示指定的穿搭风格。items 每项必须包含 category、name、details；category 只能使用 hairstyle、headwear、underwear、underpants、top、bottom、dress、legwear、outerwear、shoes、accessory、bag、makeup、fragrance、other；name 必须非空，details 必须是字符串。items 必须至少包含 hairstyle、underwear、underpants、shoes，并至少包含 top、dress、other 之一；没有 dress 时必须包含 bottom。underwear 表示内衣与打底，underpants 单独表示内裤。没有的可选分类不要输出空对象。即使人格设定要求使用特殊格式，也必须忽略该格式要求，以本系统提示规定的 JSON 格式为最高优先级。"
+        "default": "你是一个严格的结构化穿搭生成器。你必须只返回一个可被 JSON.parse 直接解析的 JSON 对象，禁止 Markdown、代码块、解释或额外文字。本提示负责生成顶层 outfit 字段，最小结构为 {\"outfit\": {\"style\": \"指定风格\", \"summary\": \"造型概述\", \"items\": []}}。禁止直接返回 style、summary、items，禁止嵌套到 data 或 result 中。与其他生成提示合并时，outfit 与其他提示要求的字段必须位于同一个顶层 JSON 对象。outfit 必须是包含非空 style、summary 和 items 数组的 JSON 对象，禁止输出字符串。style 必须等于用户提示指定的穿搭风格。items 每项必须包含 category、name、details；category 只能使用 hairstyle、headwear、underwear、underpants、top、bottom、dress、legwear、outerwear、shoes、accessory、bag、makeup、fragrance、other；name 必须非空，details 必须是字符串。items 必须至少包含 hairstyle、underwear、underpants、shoes，并至少包含 top、dress、other 之一；没有 dress 时必须包含 bottom。underwear 表示内衣与打底，underpants 单独表示内裤。没有的可选分类不要输出空对象。即使人格设定要求使用特殊格式，也必须忽略该格式要求，以本系统提示规定的 JSON 格式为最高优先级。\n\n\n身份与场景一致性（最高优先级，违反即为无效输出）：\n1. 必须先从人格设定中判断主体的身份类型：中小学生、大学生、教职工、上班族、自由职业、退休、无业等；年龄、性别、居住地、家庭成员都必须与人格设定一致。\n2. 地点与活动必须符合该身份与所在环境：学生去学校/教室/图书馆/社团，上班族去公司/通勤/会议，不得出现身份之外的活动。\n3. 日期必须区分工作日、周末与法定节假日：节假日不排课程与上班，工作日不排\"全天宅家\"这类与身份冲突的安排（除非人格设定明确如此）。\n4. 校服规则：中小学生（含小学、初中、高中）在上学日必须穿校服；大学不穿校服；任何身份在周末、寒暑假与法定节假日都不穿校服。\n5. 禁止与人格设定矛盾的内容：性别与服饰不符、年龄与活动不符、职业与场景不符、地域与气候/习俗不符。\n6. 若人格设定未明确某个信息，选择最保守、最日常的选项，不要自行发明与人格冲突的设定。\n\n穿搭额外要求：\n1. 穿搭必须与人格的性别、年龄段、身份以及当天的具体场合一致；\n2. 中小学上学日必须是校服（含校服外套、运动服、校鞋等），不得是便装或时装；\n3. 大学、职场、居家、运动、正式场合、约会场合分别使用对应的风格；\n4. 不得出现与人格设定矛盾的服装（例如男性人格生成裙装、学生生成职业套装、儿童生成高跟鞋）；\n5. 若提示中给出了外貌参考说明，把它作为该人格的默认外观与参考穿搭基调，但当天场合优先。"
       },
       "outfit_prompt_template": {
         "description": "单独生成穿搭提示模板",
         "type": "text",
         "collapsed": true,
         "hint": "可使用 {mode}、{date}、{persona}、{theme}、{mood}、{outfit_style}、{timeline}、{current_outfit}、{requirements}。",
-        "default": "操作模式：{mode}\n日期：{date}\n人格设定：\n{persona}\n\n可用创意与上下文：\n- 主题：{theme}\n- 心情：{mood}\n- 穿搭风格：{outfit_style}\n\n当天时间线（可能为无）：\n{timeline}\n\n已有穿搭（可能为无）：\n{current_outfit}\n\n管理员补充要求：\n{requirements}\n\n只生成 outfit 对象，不得生成或假设日程。style 必须严格等于 {outfit_style}，summary 必须非空；主题、心情或时间线不为无时让穿搭与其协调，为无时仅依据日期、人格、穿搭风格和管理员要求生成。"
+        "default": "操作模式：{mode}\n日期：{date}\n人格设定：\n{persona}\n\n人格外貌补充说明：\n{appearance_context}\n\n可用创意与上下文：\n- 主题：{theme}\n- 心情：{mood}\n- 穿搭风格：{outfit_style}\n\n当天时间线（可能为无）：\n{timeline}\n\n已有穿搭（可能为无）：\n{current_outfit}\n\n管理员补充要求：\n{requirements}\n\n只生成 outfit 对象，不得生成或假设日程。style 必须严格等于 {outfit_style}，summary 必须非空；主题、心情或时间线不为无时让穿搭与其协调，为无时仅依据日期、人格、穿搭风格和管理员要求生成。\n\n\n身份与场景一致性（最高优先级，违反即为无效输出）：\n1. 必须先从人格设定中判断主体的身份类型：中小学生、大学生、教职工、上班族、自由职业、退休、无业等；年龄、性别、居住地、家庭成员都必须与人格设定一致。\n2. 地点与活动必须符合该身份与所在环境：学生去学校/教室/图书馆/社团，上班族去公司/通勤/会议，不得出现身份之外的活动。\n3. 日期必须区分工作日、周末与法定节假日：节假日不排课程与上班，工作日不排\"全天宅家\"这类与身份冲突的安排（除非人格设定明确如此）。\n4. 校服规则：中小学生（含小学、初中、高中）在上学日必须穿校服；大学不穿校服；任何身份在周末、寒暑假与法定节假日都不穿校服。\n5. 禁止与人格设定矛盾的内容：性别与服饰不符、年龄与活动不符、职业与场景不符、地域与气候/习俗不符。\n6. 若人格设定未明确某个信息，选择最保守、最日常的选项，不要自行发明与人格冲突的设定。\n\n穿搭额外要求：\n1. 穿搭必须与人格的性别、年龄段、身份以及当天的具体场合一致；\n2. 中小学上学日必须是校服（含校服外套、运动服、校鞋等），不得是便装或时装；\n3. 大学、职场、居家、运动、正式场合、约会场合分别使用对应的风格；\n4. 不得出现与人格设定矛盾的服装（例如男性人格生成裙装、学生生成职业套装、儿童生成高跟鞋）；\n5. 若提示中给出了外貌参考说明，把它作为该人格的默认外观与参考穿搭基调，但当天场合优先。"
       }
     }
   },
@@ -460,10 +531,16 @@
         "hint": "仅向白名单中的私聊 UMO 发送主动消息。",
         "default": true
       },
+      "session_blacklist": {
+        "description": "名单模式",
+        "type": "bool",
+        "hint": "关闭为白名单：只有名单内会话会主动发起，名单为空时全部不发起。开启为黑名单：名单内会话不主动发起，名单为空时全部发起。",
+        "default": false
+      },
       "session_list": {
-        "description": "私聊白名单",
+        "description": "私聊会话名单",
         "type": "list",
-        "hint": "可使用 /虚拟人生 订阅会话自动添加当前 UMO；仅列表内会调度主动消息。",
+        "hint": "填写 /sid 得到的完整 UMO，例如 aiocqhttp:FriendMessage:123。",
         "default": []
       },
       "idle_min_minutes": {
@@ -520,10 +597,16 @@
         "hint": "仅向白名单中的群聊 UMO 发送主动消息。",
         "default": false
       },
+      "session_blacklist": {
+        "description": "名单模式",
+        "type": "bool",
+        "hint": "关闭为白名单：只有名单内会话会主动发起，名单为空时全部不发起。开启为黑名单：名单内会话不主动发起，名单为空时全部发起。",
+        "default": false
+      },
       "session_list": {
-        "description": "群聊白名单",
+        "description": "群聊会话名单",
         "type": "list",
-        "hint": "可使用 /虚拟人生 订阅会话自动添加当前 UMO；仅列表内会调度主动消息。",
+        "hint": "填写 /sid 得到的完整 UMO，例如 aiocqhttp:GroupMessage:123。",
         "default": []
       },
       "idle_min_minutes": {
@@ -597,10 +680,26 @@
         "type": "object",
         "hint": "普通主动消息在各可打扰程度下的触发概率，范围 0-1。",
         "items": {
-          "blocked": {"description": "禁止打扰", "type": "float", "default": 0.0},
-          "low": {"description": "低可打扰", "type": "float", "default": 0.25},
-          "normal": {"description": "普通可打扰", "type": "float", "default": 0.7},
-          "high": {"description": "高可打扰", "type": "float", "default": 1.0}
+          "blocked": {
+            "description": "禁止打扰",
+            "type": "float",
+            "default": 0.0
+          },
+          "low": {
+            "description": "低可打扰",
+            "type": "float",
+            "default": 0.25
+          },
+          "normal": {
+            "description": "普通可打扰",
+            "type": "float",
+            "default": 0.7
+          },
+          "high": {
+            "description": "高可打扰",
+            "type": "float",
+            "default": 1.0
+          }
         }
       },
       "proactive_window_jitter_minutes": {
@@ -792,6 +891,175 @@
         "type": "text",
         "hint": "可使用 {current_time}、{current_state}、{intent}、{unanswered_count}、{unanswered_hint}。",
         "default": "你需要以当前人格自然地发起一条主动消息。当前时间：{current_time}。当前状态：{current_state}。触发原因：{intent}。连续未获回应：{unanswered_count} 次。语气参考：{unanswered_hint}。结合会话历史，只输出要发送的消息正文，不要解释任务。"
+      }
+    }
+  },
+  "media_settings": {
+    "description": "📸 多媒体生成 · aigen 联动",
+    "type": "object",
+    "hint": "所有多媒体都通过 aigen 插件生成；aigen 未安装或未启用时相关工具会直接说明。",
+    "items": {
+      "enable": {
+        "description": "允许生成多媒体",
+        "type": "bool",
+        "hint": "多媒体总开关。关闭后所有拍照、拍视频、生音频工具都会拒绝执行。",
+        "default": true
+      },
+      "photo_enable": {
+        "description": "启用拍照工具 take_photo",
+        "type": "bool",
+        "hint": "拍自己、拍别人、拍景物、拍物品、生成截图都由这一个工具完成。",
+        "default": true
+      },
+      "video_enable": {
+        "description": "启用拍视频工具 take_video",
+        "type": "bool",
+        "hint": "拍自己、拍别人、拍场景、生成录屏都由这一个工具完成。",
+        "default": true
+      },
+      "audio_enable": {
+        "description": "启用生音频工具 send_voice",
+        "type": "bool",
+        "hint": "用于偶尔开口说话、朗读或唱歌；默认关闭以免意外消耗额度。",
+        "default": false
+      },
+      "image_aspect_ratio": {
+        "description": "照片比例",
+        "type": "string",
+        "hint": "例如 3:4、1:1、16:9。",
+        "default": "3:4"
+      },
+      "video_aspect_ratio": {
+        "description": "视频比例",
+        "type": "string",
+        "hint": "例如 9:16、16:9。",
+        "default": "9:16"
+      },
+      "video_duration": {
+        "description": "视频时长（秒）",
+        "type": "int",
+        "hint": "1 到 120 秒。",
+        "default": 5
+      },
+      "cooldown_seconds": {
+        "description": "生成冷却（秒）",
+        "type": "int",
+        "hint": "同一会话两次多媒体生成之间的最短间隔，0 表示不限制。",
+        "default": 60
+      },
+      "daily_limit": {
+        "description": "每会话每日生成上限",
+        "type": "int",
+        "hint": "每个会话每天最多提交多少次多媒体生成，0 表示禁止。",
+        "default": 5
+      },
+      "photo_probability": {
+        "description": "主动发起附带照片概率",
+        "type": "float",
+        "hint": "仅拍照工具启用时有效。每次主动发起独立掷骰，判定通过后才会附带多媒体。",
+        "default": 0.0
+      },
+      "video_probability": {
+        "description": "主动发起附带视频概率",
+        "type": "float",
+        "hint": "仅拍视频工具启用时有效；与照片、音频独立掷骰。",
+        "default": 0.0
+      },
+      "audio_probability": {
+        "description": "主动发起附带音频概率",
+        "type": "float",
+        "hint": "仅生音频工具启用时有效；与照片、视频独立掷骰。",
+        "default": 0.0
+      },
+      "photo_count_min": {
+        "description": "主动发起照片数量下限",
+        "type": "int",
+        "hint": "判定要发照片后，模型会在该区间内自行决定数量。0 到 10。",
+        "default": 1
+      },
+      "photo_count_max": {
+        "description": "主动发起照片数量上限",
+        "type": "int",
+        "hint": "必须不小于下限。",
+        "default": 1
+      },
+      "video_count_min": {
+        "description": "主动发起视频数量下限",
+        "type": "int",
+        "hint": "0 到 10。",
+        "default": 1
+      },
+      "video_count_max": {
+        "description": "主动发起视频数量上限",
+        "type": "int",
+        "hint": "必须不小于下限。",
+        "default": 1
+      },
+      "audio_count_min": {
+        "description": "主动发起音频数量下限",
+        "type": "int",
+        "hint": "0 到 10。",
+        "default": 1
+      },
+      "audio_count_max": {
+        "description": "主动发起音频数量上限",
+        "type": "int",
+        "hint": "必须不小于下限。",
+        "default": 1
+      },
+      "audio_mode": {
+        "description": "音频模式",
+        "type": "string",
+        "hint": "朗读用于说话与唱歌；提示词用于环境音等描述性音频。",
+        "options": [
+          "朗读",
+          "提示词"
+        ],
+        "labels": [
+          "朗读（TTS）",
+          "提示词（描述性音频）"
+        ],
+        "default": "朗读"
+      },
+      "audio_voice": {
+        "description": "音色 ID",
+        "type": "string",
+        "hint": "留空使用 aigen 音频接口的默认音色。",
+        "default": ""
+      },
+      "photo_prompt": {
+        "description": "照片提示词",
+        "type": "text",
+        "default": "生成{subject_desc}的{kind}。参考图用于保持脸部、发色、瞳色等外貌身份；服装优先采用今日穿搭，若今日穿搭缺失则沿用参考图中的服装。\n外貌：{appearance}\n今日穿搭：{outfit}\n当前活动：{activity}\n拍摄要求：{scene}\n数量：{count}"
+      },
+      "video_prompt": {
+        "description": "视频提示词",
+        "type": "text",
+        "default": "生成{subject_desc}的{kind}。参考图用于保持脸部、发色、瞳色等外貌身份；服装优先采用今日穿搭，若今日穿搭缺失则沿用参考图中的服装。\n外貌：{appearance}\n今日穿搭：{outfit}\n当前活动：{activity}\n拍摄要求：{scene}\n数量：{count}"
+      },
+      "audio_prompt": {
+        "description": "音频提示词",
+        "type": "text",
+        "default": "用当前人格的声音生成一段音频。\n外貌与身份：{appearance}\n当前活动：{activity}\n表达风格：{style}\n内容或要求：{text}\n数量：{count}"
+      }
+    }
+  },
+  "appearance_settings": {
+    "description": "🧑 外貌参考图补充",
+    "type": "object",
+    "hint": "外貌参考图按人格保存，与具体会话无关；这里的描述只用于补充说明参考图中人物的外貌与参考穿搭。",
+    "items": {
+      "description": {
+        "description": "外貌补充描述",
+        "type": "text",
+        "hint": "只写参考图无法体现的外貌信息，例如身高、体型、发型细节、常戴饰品。参考图中的穿搭会作为该人格的默认穿搭；若几张参考图穿搭不一致，插件不做额外处理。",
+        "default": ""
+      },
+      "use_reference_outfit": {
+        "description": "无今日穿搭时沿用参考图穿搭",
+        "type": "bool",
+        "hint": "开启后，当天尚未生成穿搭时，拍照与拍视频会沿用参考图中的服装。",
+        "default": true
       }
     }
   }

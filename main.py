@@ -185,6 +185,7 @@ class DecisionPlugin(Star):
         self._output_runtime: Any | None = None
         self._life_runtime: Any | None = None
         self._life_media: Any | None = None
+        self._personal_network: Any | None = None
         self._life_lock = asyncio.Lock()
         self._life_asset_lock = asyncio.Lock()
         self._life_jobs: dict[str, dict[str, Any]] = {}
@@ -209,35 +210,89 @@ class DecisionPlugin(Star):
         # explicitly re-added to a request after filtering so it stays available.
         self.context.add_llm_tools(self._decision_tool)
         self._life_tools = []
-        for name, description, handler, properties in (
+        for name, description, handler, properties, required in (
             (
-                "take_self_photo",
-                "拍摄并发送机器人自己的照片。通过 aigen 使用当前 AstrBot 人格的外貌参考图与今日穿搭；不是真实摄像头。",
-                self._take_self_photo,
+                "take_photo",
+                "生成并发送一张照片：可以拍自己、拍别人、拍周围的景物或物品，"
+                "也可以生成手机截图、聊天截图等屏幕内容。通过 aigen 使用当前 AstrBot 人格的"
+                "外貌参考图与今日穿搭；不是真实摄像头。",
+                self._take_photo,
                 {
                     "scene": {
                         "type": "string",
-                        "description": "拍摄场景、动作与构图，可留空使用当前活动。",
-                    }
+                        "description": "画面内容、动作、构图与氛围要求，可留空使用当前活动。",
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": (
+                            "拍摄对象：self=自己，other=别人，scene=景色/环境，"
+                            "object=物品，screenshot=手机截图或录屏画面。"
+                        ),
+                        "enum": ["self", "other", "scene", "object", "screenshot"],
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "生成张数；必须在管理员配置的数量区间内，越界会被自动收敛。",
+                    },
                 },
+                [],
             ),
             (
-                "take_self_video",
-                "拍摄并发送机器人自己的短视频。通过 aigen 保持外貌与今日穿搭；不访问真实摄像头。",
-                self._take_self_video,
-                {"scene": {"type": "string", "description": "视频场景、动作和镜头要求，可留空。"}},
+                "take_video",
+                "生成并发送一段短视频：可以拍自己、拍别人、拍场景，也可以生成手机录屏。"
+                "通过 aigen 保持外貌与今日穿搭；不访问真实摄像头。",
+                self._take_video,
+                {
+                    "scene": {"type": "string", "description": "视频内容、动作和镜头要求，可留空。"},
+                    "subject": {
+                        "type": "string",
+                        "description": (
+                            "拍摄对象：self=自己，other=别人，scene=景色/环境，"
+                            "object=物品，screenshot=手机录屏画面。"
+                        ),
+                        "enum": ["self", "other", "scene", "object", "screenshot"],
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "生成段数；必须在管理员配置的数量区间内，越界会被自动收敛。",
+                    },
+                },
+                [],
+            ),
+            (
+                "send_voice",
+                "生成并发送一段音频，用于偶尔开口说话、朗读或唱歌；也可以生成环境音等描述性音频。"
+                "通过 aigen 的音频接口实现，可指定音色。",
+                self._send_voice,
+                {
+                    "text": {
+                        "type": "string",
+                        "description": "要说出、朗读或唱出的内容；提示词模式下则是音频的描述。",
+                    },
+                    "style": {
+                        "type": "string",
+                        "description": "语气、情绪与表达风格，例如温柔、兴奋、轻声哼唱，可留空。",
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "生成段数；必须在管理员配置的数量区间内，越界会被自动收敛。",
+                    },
+                },
+                ["text"],
             ),
             (
                 "get_virtual_daily_schedule",
                 "查询当前 AstrBot 人格的今日日程、穿搭和当前活动。",
                 self._get_virtual_daily_schedule,
                 {},
+                [],
             ),
             (
                 "get_long_term_timeline",
                 "查询当前 AstrBot 人格已批准的长期生活阶段。",
                 self._get_long_term_timeline,
                 {},
+                [],
             ),
             (
                 "add_schedule_requirement",
@@ -250,20 +305,130 @@ class DecisionPlugin(Star):
                     },
                     "requirement": {"type": "string", "description": "管理员要求，最多500字"},
                 },
+                ["date_range", "requirement"],
             ),
         ):
             parameters = {"type": "object", "properties": properties}
-            if name == "add_schedule_requirement":
-                parameters["required"] = ["date_range", "requirement"]
+            if required:
+                parameters["required"] = required
             tool = DecisionFunctionTool(
                 name=name, description=description, parameters=parameters, handler=handler
             )
+            self._life_tools.append(tool)
+            self.context.add_llm_tools(tool)
+        # The merged Personal Network tools keep their upstream names so stored
+        # prompts and habits keep working. They are registered unconditionally
+        # and removed per request when the feature or a sub-switch is off.
+        for tool in (
+            DecisionFunctionTool(
+                name="update_personal_network",
+                description=(
+                    "更新当前 AstrBot 人格的人际网络：新增或修正人物、人物之间的关系，"
+                    "以及已经发生的共同经历。只写入对话中明确、持久的人物与关系事实。"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "characters": {
+                            "type": "array",
+                            "description": "要新增或更新的人物列表，最多 20 个。",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "ref": {"type": "string", "description": "本次调用内的临时引用名"},
+                                    "id": {"type": "string", "description": "已存在人物的 UUID"},
+                                    "name": {"type": "string", "description": "人物姓名"},
+                                    "aliases": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "别名或昵称",
+                                    },
+                                    "bio": {"type": "string", "description": "人物简介"},
+                                    "personality": {"type": "string", "description": "性格"},
+                                    "preferences": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "偏好",
+                                    },
+                                    "facts": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "确定的事实",
+                                    },
+                                    "current_sender": {
+                                        "type": "boolean",
+                                        "description": "该人物是否为当前消息发送者",
+                                    },
+                                },
+                                "required": ["name"],
+                            },
+                        },
+                        "relationships": {
+                            "type": "array",
+                            "description": "要新增或更新的人物关系列表，最多 30 条。",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "source": {"type": "string", "description": "主体，可用 persona 表示当前人格"},
+                                    "target": {"type": "string", "description": "关系目标"},
+                                    "type": {"type": "string", "description": "关系类型"},
+                                    "strength": {"type": "integer", "description": "亲密度 0-100"},
+                                    "status": {
+                                        "type": "string",
+                                        "enum": ["active", "ended", "uncertain"],
+                                    },
+                                    "description": {"type": "string", "description": "关系说明"},
+                                },
+                                "required": ["source", "target", "type"],
+                            },
+                        },
+                        "interactions": {
+                            "type": "array",
+                            "description": "要记录的共同经历，最多 30 条。",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "participants": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "参与者，至少两位",
+                                    },
+                                    "type": {"type": "string", "description": "经历类型"},
+                                    "summary": {"type": "string", "description": "经历摘要"},
+                                    "occurred_at": {"type": "string", "description": "ISO 8601 时间"},
+                                    "importance": {"type": "integer", "description": "重要度 0-100"},
+                                    "emotional_tone": {"type": "string", "description": "情绪基调"},
+                                },
+                                "required": ["participants", "type", "summary"],
+                            },
+                        },
+                    },
+                },
+                handler=self.network_update_tool,
+            ),
+            DecisionFunctionTool(
+                name="query_personal_network",
+                description="查询当前 AstrBot 人格的人际网络：人物、关系与共同经历。",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "要查询的人物姓名、别名或关键词，留空返回总览。",
+                        }
+                    },
+                },
+                handler=self.network_query_tool,
+            ),
+        ):
             self._life_tools.append(tool)
             self.context.add_llm_tools(tool)
         for endpoint, handler, methods in (
             ("life", self.page_life, ["GET"]),
             ("life/action", self.page_life_action, ["POST"]),
             ("life/appearance", self.page_life_appearance, ["POST"]),
+            ("life/personas", self.page_life_personas, ["GET"]),
+            ("life/sessions", self.page_life_sessions, ["GET"]),
         ):
             self.context.register_web_api(
                 f"/{PLUGIN_NAME}/{endpoint}", handler, methods, "Virtual Life WebUI"
@@ -287,6 +452,29 @@ class DecisionPlugin(Star):
             ["POST"],
             "Save Decision Engine page settings",
         )
+        for route, handler, methods in (
+            ("network/personas", self.network_personas, ["GET"]),
+            ("network/network", self.network_network, ["GET"]),
+            ("network/network/enabled", self.network_set_enabled, ["POST"]),
+            ("network/character/save", self.network_save_character, ["POST"]),
+            ("network/character/delete", self.network_delete_character, ["POST"]),
+            ("network/character/merge", self.network_merge_characters, ["POST"]),
+            ("network/relationship/save", self.network_save_relationship, ["POST"]),
+            ("network/relationship/delete", self.network_delete_relationship, ["POST"]),
+            ("network/life-event/save", self.network_save_life_event, ["POST"]),
+            ("network/life-event/delete", self.network_delete_life_event, ["POST"]),
+            ("network/generation/generate", self.network_generate, ["POST"]),
+            ("network/generation/status", self.network_generation_status, ["POST"]),
+            ("network/generation/validate", self.network_generation_validate, ["POST"]),
+            ("network/generation/apply", self.network_generation_apply, ["POST"]),
+            ("network/avatar/<character_id>", self.network_avatar, ["GET", "POST"]),
+            ("network/export", self.network_export, ["GET"]),
+            ("network/import/<persona_key>/preview", self.network_import_preview, ["POST"]),
+            ("network/import/apply", self.network_import_apply, ["POST"]),
+        ):
+            self.context.register_web_api(
+                f"/{PLUGIN_NAME}/{route}", handler, methods, f"Personal network {route}"
+            )
 
     @staticmethod
     def _get_settings_path(config: AstrBotConfig) -> Path:
@@ -414,6 +602,14 @@ class DecisionPlugin(Star):
         if self._life_runtime is not None:
             await self._life_runtime.terminate()
             self._life_runtime = None
+        if self._personal_network is not None:
+            try:
+                await self._personal_network.terminate()
+            except Exception as exc:
+                logger.warning(
+                    "Decision Engine 人际网络关闭失败：%s", _safe_error(exc)
+                )
+            self._personal_network = None
         if self.provider is not None:
             await self.provider.close()
         self.provider = None
@@ -629,11 +825,14 @@ class DecisionPlugin(Star):
 
         if getattr(tool, "name", None) in {
             DECISION_TOOL_NAME,
-            "take_self_photo",
-            "take_self_video",
+            "take_photo",
+            "take_video",
+            "send_voice",
             "get_virtual_daily_schedule",
             "get_long_term_timeline",
             "add_schedule_requirement",
+            "update_personal_network",
+            "query_personal_network",
         }:
             return PLUGIN_DISPLAY_NAME
         if builtin or self._is_builtin_tool(tool):
@@ -2101,15 +2300,13 @@ class DecisionPlugin(Star):
             return self._life_runtime
 
     async def _configure_life_runtime(self):
-        settings = normalize_life(dict(self._setting("life", {}) or {}))
         if self._life_runtime:
             async with self._life_lock:
                 await self._life_runtime.terminate()
                 self._life_runtime = None
-        if (
-            self._bool("proactive_reply_enabled", False)
-            and settings["integration_settings"]["enable"]
-        ):
+        # 主动发起 is enabled by its own per-kind switches (私聊主动 / 群聊主动),
+        # so there is no separate master switch to consult here.
+        if self._bool("proactive_reply_enabled", False):
             await self._get_life_runtime()
 
     def _get_life_media(self):
@@ -2122,11 +2319,41 @@ class DecisionPlugin(Star):
             )
         return self._life_media
 
-    async def _take_self_photo(self, event: AstrMessageEvent, scene: str = "") -> str:
-        return await self._get_life_media().capture(event, scene=scene)
+    def _get_personal_network(self):
+        """Return the merged Personal Network service (created lazily)."""
 
-    async def _take_self_video(self, event: AstrMessageEvent, scene: str = "") -> str:
-        return await self._get_life_media().capture(event, scene=scene, video=True)
+        if self._personal_network is None:
+            from .decision.personal_network import PersonalNetworkService
+
+            self._personal_network = PersonalNetworkService(
+                self,
+                self._settings_path.parent.parent
+                / "plugin_data"
+                / PLUGIN_NAME
+                / "personal_network",
+            )
+        return self._personal_network
+
+    async def _take_photo(
+        self, event: AstrMessageEvent, scene: str = "", subject: str = "self", count: int = 1
+    ) -> str:
+        return await self._get_life_media().capture(
+            event, kind="photo", scene=scene, subject=subject, count=count
+        )
+
+    async def _take_video(
+        self, event: AstrMessageEvent, scene: str = "", subject: str = "self", count: int = 1
+    ) -> str:
+        return await self._get_life_media().capture(
+            event, kind="video", scene=scene, subject=subject, count=count
+        )
+
+    async def _send_voice(
+        self, event: AstrMessageEvent, text: str, style: str = "", count: int = 1
+    ) -> str:
+        return await self._get_life_media().capture(
+            event, kind="audio", scene=style, audio_text=text, count=count
+        )
 
     async def _get_virtual_daily_schedule(self, event: AstrMessageEvent) -> str:
         runtime = await self._get_life_runtime()
@@ -2214,6 +2441,71 @@ class DecisionPlugin(Star):
             if not hasattr(filter, "on_agent_done"):
                 await self.life_agent_done(event, None, response)
 
+    @getattr(filter, "on_astrbot_loaded", lambda **kw: lambda fn: fn)()
+    async def network_loaded(self) -> None:
+        if self._network_enabled():
+            await self._network().on_astrbot_loaded()
+
+    def _network_enabled(self) -> bool:
+        settings = (self._setting("life", {}) or {}).get("personal_network_integration", {})
+        return bool(isinstance(settings, Mapping) and settings.get("enable", False))
+
+    def _network_settings(self) -> Mapping:
+        settings = (self._setting("life", {}) or {}).get("personal_network_integration", {})
+        return settings if isinstance(settings, Mapping) else {}
+
+    @filter.on_llm_request(priority=1200)
+    async def network_inject_context(self, event: AstrMessageEvent, req: ProviderRequest):
+        """Gate the network tools and inject relationship context.
+
+        This runs *before* the Tool decision hook (priority 1000) so a disabled
+        network tool is removed from the candidate set instead of being judged
+        and possibly re-added. When enabled, the tools stay in the request and
+        are judged like any other plugin tool.
+        """
+
+        settings = self._network_settings()
+        enabled = bool(settings.get("enable", False)) and not self._command_handler_matched(event)
+        self._hide_network_tools(
+            req,
+            update=not (enabled and settings.get("enable_llm_update_tool", True)),
+            query=not (enabled and settings.get("enable_llm_query_tool", True)),
+        )
+        if enabled:
+            await self._network().inject_context(event, req)
+
+    @staticmethod
+    def _hide_network_tools(req: ProviderRequest, *, update: bool, query: bool) -> None:
+        tool_set = getattr(req, "func_tool", None)
+        if tool_set is None or not callable(getattr(tool_set, "remove_tool", None)):
+            return
+        if update:
+            tool_set.remove_tool("update_personal_network")
+        if query:
+            tool_set.remove_tool("query_personal_network")
+
+    async def network_update_tool(
+        self,
+        event: AstrMessageEvent,
+        characters: list[dict[str, Any]] | None = None,
+        relationships: list[dict[str, Any]] | None = None,
+        interactions: list[dict[str, Any]] | None = None,
+    ) -> str:
+        return await self._network().update_tool(
+            event, characters=characters, relationships=relationships, interactions=interactions
+        )
+
+    async def network_query_tool(self, event: AstrMessageEvent, query: str = "") -> str:
+        return await self._network().query_tool(event, query)
+
+    @filter.command("关系查询", alias={"查询关系", "人际关系"})
+    async def network_query_command(self, event: AstrMessageEvent, query: str = ""):
+        if not self._network_enabled():
+            yield event.plain_result("人际网络已关闭，请在插件 WebUI 的主动发起页面开启。")
+        else:
+            yield event.plain_result(await self._network().query_command_text(event, query))
+        event.stop_event()
+
     @filter.command("生活")
     async def life_command(self, event: AstrMessageEvent, action: str = "状态"):
         if action not in {"状态", "日程", "穿搭", "立即"}:
@@ -2272,6 +2564,129 @@ class DecisionPlugin(Star):
             }
         )
 
+    async def page_life_personas(self):
+        """List AstrBot personas for the appearance selector."""
+
+        from astrbot.api.web import json_response
+
+        personas = await self._persona_options()
+        return json_response({"personas": personas})
+
+    async def _persona_options(self) -> list[dict[str, str]]:
+        getter = getattr(self.context.persona_manager, "get_all_personas", None)
+        rows: list[dict[str, str]] = []
+        if callable(getter):
+            try:
+                for persona in await getter():
+                    persona_id = str(getattr(persona, "persona_id", "") or "").strip()
+                    if persona_id:
+                        rows.append({"id": persona_id, "name": persona_id})
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+                logger.debug("Decision Engine could not list personas: %s", _safe_error(exc))
+        if not any(row["id"] == "default" for row in rows):
+            rows.append({"id": "default", "name": "default"})
+        rows.sort(key=lambda row: row["id"].casefold())
+        return rows
+
+    async def page_life_sessions(self):
+        """List AstrBot conversations so the WebUI can offer a searchable picker."""
+
+        from astrbot.api.web import json_response, request
+
+        query = str((request.query or {}).get("search", "") or "").strip().casefold()
+        manager = getattr(self.context, "conversation_manager", None)
+        getter = getattr(manager, "get_conversations", None)
+        conversations = []
+        if callable(getter):
+            try:
+                conversations = await getter()
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+                logger.debug("Decision Engine could not list conversations: %s", _safe_error(exc))
+        persona_names = {row["id"]: row["name"] for row in await self._persona_options()}
+        sessions: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for conversation in conversations or []:
+            umo = str(getattr(conversation, "user_id", "") or "").strip()
+            if not umo or umo in seen:
+                continue
+            seen.add(umo)
+            persona_id = str(getattr(conversation, "persona_id", "") or "").strip()
+            title = str(getattr(conversation, "title", "") or "").strip()
+            platform, _, remainder = umo.partition(":")
+            message_type, _, _ = remainder.partition(":")
+            row = {
+                "umo": umo,
+                "title": title,
+                "platform": platform,
+                "message_type": message_type,
+                "persona_id": persona_id,
+                "persona_name": persona_names.get(persona_id, persona_id),
+            }
+            if query and query not in " ".join(row.values()).casefold():
+                continue
+            sessions.append(row)
+            if len(sessions) >= 2000:
+                break
+        sessions.sort(key=lambda row: (row["message_type"], row["umo"]))
+        return json_response({"sessions": sessions})
+
+    def _network(self):
+        return self._get_personal_network()
+
+    async def network_personas(self):
+        return await self._network().api_personas()
+
+    async def network_network(self):
+        return await self._network().api_network()
+
+    async def network_set_enabled(self):
+        return await self._network().api_set_enabled()
+
+    async def network_save_character(self):
+        return await self._network().api_save_character()
+
+    async def network_delete_character(self):
+        return await self._network().api_delete_character()
+
+    async def network_merge_characters(self):
+        return await self._network().api_merge_characters()
+
+    async def network_save_relationship(self):
+        return await self._network().api_save_relationship()
+
+    async def network_delete_relationship(self):
+        return await self._network().api_delete_relationship()
+
+    async def network_save_life_event(self):
+        return await self._network().api_save_life_event()
+
+    async def network_delete_life_event(self):
+        return await self._network().api_delete_life_event()
+
+    async def network_generate(self):
+        return await self._network().api_generate_network()
+
+    async def network_generation_status(self):
+        return await self._network().api_generation_status()
+
+    async def network_generation_validate(self):
+        return await self._network().api_validate_generation()
+
+    async def network_generation_apply(self):
+        return await self._network().api_apply_generation()
+
+    async def network_avatar(self, character_id: str):
+        return await self._network().api_avatar(character_id)
+
+    async def network_export(self):
+        return await self._network().api_export()
+
+    async def network_import_preview(self, persona_key: str):
+        return await self._network().api_import_preview(persona_key)
+
+    async def network_import_apply(self):
+        return await self._network().api_import_apply()
+
     async def page_life_appearance(self):
         from astrbot.api.web import error_response, json_response, request
 
@@ -2280,25 +2695,30 @@ class DecisionPlugin(Star):
             if not isinstance(payload, Mapping):
                 raise ValueError("请求必须是对象")
             runtime = await self._get_life_runtime()
-            umo = validate_umo(str(payload.get("umo", "")))
-            from astrbot.core.platform.message_session import MessageSession
+            persona_id = str(payload.get("persona_id", "") or "").strip()
+            if not persona_id:
+                # Legacy callers selected a conversation; resolve its persona.
+                umo = validate_umo(str(payload.get("umo", "")))
+                from astrbot.core.platform.message_session import MessageSession
 
-            MessageSession.from_str(umo)
-            persona = await runtime.personas.resolve(umo)
+                MessageSession.from_str(umo)
+                persona_id = (await runtime.personas.resolve(umo)).id
+            else:
+                persona_id = (await runtime.personas.resolve_id(persona_id)).id
             store = self._get_life_media().appearance
             async with self._life_asset_lock:
                 if payload.get("action") == "upload":
                     await store.upload(
-                        persona.id, payload.get("name", "reference"), payload.get("data_url", "")
+                        persona_id, payload.get("name", "reference"), payload.get("data_url", "")
                     )
                 elif payload.get("action") == "delete":
-                    await store.remove(persona.id, str(payload.get("id", "")))
+                    await store.remove(persona_id, str(payload.get("id", "")))
                 elif payload.get("action", "list") != "list":
                     raise ValueError("未知外貌操作")
                 return json_response(
                     {
-                        "persona_id": persona.id,
-                        "images": await store.list(persona.id, previews=True),
+                        "persona_id": persona_id,
+                        "images": await store.list(persona_id, previews=True),
                     }
                 )
         except (ValueError, OSError, TypeError) as exc:

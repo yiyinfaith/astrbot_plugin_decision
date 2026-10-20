@@ -1,4 +1,4 @@
-"""Persona-bound appearance assets and AIGen's public tool adapter."""
+"""Persona-bound appearance assets, AIGen bridge and proactive media choice."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import hashlib
 import inspect
 import io
 import json
+import random
 import re
 import time
 import uuid
@@ -16,6 +17,104 @@ from pathlib import Path
 
 from .virtual_life.core.storage import JsonRepository
 from .virtual_life.core.utils import format_outfit, timeline_item_at
+
+# Media kinds understood by the generic capture tools.  ``subject`` only
+# influences prompt wording; every kind still goes through the same AIGen call.
+SUBJECTS: dict[str, str] = {
+    "self": "自己",
+    "other": "别人",
+    "scene": "眼前的景色",
+    "object": "身边的物品",
+    "screenshot": "手机屏幕内容（截图或录屏）",
+}
+MEDIA_KINDS = ("photo", "video", "audio")
+KIND_LABELS = {"photo": "照片", "video": "短视频", "audio": "音频"}
+KIND_TOOLS = {"photo": "take_photo", "video": "take_video", "audio": "send_voice"}
+
+
+def media_settings(runtime) -> dict:
+    """Return the media group of a live runtime with defaults applied."""
+
+    settings = (runtime.config or {}).get("media_settings", {}) or {}
+    return settings if isinstance(settings, dict) else {}
+
+
+def clamp_count(settings: dict, kind: str, value: object) -> int:
+    """Clamp a model-supplied count into the configured inclusive range."""
+
+    low = max(0, min(10, int(settings.get(f"{kind}_count_min", 1))))
+    high = max(low, min(10, int(settings.get(f"{kind}_count_max", low))))
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        count = low
+    return max(low, min(high, count))
+
+
+def enabled_kinds(settings: dict) -> list[str]:
+    """Return the media kinds that are both enabled and reachable."""
+
+    if not settings.get("enable", True):
+        return []
+    return [kind for kind in MEDIA_KINDS if settings.get(f"{kind}_enable", False)]
+
+
+def choose_proactive_media(settings: dict) -> tuple[str, int, int] | None:
+    """Pick at most one media kind for one proactive delivery.
+
+    Each enabled kind is rolled independently against its own probability; when
+    several pass, exactly one is drawn with those probabilities as weights.  The
+    returned range is the configured inclusive count range for the winner.
+    """
+
+    candidates: list[tuple[str, float]] = []
+    for kind in enabled_kinds(settings):
+        try:
+            probability = float(settings.get(f"{kind}_probability", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            probability = 0.0
+        if probability <= 0.0:
+            continue
+        if random.random() < min(1.0, probability):
+            candidates.append((kind, probability))
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        kind = candidates[0][0]
+    else:
+        kind = random.choices(
+            [item[0] for item in candidates], weights=[item[1] for item in candidates], k=1
+        )[0]
+    low = max(0, min(10, int(settings.get(f"{kind}_count_min", 1))))
+    high = max(low, min(10, int(settings.get(f"{kind}_count_max", low))))
+    return kind, low, high
+
+
+def media_instruction(kind: str, low: int, high: int) -> str:
+    """Describe one allowed media attachment for the proactive prompt."""
+
+    tool = KIND_TOOLS[kind]
+    label = KIND_LABELS[kind]
+    if high <= 0:
+        return ""
+    if low == high:
+        scope = f"恰好 {low} 个"
+    else:
+        scope = f"{low}~{high} 个"
+    if kind == "audio":
+        return (
+            f"本次主动发起可以附带{label}。若要开口，请调用 {tool} 工具生成，"
+            f"数量必须{scope}，由你根据内容自行决定；若此刻说话不如文字自然，也可以不发。"
+        )
+    unit = "张" if kind == "photo" else "段"
+    if low == high:
+        scope = f"恰好 {low} {unit}"
+    else:
+        scope = f"{low}~{high} {unit}"
+    return (
+        f"本次主动发起可以附带{label}。若要分享，请调用 {tool} 工具生成，"
+        f"数量必须{scope}，由你根据场景自行决定；若此刻不适合分享，也可以不发。"
+    )
 
 
 class AppearanceStore:
@@ -172,107 +271,226 @@ class LifeMedia:
             else None
         )
 
-    async def capture(self, event, *, video=False, scene=""):
+    async def capture(
+        self, event, *, kind="photo", scene="", subject="self", count=None, audio_text=""
+    ):
+        """Generate one media kind through AIGen.
+
+        ``kind`` is ``photo``, ``video`` or ``audio``.  Every kind shares the
+        same guardrails (master switch, per-kind switch, cooldown, daily quota,
+        reference images, daily outfit) so a single tool surface cannot bypass
+        them by choosing a different kind.
+        """
+
         runtime = await self.owner._get_life_runtime()
-        settings = runtime.config["media_settings"]
-        if not settings["enable"]:
-            return "拍照和拍视频已关闭。"
-        if not settings["daily_limit"]:
-            return "本会话今日拍摄额度已用完。"
+        settings = media_settings(runtime)
+        if not settings.get("enable", True):
+            return "多媒体生成已关闭。"
+        if kind not in MEDIA_KINDS:
+            return "未知的多媒体类型。"
+        if not settings.get(f"{kind}_enable", False):
+            return f"{KIND_LABELS[kind]}生成已关闭。"
+        if not settings.get("daily_limit"):
+            return "本会话今日生成额度已用完。"
         aigen = self.aigen()
         if aigen is None:
             return "aigen 插件未安装、未启用或接口不兼容，尚未提交生成任务。"
+        audio_method = getattr(aigen, "generate_audio", None)
+        if kind == "audio":
+            if not str(audio_text or "").strip():
+                return "生成音频需要提供要朗读或表达的内容。"
+            if not callable(audio_method):
+                return "当前 aigen 版本不提供 generate_audio，尚未提交生成任务。"
         umo = str(event.unified_msg_origin)
         async with self.locks.setdefault(umo, asyncio.Lock()):
             now = time.monotonic()
             if now - self.last_call.get(umo, -1e9) < settings["cooldown_seconds"]:
-                return "拍摄冷却中，请稍后再试。"
+                return "多媒体生成冷却中，请稍后再试。"
             persona = await runtime.personas.resolve(umo)
             refs = await self.appearance.list(persona.id)
-            if not refs:
+            if not refs and kind != "audio":
                 return "当前人格尚未上传外貌参考图，请在 WebUI 的主动发起页面上传后再拍摄。"
             reference_persona = persona.id
             persona, plan = await runtime._ensure_plan_for_umo(umo)
             if persona.id != reference_persona:
-                return "准备期间人格已变更，尚未提交拍摄任务。"
-            if not plan.has_outfit:
-                return "今日穿搭尚未生成；请开启每日穿搭并在 WebUI 生成今日内容后再拍摄。"
+                return "准备期间人格已变更，尚未提交生成任务。"
+            if kind != "audio" and not plan.has_outfit:
+                appearance = (runtime.config or {}).get("appearance_settings", {}) or {}
+                if not appearance.get("use_reference_outfit", True):
+                    return (
+                        "今日穿搭尚未生成；请开启每日穿搭并在 WebUI 生成今日内容后再拍摄，"
+                        "或开启“无今日穿搭时沿用参考图穿搭”。"
+                    )
             item = timeline_item_at(plan, runtime._now())
-            prompt = settings["prompt"]
-            values = {
-                "kind": "短视频" if video else "照片",
-                "appearance": settings["appearance"],
-                "outfit": format_outfit(plan),
-                "activity": item.activity if item else "自由活动",
-                "scene": str(scene or "自然地分享此刻的生活")[:4000],
-            }
-            for name, value in values.items():
-                prompt = prompt.replace("{" + name + "}", str(value))
+            resolved_count = clamp_count(settings, kind, 1 if count is None else count)
+            if resolved_count <= 0:
+                return "本次生成数量为 0，未提交生成任务。"
+            prompt = self._render_prompt(
+                settings,
+                runtime,
+                kind=kind,
+                subject=subject,
+                scene=scene,
+                audio_text=audio_text,
+                plan=plan,
+                item=item,
+                count=resolved_count,
+            )
             if (await runtime.personas.resolve(umo)).id != persona.id:
-                return "准备期间人格已变更，尚未提交拍摄任务。"
+                return "准备期间人格已变更，尚未提交生成任务。"
             if runtime.closed:
-                return "设置正在重载，尚未提交拍摄任务。"
+                return "设置正在重载，尚未提交生成任务。"
             if event.get_extra("decision_life_proactive", False) and not runtime.can_commit(
                 umo, event.get_extra("decision_life_generation", -1)
             ):
-                return "主动候选已过期，尚未提交拍摄任务。"
-            proxy = ReferenceEvent(
-                event, [self.appearance.folder(persona.id) / ref["id"] for ref in refs], prompt
-            )
-            method = aigen.generate_video if video else aigen.generate_image
-            kwargs = {
-                "event": proxy,
-                "prompt": prompt,
-                "aspect_ratio": settings["video_aspect_ratio" if video else "image_aspect_ratio"],
-            }
-            if video:
-                kwargs.update(
-                    duration=settings["video_duration"],
-                    reference_mode="reference",
-                    use_message_media=True,
+                return "主动候选已过期，尚未提交生成任务。"
+            proxy = (
+                ReferenceEvent(
+                    event, [self.appearance.folder(persona.id) / ref["id"] for ref in refs], prompt
                 )
+                if refs
+                else event
+            )
+            if kind == "photo":
+                method = aigen.generate_image
+            elif kind == "video":
+                method = aigen.generate_video
+            else:
+                method = audio_method
+            kwargs = self._call_kwargs(settings, kind, proxy, prompt, resolved_count, audio_text)
             signature = inspect.signature(method)
             kwargs = {key: value for key, value in kwargs.items() if key in signature.parameters}
             if self.aigen() is not aigen:
-                return "aigen 正在重载或已停用，尚未提交拍摄任务。"
+                return "aigen 正在重载或已停用，尚未提交生成任务。"
             # Reserve before calling a potentially paid backend. Never retry
             # automatically after ambiguous transport or platform failures.
             async with self.usage_lock:
                 usage = await self.usage.load()
                 key = runtime._now().date().isoformat() + "::" + umo
-                count = usage["usage"].get(key, 0)
-                if count >= settings["daily_limit"]:
-                    return "本会话今日拍摄额度已用完。"
+                quota = usage["usage"].get(key, 0)
+                if quota >= settings["daily_limit"]:
+                    return "本会话今日生成额度已用完。"
                 usage["usage"] = {
                     k: v
                     for k, v in usage["usage"].items()
                     if k.startswith(runtime._now().date().isoformat())
                 }
-                usage["usage"][key] = count + 1
+                usage["usage"][key] = quota + 1
                 await self.usage.save(usage)
                 self.last_call[umo] = time.monotonic()
+            # ``n`` lets one image request return several pictures; video and
+            # audio have no batch parameter, so they issue one call per item.
+            batched = "n" in signature.parameters
+            calls = 1 if batched else resolved_count
             results = []
             try:
                 if runtime.closed:
-                    return "生活设置已重载，已取消尚未提交的拍摄尝试。"
-                outcome = method(**kwargs)
-                if inspect.isasyncgen(outcome):
-                    async for value in outcome:
-                        if isinstance(value, str) and value.strip():
+                    return "生活设置已重载，已取消尚未提交的生成尝试。"
+                for index in range(calls):
+                    if index and runtime.closed:
+                        break
+                    outcome = method(**kwargs)
+                    if inspect.isasyncgen(outcome):
+                        async for value in outcome:
+                            if isinstance(value, str) and value.strip():
+                                results.append(value)
+                            elif value is not None:
+                                # Older AIGen releases may yield a direct result.
+                                await event.send(value)
+                    elif inspect.isawaitable(outcome):
+                        value = await outcome
+                        if isinstance(value, str):
                             results.append(value)
-                        elif value is not None:
-                            # Older AIGen releases may yield a direct result.
-                            await event.send(value)
-                elif inspect.isawaitable(outcome):
-                    value = await outcome
-                    if isinstance(value, str):
-                        results.append(value)
             except Exception as exc:
-                return f"aigen 拍摄失败：{str(exc)[:180]}。未自动重试，请先确认任务状态。"
+                if not results:
+                    return f"aigen 生成失败：{str(exc)[:180]}。未自动重试，请先确认任务状态。"
+                results.append(f"aigen 部分生成失败：{str(exc)[:180]}")
             return "\n".join(results) or json.dumps(
                 {
                     "status": "submitted",
-                    "media_type": "video" if video else "image",
+                    "media_type": kind,
+                    "count": resolved_count,
                     "backend": "aigen",
                 }
             )
+
+    def _render_prompt(
+        self,
+        settings,
+        runtime,
+        *,
+        kind,
+        subject,
+        scene,
+        audio_text,
+        plan,
+        item,
+        count,
+    ) -> str:
+        template = str(settings.get(f"{kind}_prompt", "") or "")
+        appearance = self._appearance_text(runtime, settings)
+        outfit = (
+            format_outfit(plan)
+            if plan.has_outfit
+            else "今日尚未生成穿搭，请沿用外貌参考图中的服装，不要自行发明新的服装。"
+        )
+        values = {
+            "kind": KIND_LABELS[kind],
+            "subject": SUBJECTS.get(str(subject or "self"), SUBJECTS["self"]),
+            "subject_desc": self._subject_description(subject),
+            "appearance": appearance,
+            "outfit": outfit,
+            "activity": item.activity if item else "自由活动",
+            "scene": str(scene or "自然地分享此刻的生活")[:4000],
+            "style": str(scene or "自然地表达").strip()[:2000],
+            "text": str(audio_text or "").strip()[:4000],
+            "count": str(count),
+        }
+        for name, value in values.items():
+            template = template.replace("{" + name + "}", str(value))
+        return template
+
+    @staticmethod
+    def _subject_description(subject) -> str:
+        key = str(subject or "self")
+        if key == "self":
+            return "当前人格本人"
+        return SUBJECTS.get(key, SUBJECTS["self"])
+
+    @staticmethod
+    def _appearance_text(runtime, settings) -> str:
+        life = getattr(runtime, "config", {}) or {}
+        appearance = (life.get("appearance_settings", {}) or {}).get("description", "")
+        text = str(appearance or "").strip()
+        return text or "未填写外貌补充描述，请完全依据参考图。"
+
+    def _call_kwargs(self, settings, kind, event, prompt, count, audio_text=""):
+        if kind == "photo":
+            return {
+                "event": event,
+                "prompt": prompt,
+                "aspect_ratio": settings["image_aspect_ratio"],
+                "n": count,
+            }
+        if kind == "video":
+            return {
+                "event": event,
+                "prompt": prompt,
+                "aspect_ratio": settings["video_aspect_ratio"],
+                "duration": settings["video_duration"],
+                "reference_mode": "reference",
+                "use_message_media": True,
+            }
+        # AIGen reads ``text`` literally in 朗读 mode, so the spoken content must
+        # be the caller's text rather than the descriptive template.
+        mode = str(settings.get("audio_mode", "朗读") or "朗读")
+        spoken = str(audio_text or "").strip()
+        kwargs = {
+            "event": event,
+            "text": spoken if mode == "朗读" and spoken else prompt,
+            "mode": mode,
+        }
+        voice = str(settings.get("audio_voice", "") or "").strip()
+        if voice:
+            kwargs["voice"] = voice
+        return kwargs
