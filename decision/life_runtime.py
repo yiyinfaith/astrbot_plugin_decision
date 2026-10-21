@@ -209,8 +209,49 @@ class LifeRuntime(VirtualLifeBase):
             task.cancel()
         if self.tasks:
             await asyncio.gather(*tuple(self.tasks), return_exceptions=True)
+        # Every per-session container is keyed by umo and would otherwise keep an
+        # entry for every conversation the bot has ever seen, across reloads.
+        self._conversation_generations.clear()
+        self._conversation_activity_at.clear()
+        self._active_agent_counts.clear()
+        self._agent_release_tasks.clear()
+        self._window_retry_counts.clear()
+        self._schedule_available_umos.clear()
+        self.deadlines.clear()
+        self.delivery_locks.clear()
+        self.observed.clear()
+        self._manual_umos.clear()
+        self._sleep_umos.clear()
+        self.audit.clear()
         if self._loaded:
             await super().terminate()
+
+    def _trim_session_state(self, keep: int = 2000) -> None:
+        """Bound the umo-keyed caches so a long-lived bot cannot grow forever.
+
+        Entries for conversations that are no longer active are the ones that
+        matter least, so the oldest activity timestamps are dropped first. Only
+        called on the low-frequency daily refresh, never per message.
+        """
+
+        if len(self._conversation_activity_at) <= keep:
+            return
+        ordered = sorted(
+            self._conversation_activity_at.items(), key=lambda item: item[1], reverse=True
+        )
+        stale = {umo for umo, _ in ordered[keep:]}
+        for umo in stale:
+            self._conversation_activity_at.pop(umo, None)
+            self._conversation_generations.pop(umo, None)
+            self.deadlines.pop(umo, None)
+            self.delivery_locks.pop(umo, None)
+            self.observed.pop(umo, None)
+            self._active_agent_counts.pop(umo, None)
+            self._schedule_available_umos.discard(umo)
+        if stale:
+            logger.info(
+                "Decision Engine 主动发起清理了 %s 个长期未活跃会话的运行时缓存", len(stale)
+            )
 
     async def _ensure_plan(self, persona, target, **kwargs):
         async with self.plan_locks.setdefault(persona.id, asyncio.Lock()):
@@ -245,6 +286,7 @@ class LifeRuntime(VirtualLifeBase):
         async with self.action_lock, self.refresh_lock:
             now = self._now()
             self.storage.prune_schedule_requirements(now.date())
+            self._trim_session_state()
             try:
                 await self._check_long_term_renewals(now.date())
             except Exception as exc:

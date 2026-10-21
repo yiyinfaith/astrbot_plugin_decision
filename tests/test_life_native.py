@@ -790,3 +790,109 @@ def test_manual_trigger_bypasses_whitelist_and_quiet_hours(native):
         assert runtime.can_commit(other, 0) is False
     finally:
         runtime._manual_umos.discard(UMO)
+
+
+def test_sleep_wakeup_can_skip_quiet_hours(native):
+    """The sleep trigger always lands in quiet hours, so it needs the switch."""
+
+    runtime = native.runtime
+    runtime.closed = False
+    runtime.config["friend_settings"]["enable"] = True
+    runtime.config["friend_settings"]["session_blacklist"] = True
+    runtime.config["friend_settings"]["session_list"] = []
+    runtime.config["integration_settings"]["quiet_start"] = "00:00"
+    runtime.config["integration_settings"]["quiet_end"] = "23:59"
+    runtime.config["delivery_settings"]["sleep_skips_quiet"] = True
+
+    runtime.deadlines[UMO] = time.monotonic() + 600
+    assert runtime._quiet() is True
+    assert runtime._quiet_exempt(UMO) is False, "an ordinary run gets no exemption"
+
+    runtime._sleep_umos.add(UMO)
+    try:
+        assert runtime._quiet_exempt(UMO) is True
+        assert runtime.can_commit(UMO, 0) is True
+    finally:
+        runtime._sleep_umos.discard(UMO)
+
+    runtime.config["delivery_settings"]["sleep_skips_quiet"] = False
+    runtime._sleep_umos.add(UMO)
+    try:
+        assert runtime._quiet_exempt(UMO) is False, "the switch must be able to turn it off"
+    finally:
+        runtime._sleep_umos.discard(UMO)
+
+
+def test_trim_session_state_bounds_the_per_session_caches(native):
+    runtime = native.runtime
+    now = runtime._now()
+    for index in range(30):
+        umo = f"aiocqhttp:FriendMessage:{index}"
+        runtime._conversation_activity_at[umo] = now - timedelta(minutes=index)
+        runtime._conversation_generations[umo] = index
+        runtime.deadlines[umo] = 1.0
+        runtime.delivery_locks[umo] = asyncio.Lock()
+        runtime.observed[umo] = []
+
+    runtime._trim_session_state(keep=10)
+
+    assert len(runtime._conversation_activity_at) == 10
+    survivors = set(runtime._conversation_activity_at)
+    assert survivors == {f"aiocqhttp:FriendMessage:{i}" for i in range(10)}
+    for umo in survivors:
+        assert umo in runtime._conversation_generations
+        assert umo in runtime.deadlines
+        assert umo in runtime.delivery_locks
+    dropped = "aiocqhttp:FriendMessage:29"
+    for container in (
+        runtime._conversation_generations,
+        runtime.deadlines,
+        runtime.delivery_locks,
+        runtime.observed,
+    ):
+        assert dropped not in container
+
+
+def test_trim_session_state_is_a_noop_below_the_limit(native):
+    runtime = native.runtime
+    runtime._conversation_activity_at.clear()
+    for index in range(3):
+        runtime._conversation_activity_at[f"u{index}"] = runtime._now()
+    runtime._trim_session_state(keep=10)
+    assert len(runtime._conversation_activity_at) == 3
+
+
+@pytest.mark.asyncio
+async def test_terminate_clears_the_session_caches(native):
+    """A hot reload must not leave per-conversation state behind."""
+
+    runtime = native.runtime
+    runtime.closed = False
+    runtime._conversation_activity_at["u1"] = runtime._now()
+    runtime._conversation_generations["u1"] = 3
+    runtime.deadlines["u1"] = 1.0
+    runtime.delivery_locks["u1"] = asyncio.Lock()
+    runtime.observed["u1"] = []
+    runtime._active_agent_counts["u1"] = 1
+    runtime._window_retry_counts[("u1", "rev", "w")] = 2
+    runtime._schedule_available_umos.add("u1")
+    runtime._manual_umos.add("u1")
+    runtime._sleep_umos.add("u1")
+    runtime.audit.append({"umo": "u1"})
+
+    await runtime.terminate()
+
+    for container in (
+        runtime._conversation_activity_at,
+        runtime._conversation_generations,
+        runtime._active_agent_counts,
+        runtime._window_retry_counts,
+        runtime.deadlines,
+        runtime.delivery_locks,
+        runtime.observed,
+        runtime.audit,
+        runtime._manual_umos,
+        runtime._sleep_umos,
+        runtime._schedule_available_umos,
+    ):
+        assert not container, f"terminate left behind: {container!r}"
