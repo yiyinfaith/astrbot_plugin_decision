@@ -429,6 +429,7 @@ class DecisionPlugin(Star):
             ("life/appearance", self.page_life_appearance, ["POST"]),
             ("life/personas", self.page_life_personas, ["GET"]),
             ("life/sessions", self.page_life_sessions, ["GET"]),
+            ("life/billing", self.page_life_billing, ["GET"]),
         ):
             self.context.register_web_api(
                 f"/{PLUGIN_NAME}/{endpoint}", handler, methods, "Virtual Life WebUI"
@@ -2716,6 +2717,102 @@ class DecisionPlugin(Star):
 
     async def network_import_apply(self):
         return await self._network().api_import_apply()
+
+    async def page_life_billing(self):
+        """List the platforms and aigen billing accounts for the pickers.
+
+        Platforms come from AstrBot's own configuration; accounts come from
+        aigen's billing ledger, which is the authoritative list of identities
+        that can actually be charged. Both reads are best-effort so a missing
+        aigen install never breaks the settings page.
+        """
+
+        from astrbot.api.web import json_response
+
+        platforms: list[dict[str, str]] = []
+        try:
+            configured = self.context.get_config().get("platform", []) or []
+        except (AttributeError, TypeError, ValueError):
+            configured = []
+        seen: set[str] = set()
+        for row in configured:
+            if not isinstance(row, Mapping):
+                continue
+            # aigen keys the account by the adapter *type*, not the instance id.
+            name = str(row.get("type") or row.get("id") or "").strip()
+            if name and name not in seen:
+                seen.add(name)
+                platforms.append({"id": name, "name": name})
+        platforms.sort(key=lambda item: item["id"].casefold())
+
+        accounts = await self._aigen_billing_accounts()
+        return json_response({"platforms": platforms, "accounts": accounts})
+
+    async def _aigen_billing_accounts(self) -> list[dict[str, Any]]:
+        """Read aigen's balance rows without importing or mutating its store."""
+
+        getter = getattr(self.context, "get_all_stars", None)
+        if not callable(getter):
+            return []
+        try:
+            stars = list(getter())
+        except (AttributeError, TypeError, ValueError):
+            return []
+        directory = None
+        for star in stars:
+            if getattr(star, "name", "") != "astrbot_plugin_aigen":
+                continue
+            root = str(getattr(star, "root_dir_name", "") or "")
+            module = getattr(star, "module_path", "") or ""
+            if root or module:
+                directory = root or Path(module).parent.name
+            break
+        if not directory:
+            return []
+        # <data>/plugin_data/<plugin>/billing.sqlite3
+        db_path = (
+            Path(get_astrbot_config_path()).parent
+            / "plugin_data"
+            / directory
+            / "billing.sqlite3"
+        )
+        if not db_path.is_file():
+            return []
+
+        def read() -> list[dict[str, Any]]:
+            import sqlite3
+
+            connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+            try:
+                rows = connection.execute(
+                    "SELECT owner, amount FROM balances ORDER BY amount DESC"
+                ).fetchall()
+            finally:
+                connection.close()
+            result = []
+            for owner, amount in rows:
+                try:
+                    platform, user_id = json.loads(owner)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                platform, user_id = str(platform), str(user_id)
+                if not platform or not user_id:
+                    continue
+                result.append(
+                    {
+                        "platform": platform,
+                        "user_id": user_id,
+                        "amount": int(amount or 0),
+                        "label": f"{platform} · {user_id}",
+                    }
+                )
+            return result
+
+        try:
+            return await asyncio.to_thread(read)
+        except Exception as exc:
+            logger.debug("Decision Engine 读取 aigen 记账账户失败：%s", _safe_error(exc))
+            return []
 
     async def page_life_appearance(self):
         from astrbot.api.web import error_response, json_response, request

@@ -312,6 +312,17 @@
       .life-picker { position:relative; } .life-picker-list { margin-top:8px; max-height:260px; overflow:auto; padding:6px; border:1px solid #ffffff30; border-radius:16px; background:#151d38f5; box-shadow:0 12px 32px #02061780; }
       .life-picker-list button { display:block; width:100%; padding:9px 11px; border:0; border-radius:11px; color:#e8f0ff; background:transparent; text-align:left; } .life-picker-list button:hover, .life-picker-list button.active { background:linear-gradient(120deg,#315fb54d,#6a4fd04d); }
       .life-picker-list strong { display:block; font-size:12.5px; overflow-wrap:anywhere; } .life-picker-list small { display:block; margin-top:3px; color:#9fb2cf; font-size:11px; line-height:1.5; overflow-wrap:anywhere; } .life-picker-empty { padding:10px 11px; color:#93a4c0; font-size:12px; }
+      .network-manager { margin-top:16px; padding-top:16px; border-top:1px solid #ffffff1f; display:grid; gap:14px; }
+      .network-bar { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:end; }
+      .network-bar-actions { display:flex; align-items:center; gap:12px; padding-bottom:4px; }
+      .network-counts { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+      .network-counts span { padding:6px 12px; border-radius:999px; font-size:12px; color:#cfe0ff; background:#ffffff12; border:1px solid #ffffff1f; }
+      .network-counts button { margin-left:auto; }
+      .network-section { border:1px solid #ffffff1f; border-radius:16px; padding:12px 14px; background:#ffffff06; }
+      .network-section summary { cursor:pointer; font-weight:600; color:#dfe9ff; }
+      .network-row { display:flex; align-items:center; gap:12px; padding:9px 0; border-bottom:1px solid #ffffff12; }
+      .network-row-main { flex:1 1 auto; min-width:0; } .network-row-main strong { display:block; font-size:13px; overflow-wrap:anywhere; } .network-row-main small { display:block; margin-top:3px; color:#9fb2cf; font-size:11px; line-height:1.5; overflow-wrap:anywhere; }
+      .network-form { margin-top:12px; padding-top:12px; border-top:1px dashed #ffffff1f; display:grid; gap:10px; }
       @media(max-width:760px) { .life-config-grid,.life-today,.life-pair { grid-template-columns:1fr; } .life-subnav button { padding:12px 8px; font-size:14px; } .life-subnav button span { font-size:10px; } .life-intro { display:block; } .life-intro .status-pill { margin-top:12px; } .life-intro-actions { flex-wrap:wrap; margin-top:12px; } .life-intro-switch { max-width:none; } }
     </style>
   </head>
@@ -431,12 +442,50 @@
               <p v-if="!appearancePersonaId" class="hint">请先在上方选择一个目标人格，再上传参考图。</p>
             </div>
             <div v-if="lifeConfig.personal_network_integration && lifeSchema.personal_network_integration" class="glass-card">
-              <div class="card-heading"><div><div class="section-kicker">Personal Network</div><h2>人际网络</h2><p>人际网络已并入本插件，无需再安装 astrbot_plugin_personal_network。关系上下文会按下方设置注入对话，虚拟生活生成新人物时也走同一份数据。</p></div><button class="button secondary" type="button" @click="openNetworkPage">打开人际网络管理</button></div>
+              <div class="card-heading"><div><div class="section-kicker">Personal Network</div><h2>人际网络</h2><p>人际网络已并入本插件，无需再安装 astrbot_plugin_personal_network。关系上下文会按下方设置注入对话，虚拟生活生成新人物时也走同一份数据。</p></div><button class="button secondary" type="button" :aria-expanded="networkOpen ? 'true' : 'false'" @click="toggleNetworkPanel">{{ networkOpen ? '收起管理' : '展开管理' }}</button></div>
               <life-settings :schema="lifeSchema.personal_network_integration.items" :value="lifeConfig.personal_network_integration" :providers="lifeProviders"></life-settings>
-              <p class="hint">管理页用于维护人物、关系与共同经历；数据保存在 AstrBot 数据目录，与本页共用同一份人格。</p>
+              <div v-if="networkOpen" class="network-manager">
+                <div class="network-bar">
+                  <div class="field"><label>目标人格 <span>可搜索选择</span></label><div class="life-picker"><input type="text" v-model="networkPersonaSearch" placeholder="搜索人格 ID" autocomplete="off" aria-label="人际网络人格" @focus="showNetworkPersonaList = true" @input="showNetworkPersonaList = true" @keydown.esc="showNetworkPersonaList = false" @blur="hidePicker('networkPersona')"><div v-if="showNetworkPersonaList" class="life-picker-list"><button v-for="row in filteredNetworkPersonas" :key="row.id" type="button" :class="{active: row.id === networkPersonaId}" @mousedown.prevent="pickNetworkPersona(row)"><strong>{{ row.name || row.id }}</strong><small>{{ row.id }}</small></button><div v-if="!filteredNetworkPersonas.length" class="life-picker-empty">没有匹配的人格。</div></div></div></div>
+                  <div class="network-bar-actions"><div class="switch-copy"><strong>该人格的人际网络</strong><small>{{ networkEnabled ? '已启用：写入关系上下文并记录日程经历' : '已停用：只保留数据，不注入也不记录' }}</small></div><label class="switch"><input type="checkbox" aria-label="启用该人格的人际网络" :checked="networkEnabled" :disabled="!networkPersonaId" @change="toggleNetworkEnabled($event.target.checked)"><span class="switch-track"></span></label></div>
+                </div>
+                <p v-if="!networkPersonaId" class="hint">先选择一个目标人格，下面的内容才会加载。</p>
+                <template v-else>
+                  <div class="network-counts"><span>{{ networkStats.characters }} 个人物</span><span>{{ networkStats.relationships }} 条关系</span><span>{{ networkStats.events }} 条经历</span><button class="button ghost" type="button" :disabled="networkBusy" @click="reloadNetwork">刷新</button></div>
+                  <details class="network-section" open><summary>人物（{{ networkCharacters.length }}）</summary>
+                    <div v-for="row in networkCharacters" :key="row.id" class="network-row">
+                      <div class="network-row-main"><strong>{{ row.name }}</strong><small>{{ row.is_persona ? '人格本人' : (row.bio || '未填写简介') }}</small></div>
+                      <button class="button ghost" type="button" :disabled="networkBusy" @click="removeNetworkCharacter(row)">删除</button>
+                    </div>
+                    <div class="network-form">
+                      <div class="two-col"><div class="field"><label>姓名</label><input type="text" v-model="networkNewCharacter.name" placeholder="人物姓名"></div><div class="field"><label>简介</label><input type="text" v-model="networkNewCharacter.bio" placeholder="身份、与本人关系"></div></div>
+                      <div class="field"><label>性格 / 偏好</label><input type="text" v-model="networkNewCharacter.personality" placeholder="例如 温柔、话少；喜欢猫"></div>
+                      <button class="button secondary" type="button" :disabled="networkBusy || !networkNewCharacter.name.trim()" @click="addNetworkCharacter">添加人物</button>
+                    </div>
+                  </details>
+                  <details class="network-section"><summary>关系（{{ networkRelations.length }}）</summary>
+                    <div v-for="row in networkRelations" :key="row.id" class="network-row"><div class="network-row-main"><strong>{{ networkNameOf(row.source_id) }} → {{ networkNameOf(row.target_id) }}</strong><small>{{ row.relation_type }} · 亲密度 {{ row.strength }} · {{ row.status }}</small></div><button class="button ghost" type="button" :disabled="networkBusy" @click="removeNetworkRelation(row)">删除</button></div>
+                    <div class="network-form">
+                      <div class="two-col"><div class="field"><label>主体</label><input type="text" v-model="networkNewRelation.source" placeholder="人格本人或人物姓名"></div><div class="field"><label>对象</label><input type="text" v-model="networkNewRelation.target" placeholder="人物姓名"></div><div class="field"><label>关系类型</label><input type="text" v-model="networkNewRelation.type" placeholder="例如 同学、邻居"></div><div class="field"><label>亲密度 0-100</label><input type="number" min="0" max="100" v-model.number="networkNewRelation.strength"></div></div>
+                      <button class="button secondary" type="button" :disabled="networkBusy || !networkNewRelation.target.trim() || !networkNewRelation.type.trim()" @click="addNetworkRelation">添加关系</button>
+                    </div>
+                  </details>
+                  <details class="network-section"><summary>共同经历（{{ networkEvents.length }}）</summary>
+                    <div v-for="row in networkEvents" :key="row.id" class="network-row"><div class="network-row-main"><strong>{{ row.event_type }} · {{ row.occurred_at }}</strong><small>{{ row.summary }}</small></div><button class="button ghost" type="button" :disabled="networkBusy" @click="removeNetworkEvent(row)">删除</button></div>
+                    <div class="network-form">
+                      <div class="two-col"><div class="field"><label>参与者</label><input type="text" v-model="networkNewEvent.participants" placeholder="人物姓名，多个用逗号分隔"></div><div class="field"><label>类型</label><input type="text" v-model="networkNewEvent.type" placeholder="例如 见面、聊天"></div></div>
+                      <div class="field"><label>摘要</label><input type="text" v-model="networkNewEvent.summary" placeholder="发生了什么"></div>
+                      <button class="button secondary" type="button" :disabled="networkBusy || !networkNewEvent.summary.trim()" @click="addNetworkEvent">添加经历</button>
+                    </div>
+                  </details>
+                  <p v-if="networkMessage" class="hint">{{ networkMessage }}</p>
+                  <p class="hint">上面的增删改都在本页完成。关系图视图、批量生成、头像与导入导出仍在独立页面：<a :href="networkAdvancedUrl" target="_blank" rel="noopener">打开关系图与高级工具</a>。</p>
+                </template>
+              </div>
+              <p v-else class="hint">展开管理后可直接维护人物、关系与共同经历，无需跳转其它页面。</p>
             </div>
             </div>
-            <div class="life-config-grid"><details v-for="(group,key) in lifeConfigGroups" :key="key" class="glass-card life-config-section" :open="['integration_settings','schedule_settings','media_settings'].includes(key)"><summary><span>{{ cleanLifeLabel(group.description || key) }}</span><small>{{ Object.keys(group.items || {}).length }} 项设置</small></summary><life-settings v-if="lifeConfig[key]" :schema="group.items" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><p v-if="key === 'media_settings'" class="hint">三项概率独立掷骰，判定为“生成多媒体”后只会从已启用的种类里挑一种发送，数量由模型在配置区间内决定。</p></details></div>
+            <div class="life-config-grid"><details v-for="(group,key) in lifeConfigGroups" :key="key" class="glass-card life-config-section" :open="['integration_settings','schedule_settings','media_settings'].includes(key)"><summary><span>{{ cleanLifeLabel(group.description || key) }}</span><small>{{ Object.keys(group.items || {}).length }} 项设置</small></summary><template v-if="key === 'media_settings' && lifeConfig[key]"><life-settings :schema="mediaSettingsSchema" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><div class="billing-picker-row"><div class="field"><label>固定账户平台名 <span>来自 AstrBot 已配置的平台</span></label><select aria-label="固定账户平台名" v-model="lifeConfig.media_settings.proactive_billing_platform"><option value="">沿用当前平台</option><option v-for="row in billingPlatforms" :key="row.id" :value="row.id">{{ row.name }}</option><option v-if="lifeConfig.media_settings.proactive_billing_platform && !billingPlatforms.some(p => p.id === lifeConfig.media_settings.proactive_billing_platform)" :value="lifeConfig.media_settings.proactive_billing_platform">{{ lifeConfig.media_settings.proactive_billing_platform }}（已保存）</option></select></div><div class="field"><label>固定账户用户 ID <span>来自 aigen 记账账户，可搜索</span></label><div class="life-picker"><input type="text" :value="billingUserLabel" placeholder="搜索平台或用户 ID" autocomplete="off" aria-label="固定账户用户 ID" @focus="showBillingUserList = true" @input="onBillingUserInput($event.target.value)" @keydown.esc="showBillingUserList = false" @blur="hidePicker('billingUser')"><div v-if="showBillingUserList" class="life-picker-list"><button v-for="row in filteredBillingAccounts" :key="row.label" type="button" :class="{active: row.user_id === lifeConfig.media_settings.proactive_billing_user_id}" @mousedown.prevent="pickBillingAccount(row)"><strong>{{ row.user_id }}</strong><small>{{ row.platform }} · 余额 {{ row.amount }}</small></button><div v-if="!filteredBillingAccounts.length" class="life-picker-empty">没有匹配的记账账户；也可直接输入用户 ID。</div></div></div><p class="hint">列出的是 aigen 账本中已有余额行的账户；主动发起会消耗这里选中的账户。</p></div></div></template><life-settings v-else-if="lifeConfig[key]" :schema="group.items" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><p v-if="key === 'media_settings'" class="hint">三项概率独立掷骰，判定为“生成多媒体”后只会从已启用的种类里挑一种发送，数量由模型在配置区间内决定。</p></details></div>
             <div class="glass-card"><div class="card-heading"><div><div class="section-kicker">Long-term continuity</div><h2>长期时间表与一次性要求</h2><p>长期阶段支持草稿、批准、拒绝、重生成和 JSON 导入；日程要求只在指定日期首次成功生成后消费。</p></div></div><div class="life-actions"><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('generate_timeline')">生成追加草稿</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('regenerate_timeline')">生成替换草稿</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('import_timeline')">从要求框导入 JSON</button><button class="button secondary" :disabled="lifeBusy || !lifeInspection.draft" @click="lifeAction('approve_timeline')">批准草稿</button><button class="button ghost" :disabled="lifeBusy || !lifeInspection.draft" @click="lifeAction('reject_timeline')">拒绝 / 按意见重写</button></div><div class="field"><label>未来日期或区间</label><input type="text" v-model="lifeDateRange" placeholder="2026-12-01..2026-12-03"></div><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('add_requirement')">添加一次性日程要求</button><details v-if="lifeInspection.timeline || lifeInspection.draft"><summary>查看已批准阶段与待批准草稿</summary><pre class="life-json">{{ JSON.stringify({timeline:lifeInspection.timeline,draft:lifeInspection.draft,requirements:lifeInspection.requirements},null,2) }}</pre></details></div>
             <div class="glass-card"><div class="card-heading"><div><div class="section-kicker">Runtime</div><h2>运行与操作结果</h2><p>{{ lifeMessage || '配置保存在 AstrBot 数据目录；后台主动发送默认关闭。' }}</p></div><button class="button ghost" @click="refreshLife">刷新状态</button></div><div v-for="(task,id) in lifeTasks" :key="id" class="life-task"><strong>{{ task.action }} · {{ task.state }}</strong><p v-if="task.error">{{ task.error }}</p><template v-if="Array.isArray(task.result)"><template v-for="(part,idx) in task.result" :key="idx"><img v-if="part.type === 'image'" class="life-result-image" :src="part.src" alt="生活查询图片"><pre v-else class="life-json">{{ part.text }}</pre></template></template><pre v-else-if="task.result" class="life-json">{{ typeof task.result === 'object' ? JSON.stringify(task.result,null,2) : task.result }}</pre></div><details><summary>查看计划任务与最近 Jev 决策</summary><pre class="life-json">{{ JSON.stringify(lifeStatus,null,2) }}</pre></details></div>
           </div>
@@ -620,6 +669,13 @@
             lifeConfig: {}, lifeSchema: {}, lifeProviders: [], lifeStatus: {}, lifeTasks: {},
             lifeUmo: '', lifeActionText: '', lifeDateRange: '', lifeMessage: '', lifeBusy: false,
             appearancePersona: '', appearanceImages: [], appearanceDescription: '', appearancePersonaId: '', personaOptions: [], sessionOptions: [], sessionSearch: '', personaSearch: '', showSessionList: false, showPersonaList: false,
+            networkOpen: false, networkPersonaId: '', networkPersonaSearch: '', showNetworkPersonaList: false,
+            networkEnabled: false, networkCharacters: [], networkRelations: [], networkEvents: [],
+            networkStats: { characters: 0, relationships: 0, events: 0 }, networkBusy: false, networkMessage: '',
+            networkNewCharacter: { name: '', bio: '', personality: '' },
+            networkNewRelation: { source: 'persona', target: '', type: '', strength: 50 },
+            networkNewEvent: { participants: '', type: '', summary: '' },
+            billingOptions: [], billingPlatformList: [], billingUserSearch: '', showBillingUserList: false,
             lifeInspection: {}, aigenAvailable: false, lifePoll: null, lifeInspectTask: '', lifeAppliedTask: '',
             toolSearch: '',
             statusText: '加载中…',
@@ -693,6 +749,34 @@
           lifeConfigGroups() { const skip = new Set(['friend_settings', 'group_settings', 'personal_network_integration', 'appearance_settings']); return Object.fromEntries(Object.entries(this.lifeSchema || {}).filter(([key]) => !skip.has(key))); },
           filteredSessions() { const q = this.sessionSearch.trim().toLowerCase(); const rows = this.sessionOptions || []; if (!q) return rows.slice(0, 60); return rows.filter(row => `${row.title || ''} ${row.umo || ''} ${row.platform || ''} ${row.message_type || ''} ${row.persona_name || ''}`.toLowerCase().includes(q)).slice(0, 60); },
           filteredPersonas() { const q = this.personaSearch.trim().toLowerCase(); const rows = this.personaOptions || []; if (!q) return rows.slice(0, 60); return rows.filter(row => `${row.name || ''} ${row.id || ''}`.toLowerCase().includes(q)).slice(0, 60); },
+          filteredNetworkPersonas() { const q = this.networkPersonaSearch.trim().toLowerCase(); const rows = this.personaOptions || []; if (!q) return rows.slice(0, 60); return rows.filter(row => `${row.name || ''} ${row.id || ''}`.toLowerCase().includes(q)).slice(0, 60); },
+          filteredBillingAccounts() {
+            const q = this.billingUserSearch.trim().toLowerCase();
+            const rows = this.billingOptions || [];
+            const hit = q ? rows.filter(r => `${r.platform} ${r.user_id} ${r.label || ''}`.toLowerCase().includes(q)) : rows;
+            return hit.slice(0, 60);
+          },
+          // The billing account fields are dropdowns, so they are removed from
+          // the generic renderer and drawn explicitly in the media card.
+          mediaSettingsSchema() {
+            const items = this.lifeSchema?.media_settings?.items || {};
+            const skip = new Set(['proactive_billing_platform', 'proactive_billing_user_id']);
+            return Object.fromEntries(Object.entries(items).filter(([k]) => !skip.has(k)));
+          },
+          billingPlatforms() { return this.billingPlatformList || []; },
+          networkAdvancedUrl() {
+            try {
+              const path = String(window.location.pathname || '');
+              const index = path.lastIndexOf('/settings');
+              if (index >= 0) return `${path.slice(0, index)}/network/`;
+            } catch (e) { /* fall through */ }
+            return '/plugin/astrbot_plugin_decision/network/';
+          },
+          billingUserLabel() {
+            const media = this.lifeConfig?.media_settings;
+            if (!media || !media.proactive_billing_user_id) return this.billingUserSearch;
+            return media.proactive_billing_platform ? `${media.proactive_billing_platform} · ${media.proactive_billing_user_id}` : media.proactive_billing_user_id;
+          },
           toolsEnabled() { return this.toolsEnabledValue; },
           proactiveEnabled() { return this.proactiveEnabledValue; },
           flowEnabled() { return this.flowEnabledValue; },
@@ -721,19 +805,164 @@
           listText(group, key) { const value = this.lifeConfig?.[group]?.[key]; return Array.isArray(value) ? value.join('\n') : String(value || ''); },
           setScopeList(group, key, raw) { if (!this.lifeConfig[group]) return; this.lifeConfig[group][key] = String(raw || '').split('\n').map(item => item.trim()).filter(Boolean); },
           toggleScope(group) { const settings = this.lifeConfig?.[group]; if (settings) settings.session_blacklist = !settings.session_blacklist; },
-          hidePicker(kind) { if (kind === 'session') this.showSessionList = false; else this.showPersonaList = false; },
+          hidePicker(kind) { if (kind === 'session') this.showSessionList = false; else if (kind === 'billingUser') this.showBillingUserList = false; else if (kind === 'networkPersona') this.showNetworkPersonaList = false; else this.showPersonaList = false; },
+          onBillingUserInput(raw) { this.billingUserSearch = String(raw || ''); this.showBillingUserList = true; },
+          pickBillingAccount(row) {
+            this.showBillingUserList = false;
+            if (!this.lifeConfig.media_settings) this.lifeConfig.media_settings = {};
+            this.lifeConfig.media_settings.proactive_billing_user_id = row.user_id;
+            if (row.platform) this.lifeConfig.media_settings.proactive_billing_platform = row.platform;
+            this.billingUserSearch = '';
+            this.lifeMessage = `主动发起将记到 ${row.platform} / ${row.user_id}（余额 ${row.amount}）。`;
+          },
           onSessionInput(raw) { const value = String(raw || ''); this.sessionSearch = value; this.showSessionList = true; const trimmed = value.trim(); this.lifeUmo = this.sessionOptions.some(row => row.umo === trimmed) ? trimmed : (/\S+:\S+:\S+/.test(trimmed) ? trimmed : ''); },
           pickSession(row) { this.showSessionList = false; this.sessionSearch = row.title || row.umo; this.lifeUmo = row.umo; },
           async pickPersona(row) { this.showPersonaList = false; this.personaSearch = row.name || row.id; this.appearancePersonaId = row.id; await this.loadAppearance(row.id); },
-          networkPageUrl() {
-            try {
-              const path = String(window.location.pathname || ''); const marker = '/settings';
-              const index = path.lastIndexOf(marker);
-              if (index >= 0) return `${path.slice(0, index)}/network/`;
-            } catch(e) { /* fall through to the known plugin path */ }
-            return '/plugin/astrbot_plugin_decision/network/';
+          toggleNetworkPanel() {
+            this.networkOpen = !this.networkOpen;
+            if (this.networkOpen && !this.networkPersonaId && this.appearancePersonaId) {
+              this.networkPersonaId = this.appearancePersonaId;
+              this.networkPersonaSearch = this.appearancePersonaId;
+            }
+            if (this.networkOpen && this.networkPersonaId) this.reloadNetwork();
           },
-          openNetworkPage() { window.open(this.networkPageUrl(), '_blank'); },
+          pickNetworkPersona(row) {
+            this.showNetworkPersonaList = false;
+            this.networkPersonaSearch = row.name || row.id;
+            this.networkPersonaId = row.id;
+            this.reloadNetwork();
+          },
+          networkNameOf(id) {
+            const row = (this.networkCharacters || []).find(c => c.id === id);
+            return row ? row.name : (id || '').slice(0, 8);
+          },
+          async reloadNetwork() {
+            if (!this.networkPersonaId) return;
+            this.networkBusy = true;
+            try {
+              const bridge = await waitForBridge();
+              const result = payloadOf(await bridge.apiGet('network/network', { persona_id: this.networkPersonaId }));
+              this.networkCharacters = Array.isArray(result.characters) ? result.characters : [];
+              this.networkRelations = Array.isArray(result.relationships) ? result.relationships : [];
+              this.networkEvents = Array.isArray(result.life_events) ? result.life_events : [];
+              this.networkEnabled = !!(result.network && result.network.enabled);
+              this.networkStats = {
+                characters: this.networkCharacters.filter(c => !c.is_persona).length,
+                relationships: this.networkRelations.length,
+                events: this.networkEvents.length,
+              };
+              this.networkMessage = '';
+            } catch (e) {
+              this.networkMessage = `读取人际网络失败：${e.message || e}`;
+            } finally { this.networkBusy = false; }
+          },
+          async toggleNetworkEnabled(value) {
+            if (!this.networkPersonaId) return;
+            this.networkBusy = true;
+            try {
+              const bridge = await waitForBridge();
+              await bridge.apiPost('network/network/enabled', { persona_id: this.networkPersonaId, enabled: value === true });
+              this.networkEnabled = value === true;
+              this.networkMessage = value ? '已启用该人格的人际网络。' : '已停用该人格的人际网络。';
+            } catch (e) { this.networkMessage = `切换失败：${e.message || e}`; }
+            finally { this.networkBusy = false; }
+          },
+          async addNetworkCharacter() {
+            const form = this.networkNewCharacter;
+            if (!this.networkPersonaId || !form.name.trim()) return;
+            this.networkBusy = true;
+            try {
+              const bridge = await waitForBridge();
+              await bridge.apiPost('network/character/save', {
+                persona_id: this.networkPersonaId, name: form.name.trim(),
+                bio: form.bio || '', personality: form.personality || '',
+                alias_usages: [], preferences: [], facts: [], notes: '',
+              });
+              this.networkNewCharacter = { name: '', bio: '', personality: '' };
+              this.networkMessage = '人物已保存。';
+              await this.reloadNetwork();
+            } catch (e) { this.networkMessage = `保存人物失败：${e.message || e}`; }
+            finally { this.networkBusy = false; }
+          },
+          async removeNetworkCharacter(row) {
+            if (!this.networkPersonaId || row.is_persona) return;
+            this.networkBusy = true;
+            try {
+              const bridge = await waitForBridge();
+              await bridge.apiPost('network/character/delete', { persona_id: this.networkPersonaId, character_id: row.id });
+              this.networkMessage = '人物已删除。';
+              await this.reloadNetwork();
+            } catch (e) { this.networkMessage = `删除失败：${e.message || e}`; }
+            finally { this.networkBusy = false; }
+          },
+          async addNetworkRelation() {
+            const form = this.networkNewRelation;
+            if (!this.networkPersonaId || !form.target.trim() || !form.type.trim()) return;
+            this.networkBusy = true;
+            try {
+              const bridge = await waitForBridge();
+              await bridge.apiPost('network/relationship/save', {
+                persona_id: this.networkPersonaId, source: form.source || 'persona',
+                target: form.target.trim(), type: form.type.trim(),
+                strength: Number(form.strength) || 0, status: 'active', description: '',
+              });
+              this.networkNewRelation = { source: 'persona', target: '', type: '', strength: 50 };
+              this.networkMessage = '关系已保存。';
+              await this.reloadNetwork();
+            } catch (e) { this.networkMessage = `保存关系失败：${e.message || e}`; }
+            finally { this.networkBusy = false; }
+          },
+          async removeNetworkRelation(row) {
+            if (!this.networkPersonaId) return;
+            this.networkBusy = true;
+            try {
+              const bridge = await waitForBridge();
+              await bridge.apiPost('network/relationship/delete', { persona_id: this.networkPersonaId, relationship_id: row.id });
+              this.networkMessage = '关系已删除。';
+              await this.reloadNetwork();
+            } catch (e) { this.networkMessage = `删除失败：${e.message || e}`; }
+            finally { this.networkBusy = false; }
+          },
+          async addNetworkEvent() {
+            const form = this.networkNewEvent;
+            if (!this.networkPersonaId || !form.summary.trim()) return;
+            this.networkBusy = true;
+            try {
+              const bridge = await waitForBridge();
+              const names = String(form.participants || '').split(/[,，、]/).map(s => s.trim()).filter(Boolean);
+              await bridge.apiPost('network/life-event/save', {
+                persona_id: this.networkPersonaId,
+                occurred_at: new Date().toISOString(),
+                type: form.type || '共同经历',
+                participants: names,
+                summary: form.summary.trim(),
+                importance: 50, emotional_tone: '',
+              });
+              this.networkNewEvent = { participants: '', type: '', summary: '' };
+              this.networkMessage = '经历已保存。';
+              await this.reloadNetwork();
+            } catch (e) { this.networkMessage = `保存经历失败：${e.message || e}`; }
+            finally { this.networkBusy = false; }
+          },
+          async removeNetworkEvent(row) {
+            if (!this.networkPersonaId) return;
+            this.networkBusy = true;
+            try {
+              const bridge = await waitForBridge();
+              await bridge.apiPost('network/life-event/delete', { persona_id: this.networkPersonaId, event_id: row.id });
+              this.networkMessage = '经历已删除。';
+              await this.reloadNetwork();
+            } catch (e) { this.networkMessage = `删除失败：${e.message || e}`; }
+            finally { this.networkBusy = false; }
+          },
+          async loadBillingOptions() {
+            try {
+              const bridge = await waitForBridge();
+              const result = payloadOf(await bridge.apiGet('life/billing'));
+              this.billingOptions = Array.isArray(result.accounts) ? result.accounts : [];
+              this.billingPlatformList = Array.isArray(result.platforms) ? result.platforms : [];
+            } catch (e) { this.lifeMessage = `计费账户列表读取失败：${e.message || e}`; }
+          },
           async loadAppearance(personaId) {
             const target = String(personaId || '').trim();
             if (!target) { this.appearanceImages = []; this.appearanceDescription = ''; return; }
@@ -753,6 +982,7 @@
               if (running) this.lifePoll = setTimeout(() => this.refreshLife(), 2000);
             } catch(e) { this.lifeMessage = `读取后台状态失败：${e.message || e}`; }
             await this.refreshOptions();
+            await this.loadBillingOptions();
           },
           async inspectLife() {
             if (!this.lifeUmo.trim()) { this.lifeMessage = '请先选择会话或填写完整会话 UMO。'; return; }
@@ -964,6 +1194,7 @@
               const incoming = settings.dialogue_enhancement || {}; this.form.dialogue_enhancement = {...this.form.dialogue_enhancement, ...incoming}; this.form.dialogue_enhancement.conversation_flow_scope = (incoming.conversation_flow_scope || []).join('\n'); this.form.dialogue_enhancement.output_scope = (incoming.output_scope || []).join('\n'); if (incoming.output_pipeline) this.form.dialogue_enhancement.output_pipeline = incoming.output_pipeline;
               this.toolsEnabledValue = settings.tools_subagents_decision_enabled !== false; this.proactiveEnabledValue = settings.proactive_reply_enabled === true; this.flowEnabledValue = settings.conversation_flow_enabled !== false; this.loaded = true; this.statusText = `已加载 ${this.tools.length} 个能力`; this.syncThresholdGlass();
               await this.refreshOptions();
+              await this.loadBillingOptions();
               const personaId = String(this.appearancePersonaId || this.lifeConfig?.appearance_settings?.persona_id || '').trim();
               if (personaId) { this.appearancePersonaId = personaId; this.personaSearch = personaId; await this.loadAppearance(personaId); }
             } catch (e) { this.statusText = `加载失败：${e.message || e}`; this.saveState = 'error'; }
