@@ -102,6 +102,98 @@ def host(monkeypatch, tmp_path):
     )
 
 
+def test_life_tasks_payload_drops_base64_images(host):
+    """The polled /life payload must not resend every past screenshot."""
+
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    plugin._life_jobs = {
+        "a": {
+            "state": "done",
+            "action": "render_schedule",
+            "umo": "qq:FriendMessage:1",
+            "result": [
+                {"type": "text", "text": "标题"},
+                {"type": "image", "src": "data:image/png;base64," + "A" * 4000},
+            ],
+        },
+        "b": {"state": "done", "result": [{"type": "text", "text": "ok"}]},
+        "c": {"state": "done", "result": {"sent": True, "reason": "ok"}},
+        "d": {"state": "running", "action": "generate"},
+    }
+    payload = plugin._life_tasks_payload()
+
+    assert payload["a"]["image_count"] == 1
+    assert payload["a"]["result"] == [{"type": "text", "text": "标题"}]
+    assert payload["a"]["umo"] == "qq:FriendMessage:1"
+    assert "base64" not in repr(payload)
+    assert payload["b"]["result"] == [{"type": "text", "text": "ok"}]
+    assert "image_count" not in payload["b"]
+    assert payload["c"]["result"] == {"sent": True, "reason": "ok"}
+    assert "result" not in payload["d"]
+    assert payload["d"]["action"] == "generate"
+
+
+def test_life_job_reservation_refuses_without_registering(host):
+    """A 429 must not leave a half-added entry behind."""
+
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    plugin._life_job_limit = 3
+    plugin._life_jobs = {f"id{i}": {"state": "running"} for i in range(3)}
+
+    assert plugin._reserve_life_job("new", "inspect", "qq:FriendMessage:1") is False
+    assert set(plugin._life_jobs) == {"id0", "id1", "id2"}
+
+
+def test_life_job_reservation_evicts_a_finished_job(host):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    plugin._life_job_limit = 3
+    plugin._life_jobs = {
+        "done1": {"state": "done"},
+        "error1": {"state": "error"},
+        "running": {"state": "running"},
+    }
+
+    assert plugin._reserve_life_job("new", "inspect", "qq:FriendMessage:1") is True
+    assert "new" in plugin._life_jobs
+    assert "running" in plugin._life_jobs
+    assert len(plugin._life_jobs) == plugin._life_job_limit
+    # Only the first finished job had to go; the other one is still under budget.
+    evicted = {"done1", "error1"} - set(plugin._life_jobs)
+    assert len(evicted) == 1, evicted
+
+
+def test_life_job_reservation_grows_below_the_limit(host):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    plugin._life_job_limit = 5
+    assert plugin._reserve_life_job("a", "inspect", "qq:FriendMessage:1") is True
+    assert plugin._life_jobs["a"] == {
+        "state": "running",
+        "action": "inspect",
+        "umo": "qq:FriendMessage:1",
+    }
+
+
+def test_life_job_limit_evicts_a_finished_job_first(host):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    plugin._life_job_limit = 3
+    plugin._life_jobs = {
+        "done1": {"state": "done"},
+        "done2": {"state": "error"},
+        "running": {"state": "running"},
+    }
+    # Simulate the eviction loop exactly as the endpoint runs it.
+    while len(plugin._life_jobs) >= plugin._life_job_limit:
+        removable = next(
+            (k for k, v in plugin._life_jobs.items() if v["state"] != "running"), None
+        )
+        assert removable is not None
+        plugin._life_jobs.pop(removable, None)
+    plugin._life_jobs["new"] = {"state": "running"}
+    assert "running" in plugin._life_jobs
+    assert "new" in plugin._life_jobs
+    assert len(plugin._life_jobs) == plugin._life_job_limit
+
+
 def test_native_schema_contains_only_globals_and_module_switches(host):
     assert set(host.schema) == {
         "provider",

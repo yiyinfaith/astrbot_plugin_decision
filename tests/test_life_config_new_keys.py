@@ -135,10 +135,26 @@ def test_billing_accepts_a_real_account():
     assert result["media_settings"]["proactive_billing_platform"] == "aiocqhttp"
 
 
-def test_scope_mode_defaults_to_whitelist():
+def test_scope_mode_defaults_to_blacklist():
+    """An empty list must mean "every conversation", not "nobody"."""
+
     defaults = life_defaults()
-    assert defaults["friend_settings"]["session_blacklist"] is False
-    assert defaults["group_settings"]["session_blacklist"] is False
+    assert defaults["friend_settings"]["session_blacklist"] is True
+    assert defaults["group_settings"]["session_blacklist"] is True
+    assert defaults["friend_settings"]["session_list"] == []
+
+
+def test_group_cooldown_does_not_exceed_its_idle_ceiling():
+    """A cooldown above idle_max would make the idle window unreachable."""
+
+    group = life_defaults()["group_settings"]
+    assert group["cooldown_minutes"] <= group["idle_max_minutes"]
+
+
+def test_sleep_skips_quiet_defaults_to_on():
+    delivery = life_defaults()["delivery_settings"]
+    assert delivery["sleep_skips_quiet"] is True
+    assert delivery["sleep_exception_probability"] > 0
 
 
 @pytest.mark.parametrize(

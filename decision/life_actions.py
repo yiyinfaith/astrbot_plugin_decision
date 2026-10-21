@@ -5,6 +5,19 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
+# Human-readable explanations for the runtime's short reason codes, so the WebUI
+# never shows a bare English token to the operator.
+REASON_TEXT = {
+    "disabled": "主动发起未启用（私聊主动与群聊主动都关闭了）。",
+    "quiet hours": "当前处于免打扰时段。",
+    "platform offline": "平台连续失败后暂停中，请稍后再试。",
+    "schedule unavailable": "今天还没有生成日程，请先点“生成今日内容”。",
+    "agent task active": "该会话正在处理另一条 Agent 任务，请稍后再试。",
+    "conversation is not idle enough": "会话刚有互动，暂不打扰。",
+    "request failed": "生成或发送时出错，详见运行结果。",
+    "Jev 未通过或候选已失效": "Jev 判断此刻不适合发起，或候选已过期。",
+}
+
 
 class AdminView:
     def __init__(self, umo):
@@ -57,7 +70,9 @@ async def perform_life_action(runtime, umo, action, text="", date_range=""):
         return {
             "sent": sent,
             "reason": reason,
-            "message": "已主动发起一条消息。" if sent else f"本次没有发送：{reason}",
+            "message": "已主动发起一条消息。"
+            if sent
+            else f"本次没有发送：{REASON_TEXT.get(reason, reason)}",
         }
     dispatch = {
         "generate": (runtime.rewrite_schedule, (event, text)),

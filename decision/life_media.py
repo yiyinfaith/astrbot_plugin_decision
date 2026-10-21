@@ -303,6 +303,8 @@ class LifeMedia:
         self.locks: dict[str, asyncio.Lock] = {}
         self.last_call: dict[str, float] = {}
         self.usage_lock = asyncio.Lock()
+        # platform -> [(platform, user_id)], richest first; "" is the fallback.
+        self._billing_cache: dict[str, list[tuple[str, str]]] = {}
 
     def aigen(self, kind: str | None = None):
         getter = getattr(self.owner.context, "get_all_stars", None)
@@ -570,20 +572,72 @@ class LifeMedia:
         if not event.get_extra("decision_life_proactive", False):
             return proxy
         user_id = str(settings.get("proactive_billing_user_id", "") or "").strip()
-        if not user_id:
-            return proxy
         platform = str(settings.get("proactive_billing_platform", "") or "").strip()
         if not platform:
             try:
                 platform = str(proxy.get_platform_name() or "").strip()
             except (AttributeError, TypeError):
                 platform = ""
+        if not user_id:
+            # Empty configuration used to fall through to aigen's default, which
+            # charges the session id — in groups that is the group number, an
+            # account with no balance, so every paid model was refused. Fall back
+            # to the richest account in aigen's ledger instead.
+            account = self._default_billing_account(platform)
+            if account is None:
+                return proxy
+            platform, user_id = account
         if not platform:
             return proxy
         logger.info(
             "Decision Engine 主动发起多媒体按固定账户计费：%s / %s", platform, user_id
         )
         return BillingEvent(proxy, platform, user_id)
+
+    def _default_billing_account(self, platform: str) -> tuple[str, str] | None:
+        """Pick the best account from aigen's ledger, or None when unknown.
+
+        The ledger is a small SQLite file owned by aigen, so it is opened
+        read-only and any failure simply leaves aigen's behaviour untouched.
+        """
+
+        cache = getattr(self, "_billing_cache", None)
+        if cache is None:
+            return None
+        accounts = cache.get(platform) if platform else None
+        if not accounts:
+            accounts = cache.get("")
+        if not accounts:
+            return None
+        return accounts[0]
+
+    def refresh_billing_accounts(self, accounts) -> None:
+        """Index aigen's ledger accounts by platform, richest first.
+
+        ``accounts`` is the list the WebUI already receives from ``life/billing``
+        so the picker and the runtime fallback cannot disagree.
+        """
+
+        index: dict[str, list[tuple[str, str]]] = {}
+        for row in accounts or ():
+            if not isinstance(row, dict):
+                continue
+            platform = str(row.get("platform") or "").strip()
+            user_id = str(row.get("user_id") or "").strip()
+            if not user_id:
+                continue
+            try:
+                amount = int(row.get("amount") or 0)
+            except (TypeError, ValueError):
+                amount = 0
+            if amount <= 0:
+                continue
+            index.setdefault(platform, []).append((platform, user_id, amount))
+            index.setdefault("", []).append((platform, user_id, amount))
+        self._billing_cache = {
+            key: [(p, u) for p, u, _ in sorted(rows, key=lambda r: -r[2])]
+            for key, rows in index.items()
+        }
 
     def _call_kwargs(self, settings, kind, event, prompt, count, audio_text=""):
         if kind == "photo":

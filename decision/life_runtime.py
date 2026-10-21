@@ -140,6 +140,8 @@ class LifeRuntime(VirtualLifeBase):
         self._loaded = False
         # Sessions currently in a manual (administrator-triggered) delivery.
         self._manual_umos: set[str] = set()
+        # Sessions currently delivering an opt-in sleep wake-up.
+        self._sleep_umos: set[str] = set()
 
     def spawn(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -372,15 +374,30 @@ class LifeRuntime(VirtualLifeBase):
     def _is_manual(self, umo) -> bool:
         return str(umo) in self._manual_sessions()
 
+    def _sleep_sessions(self) -> set[str]:
+        return getattr(self, "_sleep_umos", set())
+
+    def _quiet_exempt(self, umo) -> bool:
+        """True when this delivery may ignore quiet hours.
+
+        Manual triggers and the opt-in sleep wake-up both need this, and both
+        the entry guard and the pre-send commit check must agree on it.
+        """
+
+        if self._is_manual(umo):
+            return True
+        if str(umo) not in self._sleep_sessions():
+            return False
+        return bool(self.config["delivery_settings"].get("sleep_skips_quiet", True))
+
     def can_commit(self, umo, generation):
-        # A manual request bypasses the scope list and quiet hours for the rest
-        # of this delivery, which is what makes the administrator button work
-        # outside the whitelist.
+        # A manual request bypasses the scope list; a sleep wake-up keeps the
+        # scope check but may bypass quiet hours when that switch is on.
         manual = self._is_manual(umo)
         return (
             self.enabled
             and (manual or self.policy.is_enabled(umo))
-            and (manual or not self._quiet())
+            and (self._quiet_exempt(umo) or not self._quiet())
             and self._conversation_generation(umo) == generation
             and time.monotonic() <= self.deadlines.get(umo, 0)
         )
@@ -401,7 +418,14 @@ class LifeRuntime(VirtualLifeBase):
         # instruction: skip the scope list, quiet hours and the budget/cooldown
         # guardrails, while still requiring a schedule and a usable platform.
         manual = trigger == "manual"
-        if not manual and self._quiet():
+        # A sleep wake-up schedule always lands inside quiet hours, so the
+        # dedicated switch is the only way that feature can ever fire.
+        if trigger == "sleep" and bool(
+            self.config["delivery_settings"].get("sleep_skips_quiet", True)
+        ):
+            self._sleep_sessions().add(umo)
+        skip_quiet = manual or self._quiet_exempt(umo)
+        if not skip_quiet and self._quiet():
             self._schedule_idle(umo, run_at=self._now() + timedelta(minutes=30))
             return False, "quiet hours"
         platform_id = umo.split(":", 1)[0]
@@ -447,6 +471,7 @@ class LifeRuntime(VirtualLifeBase):
                     )
                 finally:
                     self._manual_sessions().discard(umo)
+                    self._sleep_sessions().discard(umo)
                 return delivered, "sent" if delivered else "Jev 未通过或候选已失效"
         except Exception as exc:
             failures += 1

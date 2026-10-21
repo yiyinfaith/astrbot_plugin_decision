@@ -63,6 +63,20 @@ PLUGIN_NAME = "astrbot_plugin_decision"
 PLUGIN_DISPLAY_NAME = "jev决策综合插件"
 _ON_DECORATING_RESULT = getattr(filter, "on_decorating_result", None)
 DEFAULT_TOOL_NOUL_THRESHOLD = 0.65
+# Life actions that mutate the plan, after which the WebUI wants a fresh read.
+INSPECT_AFTER_ACTIONS = frozenset(
+    {
+        "generate",
+        "rewrite_schedule",
+        "rewrite_outfit",
+        "generate_timeline",
+        "regenerate_timeline",
+        "import_timeline",
+        "approve_timeline",
+        "reject_timeline",
+        "add_requirement",
+    }
+)
 PROACTIVE_PAGE_DEFAULTS: dict[str, Any] = {
     "proactive_whitelist": [],
     "proactive_scope_blacklist": False,
@@ -189,6 +203,10 @@ class DecisionPlugin(Star):
         self._life_lock = asyncio.Lock()
         self._life_asset_lock = asyncio.Lock()
         self._life_jobs: dict[str, dict[str, Any]] = {}
+        # Track the background WebUI jobs so a hot reload can cancel them instead
+        # of leaving orphaned tasks mutating a dead runtime.
+        self._life_tasks: set[asyncio.Task] = set()
+        self._life_job_limit = 20
         self.proactive = ProactiveState(
             self._int("proactive_history_max_messages", 12),
             self._int("proactive_max_sessions", 500),
@@ -600,6 +618,16 @@ class DecisionPlugin(Star):
         )
 
     async def terminate(self) -> None:
+        # Cancel WebUI jobs first: they hold the runtime and would otherwise keep
+        # mutating a runtime that is about to be torn down.
+        pending = [task for task in self._life_tasks if not task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._life_tasks.clear()
+        self._life_jobs.clear()
+        self._life_media = None
         if self._life_runtime is not None:
             await self._life_runtime.terminate()
             self._life_runtime = None
@@ -2540,6 +2568,54 @@ class DecisionPlugin(Star):
             yield event.plain_result("已发起。" if sent else f"本次未发起：{reason}")
         event.stop_event()
 
+    def _reserve_life_job(self, ident: str, action: str, umo: str) -> bool:
+        """Register a new WebUI job, evicting finished ones first.
+
+        Returns False when every retained job is still running, so the caller can
+        answer 429 without leaving a half-registered entry behind.
+        """
+
+        while len(self._life_jobs) >= self._life_job_limit:
+            removable = next(
+                (key for key, value in self._life_jobs.items() if value["state"] != "running"),
+                None,
+            )
+            if removable is None:
+                return False
+            self._life_jobs.pop(removable, None)
+        self._life_jobs[ident] = {"state": "running", "action": action, "umo": umo}
+        return True
+
+    def _life_tasks_payload(self) -> dict[str, dict[str, Any]]:
+        """Serialise recent life jobs without the embedded base64 images.
+
+        ``/life`` is polled every two seconds while a job runs. Returning the raw
+        results meant re-sending every past screenshot on each poll (tens of MB
+        once a few render jobs had accumulated), so images are reported as a
+        count and only text parts are kept.
+        """
+
+        payload: dict[str, dict[str, Any]] = {}
+        for ident, job in self._life_jobs.items():
+            entry = {key: value for key, value in job.items() if key != "result"}
+            result = job.get("result")
+            if isinstance(result, list):
+                texts = [
+                    part for part in result
+                    if isinstance(part, Mapping) and part.get("type") == "text"
+                ]
+                images = sum(
+                    1 for part in result
+                    if isinstance(part, Mapping) and part.get("type") == "image"
+                )
+                entry["result"] = texts
+                if images:
+                    entry["image_count"] = images
+            elif result is not None:
+                entry["result"] = result
+            payload[ident] = entry
+        return payload
+
     async def page_life(self):
         from astrbot.api.web import json_response
 
@@ -2560,7 +2636,7 @@ class DecisionPlugin(Star):
                 "status": self._life_runtime.status()
                 if self._life_runtime
                 else {"enabled": False, "jobs": [], "audit": [], "sessions": {}},
-                "tasks": self._life_jobs,
+                "tasks": self._life_tasks_payload(),
                 "aigen_available": self._get_life_media().aigen() is not None,
             }
         )
@@ -2746,6 +2822,12 @@ class DecisionPlugin(Star):
         platforms.sort(key=lambda item: item["id"].casefold())
 
         accounts = await self._aigen_billing_accounts()
+        # Keep the runtime fallback in sync with what the picker shows, so an
+        # unset account can never disagree with the visible list.
+        try:
+            self._get_life_media().refresh_billing_accounts(accounts)
+        except Exception as exc:
+            logger.debug("Decision Engine 同步计费账户失败：%s", _safe_error(exc))
         return json_response({"platforms": platforms, "accounts": accounts})
 
     async def _aigen_billing_accounts(self) -> list[dict[str, Any]]:
@@ -2897,20 +2979,16 @@ class DecisionPlugin(Star):
         import uuid
 
         ident = uuid.uuid4().hex
-        self._life_jobs[ident] = {"state": "running", "action": action, "umo": umo}
-        while len(self._life_jobs) > 30:
-            removable = next(
-                (key for key, value in self._life_jobs.items() if value["state"] != "running"), None
-            )
-            if removable is None:
-                self._life_jobs.pop(ident, None)
-                return error_response("已有太多后台操作，请稍后再试", status_code=429)
-            self._life_jobs.pop(removable)
+        if not self._reserve_life_job(ident, action, umo):
+            return error_response("已有太多后台操作，请稍后再试", status_code=429)
 
         async def run():
             try:
                 from .decision.life_actions import perform_life_action
 
+                # The inspect that follows a mutation must run under the same
+                # lock, otherwise a concurrent action can write a plan between
+                # the mutation and its read-back and the UI shows stale state.
                 async with runtime.action_lock:
                     value = await perform_life_action(
                         runtime,
@@ -2919,28 +2997,28 @@ class DecisionPlugin(Star):
                         str(payload.get("text", ""))[:50000],
                         str(payload.get("date_range", "")),
                     )
-                self._life_jobs[ident].update(state="done", result=value)
-                if action in {
-                    "generate",
-                    "rewrite_schedule",
-                    "rewrite_outfit",
-                    "generate_timeline",
-                    "regenerate_timeline",
-                    "import_timeline",
-                    "approve_timeline",
-                    "reject_timeline",
-                    "add_requirement",
-                }:
-                    self._life_jobs[ident]["inspection"] = await perform_life_action(
-                        runtime, umo, "inspect"
-                    )
+                    inspection = None
+                    if action in INSPECT_AFTER_ACTIONS:
+                        inspection = await perform_life_action(runtime, umo, "inspect")
+                job = self._life_jobs.get(ident)
+                if job is not None:
+                    job.update(state="done", result=value)
+                    if inspection is not None:
+                        job["inspection"] = inspection
             except asyncio.CancelledError:
-                self._life_jobs[ident].update(state="cancelled")
+                job = self._life_jobs.get(ident)
+                if job is not None:
+                    job.update(state="cancelled")
                 raise
             except Exception as exc:
-                self._life_jobs[ident].update(state="error", error=_safe_error(exc))
+                job = self._life_jobs.get(ident)
+                if job is not None:
+                    job.update(state="error", error=_safe_error(exc))
 
-        runtime.spawn(run())
+        task = runtime.spawn(run())
+        if isinstance(task, asyncio.Task):
+            self._life_tasks.add(task)
+            task.add_done_callback(self._life_tasks.discard)
         return json_response({"task_id": ident})
 
     async def page_settings(self):

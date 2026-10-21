@@ -534,8 +534,8 @@
       "session_blacklist": {
         "description": "名单模式",
         "type": "bool",
-        "hint": "关闭为白名单：只有名单内会话会主动发起，名单为空时全部不发起。开启为黑名单：名单内会话不主动发起，名单为空时全部发起。",
-        "default": false
+        "hint": "关闭为白名单：只有名单内会话会主动发起，名单为空时全部不发起。开启为黑名单（默认）：名单内会话不主动发起，名单为空时全部发起。",
+        "default": true
       },
       "session_list": {
         "description": "私聊会话名单",
@@ -600,8 +600,8 @@
       "session_blacklist": {
         "description": "名单模式",
         "type": "bool",
-        "hint": "关闭为白名单：只有名单内会话会主动发起，名单为空时全部不发起。开启为黑名单：名单内会话不主动发起，名单为空时全部发起。",
-        "default": false
+        "hint": "关闭为白名单：只有名单内会话会主动发起，名单为空时全部不发起。开启为黑名单（默认）：名单内会话不主动发起，名单为空时全部发起。",
+        "default": true
       },
       "session_list": {
         "description": "群聊会话名单",
@@ -625,7 +625,7 @@
         "description": "发送冷却",
         "type": "int",
         "hint": "两次非委托主动消息之间的最短间隔，单位为分钟。",
-        "default": 180
+        "default": 60
       },
       "daily_budget_min": {
         "description": "日预算下限",
@@ -668,6 +668,12 @@
         "type": "float",
         "hint": "每个会话每天在睡眠中触发一次异常主动消息的概率，范围 0-1。",
         "default": 0.08
+      },
+      "sleep_skips_quiet": {
+        "description": "睡眠偶发唤醒跳过免打扰",
+        "type": "bool",
+        "hint": "睡眠时段必然落在免打扰区间内。开启后，这类偶发唤醒不再被免打扰拦下（其它类型的主动发起仍然遵守）。",
+        "default": true
       },
       "minimum_idle_for_window_minutes": {
         "description": "窗口最短沉默",
@@ -976,7 +982,7 @@
       "proactive_billing_user_id": {
         "description": "固定账户用户 ID",
         "type": "string",
-        "hint": "仅“固定账户”生效。填 aigen 记账用的用户 ID（通常是机器人主人的 QQ 号）。留空则保持 aigen 默认行为。这个账户的余额会被主动发起消耗。",
+        "hint": "仅“固定账户”生效。填 aigen 记账用的用户 ID（通常是机器人主人）。留空时会自动选用 aigen 账本中余额最高的账户，避免群聊主动发起把账记到不存在的群号上。",
         "default": ""
       },
       "photo_probability": {
