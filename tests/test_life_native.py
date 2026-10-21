@@ -153,6 +153,9 @@ def native(tmp_path, monkeypatch):
     settings = life_defaults()
     settings["integration_settings"].update(quiet_start="00:00", quiet_end="00:00")
     settings["friend_settings"]["session_list"] = [UMO]
+    # The default is blacklist mode, where a listed session is excluded; these
+    # tests want the opposite (only UMO participates), so be explicit.
+    settings["friend_settings"]["session_blacklist"] = False
     settings["delivery_settings"]["availability_probabilities"] = {
         key: 1.0 for key in ("high", "normal", "low", "blocked")
     }
@@ -462,7 +465,9 @@ async def test_group_chatter_does_not_reset_unanswered(native):
     from astrbot.core.platform.message_type import MessageType
 
     umo = "qq:GroupMessage:9"
-    native.runtime.config["group_settings"].update(enable=True, session_list=[umo])
+    native.runtime.config["group_settings"].update(
+        enable=True, session_list=[umo], session_blacklist=False
+    )
     state = native.runtime.policy.ensure_state(umo, "alice", native.plan, native.runtime._now())
     state.unanswered_count = 2
     event = CronMessageEvent(
