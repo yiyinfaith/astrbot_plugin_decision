@@ -454,9 +454,9 @@
               <p v-if="!appearancePersonaId" class="hint">请先在上方选择一个目标人格，再上传参考图。</p>
             </div></details>
             <details class="glass-card life-config-section"><summary><span>人际网络</span><small>默认收起 · 点击展开</small></summary><div v-if="lifeConfig.personal_network_integration && lifeSchema.personal_network_integration" class="collapsible-body">
-              <div class="card-heading"><div><div class="section-kicker">Personal Network</div><p>人际网络已并入本插件，无需再安装 astrbot_plugin_personal_network。关系上下文会按下方设置注入对话，虚拟生活生成新人物时也走同一份数据。</p></div><button class="button secondary" type="button" :aria-expanded="networkOpen ? 'true' : 'false'" @click="toggleNetworkPanel">{{ networkOpen ? '收起管理' : '展开管理' }}</button></div>
+              <div class="card-heading"><div><div class="section-kicker">Personal Network</div><p>人际网络已并入本插件，无需再安装 astrbot_plugin_personal_network。关系上下文会按下方设置注入对话，虚拟生活生成新人物时也走同一份数据。</p></div></div>
               <life-settings :schema="lifeSchema.personal_network_integration.items" :value="lifeConfig.personal_network_integration" :providers="lifeProviders"></life-settings>
-              <div v-if="networkOpen" class="network-manager">
+              <div class="network-manager">
                 <div class="network-bar">
                   <div class="field"><label>目标人格 <span>可搜索选择</span></label><div class="life-picker"><input type="text" v-model="networkPersonaSearch" placeholder="搜索人格 ID" autocomplete="off" aria-label="人际网络人格" @focus="showNetworkPersonaList = true" @input="showNetworkPersonaList = true" @keydown.esc="showNetworkPersonaList = false" @blur="hidePicker('networkPersona')"><div v-if="showNetworkPersonaList" class="life-picker-list"><button v-for="row in filteredNetworkPersonas" :key="row.id" type="button" :class="{active: row.id === networkPersonaId}" @mousedown.prevent="pickNetworkPersona(row)"><strong>{{ row.name || row.id }}</strong><small>{{ row.id }}</small></button><div v-if="!filteredNetworkPersonas.length" class="life-picker-empty">没有匹配的人格。</div></div></div></div>
                   <div class="network-bar-actions"><div class="switch-copy"><strong>该人格的人际网络</strong><small>{{ networkEnabled ? '已启用：写入关系上下文并记录日程经历' : '已停用：只保留数据，不注入也不记录' }}</small></div><label class="switch"><input type="checkbox" aria-label="启用该人格的人际网络" :checked="networkEnabled" :disabled="!networkPersonaId" @change="toggleNetworkEnabled($event.target.checked)"><span class="switch-track"></span></label></div>
@@ -494,7 +494,6 @@
                   <p class="hint">上面的增删改都在本页完成。关系图视图、批量生成、头像与导入导出仍在独立页面：<a :href="networkAdvancedUrl" target="_blank" rel="noopener">打开关系图与高级工具</a>。</p>
                 </template>
               </div>
-              <p v-else class="hint">展开管理后可直接维护人物、关系与共同经历，无需跳转其它页面。</p>
             </div></details>
             </div>
             <div class="life-config-grid"><details v-for="(group,key) in lifeConfigGroups" :key="key" class="glass-card life-config-section" ><summary><span>{{ cleanLifeLabel(group.description || key) }}</span><small>{{ Object.keys(group.items || {}).length }} 项设置</small></summary><template v-if="key === 'media_settings' && lifeConfig[key]"><life-settings :schema="mediaSettingsSchema" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><div class="billing-picker-row"><div class="field"><label>固定账户平台名 <span>来自 AstrBot 已配置的平台</span></label><select aria-label="固定账户平台名" v-model="lifeConfig.media_settings.proactive_billing_platform"><option value="">沿用当前平台</option><option v-for="row in billingPlatforms" :key="row.id" :value="row.id">{{ row.name }}</option><option v-if="lifeConfig.media_settings.proactive_billing_platform && !billingPlatforms.some(p => p.id === lifeConfig.media_settings.proactive_billing_platform)" :value="lifeConfig.media_settings.proactive_billing_platform">{{ lifeConfig.media_settings.proactive_billing_platform }}（已保存）</option></select></div><div class="field"><label>固定账户用户 ID <span>来自 aigen 记账账户，可搜索</span></label><div class="life-picker"><input type="text" :value="billingUserLabel" placeholder="搜索平台或用户 ID" autocomplete="off" aria-label="固定账户用户 ID" @focus="showBillingUserList = true" @input="onBillingUserInput($event.target.value)" @keydown.esc="showBillingUserList = false" @blur="hidePicker('billingUser')"><div v-if="showBillingUserList" class="life-picker-list"><button v-for="row in filteredBillingAccounts" :key="row.label" type="button" :class="{active: row.user_id === lifeConfig.media_settings.proactive_billing_user_id}" @mousedown.prevent="pickBillingAccount(row)"><strong>{{ row.user_id }}</strong><small>{{ row.platform }} · 余额 {{ row.amount }}</small></button><div v-if="!filteredBillingAccounts.length" class="life-picker-empty">没有匹配的记账账户；也可直接输入用户 ID。</div></div></div><p class="hint">列出的是 aigen 账本中已有余额行的账户；主动发起会消耗这里选中的账户。</p></div></div></template><life-settings v-else-if="lifeConfig[key]" :schema="group.items" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><p v-if="key === 'media_settings'" class="hint">三项概率独立掷骰，判定为“生成多媒体”后只会从已启用的种类里挑一种发送，数量由模型在配置区间内决定。</p></details></div>
@@ -680,7 +679,7 @@
             lifeConfig: {}, lifeSchema: {}, lifeProviders: [], lifeStatus: {}, lifeTasks: {},
             lifeUmo: '', lifeActionText: '', lifeDateRange: '', lifeMessage: '', lifeBusy: false,
             appearancePersona: '', appearanceImages: [], appearanceDescription: '', appearancePersonaId: '', personaOptions: [], sessionOptions: [], sessionSearch: '', personaSearch: '', showSessionList: false, showPersonaList: false,
-            networkOpen: false, networkPersonaId: '', networkPersonaSearch: '', showNetworkPersonaList: false,
+            networkPersonaId: '', networkPersonaSearch: '', showNetworkPersonaList: false,
             networkEnabled: false, networkCharacters: [], networkRelations: [], networkEvents: [],
             networkStats: { characters: 0, relationships: 0, events: 0 }, networkBusy: false, networkMessage: '',
             networkNewCharacter: { name: '', bio: '', personality: '' },
@@ -837,15 +836,7 @@
             if (changed) this.loadLifeForSession();
           },
           pickSession(row) { this.showSessionList = false; this.sessionSearch = row.title || row.umo; this.lifeUmo = row.umo; this.loadLifeForSession(); },
-          async pickPersona(row) { this.showPersonaList = false; this.personaSearch = row.name || row.id; this.appearancePersonaId = row.id; await this.loadAppearance(row.id); },
-          toggleNetworkPanel() {
-            this.networkOpen = !this.networkOpen;
-            if (this.networkOpen && !this.networkPersonaId && this.appearancePersonaId) {
-              this.networkPersonaId = this.appearancePersonaId;
-              this.networkPersonaSearch = this.appearancePersonaId;
-            }
-            if (this.networkOpen && this.networkPersonaId) this.reloadNetwork();
-          },
+          async pickPersona(row) { this.showPersonaList = false; this.personaSearch = row.name || row.id; this.appearancePersonaId = row.id; await this.loadAppearance(row.id); if (!this.networkPersonaId) { this.networkPersonaId = row.id; this.networkPersonaSearch = row.id; this.reloadNetwork(); } },
           pickNetworkPersona(row) {
             this.showNetworkPersonaList = false;
             this.networkPersonaSearch = row.name || row.id;
@@ -1311,7 +1302,16 @@
               await this.refreshOptions();
               await this.loadBillingOptions();
               const personaId = String(this.appearancePersonaId || this.lifeConfig?.appearance_settings?.persona_id || '').trim();
-              if (personaId) { this.appearancePersonaId = personaId; this.personaSearch = personaId; await this.loadAppearance(personaId); }
+              if (personaId) {
+                this.appearancePersonaId = personaId;
+                this.personaSearch = personaId;
+                await this.loadAppearance(personaId);
+                // The network panel is always visible, so seed it with the same
+                // persona instead of waiting for the user to pick one again.
+                this.networkPersonaId = personaId;
+                this.networkPersonaSearch = personaId;
+                await this.reloadNetwork();
+              }
             } catch (e) { this.statusText = `加载失败：${e.message || e}`; this.saveState = 'error'; }
             finally { this.loading = false; }
           }
