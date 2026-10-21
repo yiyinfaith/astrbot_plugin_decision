@@ -6,3 +6,5 @@ output/
 .venv/
 *.py[cod]
 .env
+# AstrBot runtime data created when the plugin is imported outside a real host.
+/data/

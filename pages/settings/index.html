@@ -425,7 +425,7 @@
               <div class="card-heading"><div><div class="section-kicker">Appearance References</div><h2>外貌参考图（按人格）</h2><p>参考图按 AstrBot 人格保存，与具体会话无关；换会话不会换参考图，换人格才会。</p></div></div>
               <div class="field"><label>目标人格 <span>可搜索选择</span></label><div class="life-picker"><input type="text" v-model="personaSearch" :disabled="lifeBusy" placeholder="搜索人格 ID" autocomplete="off" aria-label="目标人格" @focus="showPersonaList = true" @input="showPersonaList = true" @keydown.esc="showPersonaList = false" @blur="hidePicker('persona')"><div v-if="showPersonaList" class="life-picker-list"><button v-for="row in filteredPersonas" :key="row.id" type="button" :class="{active: row.id === appearancePersonaId}" @mousedown.prevent="pickPersona(row)"><strong>{{ row.name || row.id }}</strong><small>{{ row.id }}</small></button><div v-if="!filteredPersonas.length" class="life-picker-empty">没有匹配的人格。</div></div></div></div>
               <div class="life-reference-grid"><div v-for="image in appearanceImages" :key="image.id" class="life-reference"><img :src="image.preview" :alt="image.name"><div><span>{{ image.name }}</span><button class="button ghost" :disabled="lifeBusy" @click="removeAppearance(image.id)">删除</button></div></div><label class="life-upload"><span>＋ 上传外貌参考图</span><small>PNG / JPEG / WebP · 每张最多 8MB · 每人格最多 5 张</small><input type="file" accept="image/png,image/jpeg,image/webp" :disabled="lifeBusy" @change="uploadAppearance"></label></div>
-              <div v-if="lifeConfig.appearance_settings" class="field"><label>外貌补充描述 <span>只用于描述参考图中人物的外貌与参考穿搭</span></label><textarea v-model="lifeConfig.appearance_settings.description" spellcheck="false" placeholder="只写参考图无法体现的外貌信息，例如身高、体型、发型细节、常戴饰品。"></textarea></div>
+              <div class="field"><label>外貌补充描述 <span>只保存到当前人格</span></label><textarea v-model="appearanceDescription" @blur="saveAppearanceDescription" spellcheck="false" placeholder="只写参考图无法体现的外貌信息，例如身高、体型、发型细节、常戴饰品。"></textarea><p class="hint">这段文字和参考图一样按人格保存，不随会话切换；只描述外貌，不填写今日穿搭。</p></div>
               <div v-if="lifeConfig.appearance_settings" class="switch-row"><div class="switch-copy"><strong>无今日穿搭时沿用参考图穿搭</strong><small>开启后，当天尚未生成穿搭时，拍照与拍视频会沿用参考图中的服装。</small></div><label class="switch"><input type="checkbox" aria-label="无今日穿搭时沿用参考图穿搭" v-model="lifeConfig.appearance_settings.use_reference_outfit"><span class="switch-track"></span></label></div>
               <p class="hint">参考图按人格保存，与具体会话无关；参考图中的穿搭作为该人格的默认穿搭；若几张参考图穿搭不一致，插件不做额外处理。</p>
               <p v-if="!appearancePersonaId" class="hint">请先在上方选择一个目标人格，再上传参考图。</p>
@@ -619,7 +619,7 @@
             proactiveTab: 'reactive', messageInterjection: true,
             lifeConfig: {}, lifeSchema: {}, lifeProviders: [], lifeStatus: {}, lifeTasks: {},
             lifeUmo: '', lifeActionText: '', lifeDateRange: '', lifeMessage: '', lifeBusy: false,
-            appearancePersona: '', appearanceImages: [], appearancePersonaId: '', personaOptions: [], sessionOptions: [], sessionSearch: '', personaSearch: '', showSessionList: false, showPersonaList: false,
+            appearancePersona: '', appearanceImages: [], appearanceDescription: '', appearancePersonaId: '', personaOptions: [], sessionOptions: [], sessionSearch: '', personaSearch: '', showSessionList: false, showPersonaList: false,
             lifeInspection: {}, aigenAvailable: false, lifePoll: null, lifeInspectTask: '', lifeAppliedTask: '',
             toolSearch: '',
             statusText: '加载中…',
@@ -736,11 +736,11 @@
           openNetworkPage() { window.open(this.networkPageUrl(), '_blank'); },
           async loadAppearance(personaId) {
             const target = String(personaId || '').trim();
-            if (!target) { this.appearanceImages = []; return; }
+            if (!target) { this.appearanceImages = []; this.appearanceDescription = ''; return; }
             this.lifeBusy = true;
             try {
               const bridge = await waitForBridge(); const result = payloadOf(await bridge.apiPost('life/appearance',{action:'list', persona_id:target}));
-              this.appearancePersonaId = result.persona_id || target; this.appearanceImages = result.images || [];
+              this.appearancePersonaId = result.persona_id || target; this.appearanceImages = result.images || []; this.appearanceDescription = String(result.description || '');
             } catch(e) { this.appearanceImages = []; this.lifeMessage = `读取外貌参考图失败：${e.message || e}`; }
             finally { this.lifeBusy = false; }
           },
@@ -759,7 +759,7 @@
             this.lifeBusy = true;
             try {
               const bridge = await waitForBridge(); const result = payloadOf(await bridge.apiPost('life/appearance',{umo:this.lifeUmo.trim(),action:'list'}));
-              this.appearancePersona = result.persona_id; this.appearancePersonaId = result.persona_id || this.appearancePersonaId; this.appearanceImages = result.images || [];
+              this.appearancePersona = result.persona_id; this.appearancePersonaId = result.persona_id || this.appearancePersonaId; this.appearanceImages = result.images || []; this.appearanceDescription = String(result.description || this.appearanceDescription || '');
               await this.lifeAction('inspect');
             } catch(e) { this.lifeMessage = `读取失败：${e.message || e}`; }
             finally { this.lifeBusy = false; }
@@ -794,6 +794,14 @@
             try { const bridge=await waitForBridge(); const result=payloadOf(await bridge.apiPost('life/appearance',{persona_id:this.appearancePersonaId,action:'delete',id})); this.appearanceImages=result.images || []; }
             catch(e) { this.lifeMessage=`删除失败：${e.message || e}`; }
             finally { this.lifeBusy = false; }
+          },
+          async saveAppearanceDescription() {
+            if (!this.appearancePersonaId) return;
+            try {
+              const bridge = await waitForBridge();
+              await bridge.apiPost('life/appearance', {persona_id:this.appearancePersonaId, action:'set_description', description:this.appearanceDescription});
+              this.lifeMessage = '当前人格的外貌补充已保存。';
+            } catch(e) { this.lifeMessage = `外貌补充保存失败：${e.message || e}`; }
           },
           outputStepEnabled(key) { const list = this.outputConfig?.pipeline?.steps || []; return list.some(item => String(item).split('(', 1)[0].trim() === key); },
           toggleOutputStep(key) { const pipeline = this.form.dialogue_enhancement.output_pipeline.pipeline; const list = Array.isArray(pipeline.steps) ? [...pipeline.steps] : []; const index = list.findIndex(item => String(item).split('(', 1)[0].trim() === key); if (index >= 0) list.splice(index, 1); else { const label = this.outputStepOptions.find(item => item.key === key)?.label || key; list.push(`${key}(${label})`); } pipeline.steps = list; },
@@ -963,7 +971,7 @@
           }
         },
         watch: {
-          lifeUmo() { this.lifeInspection={}; this.appearanceImages=[]; this.appearancePersona=''; this.appearancePersonaId=''; this.personaSearch=''; this.lifeInspectTask=''; this.lifeAppliedTask=''; },
+          lifeUmo() { this.lifeInspection={}; this.appearanceImages=[]; this.appearanceDescription=''; this.appearancePersona=''; this.appearancePersonaId=''; this.personaSearch=''; this.lifeInspectTask=''; this.lifeAppliedTask=''; },
           lifeTasks: {deep:true, handler(tasks) { for (const [id,task] of Object.entries(tasks).reverse()) { if (task.umo !== this.lifeUmo.trim() || task.state !== 'done') continue; const inspection=task.inspection || (task.action === 'inspect' ? task.result : null); if (inspection) { if (id !== this.lifeAppliedTask) { this.lifeAppliedTask=id; this.lifeInspection=inspection; this.appearancePersona=inspection.persona_id || this.appearancePersona; if (inspection.persona_id && inspection.persona_id !== this.appearancePersonaId) { this.appearancePersonaId=inspection.persona_id; this.personaSearch=inspection.persona_id; this.loadAppearance(inspection.persona_id); } } break; } } }},
           'form.tool_noul_threshold'() { this.syncThresholdGlass(); this.syncDecisionRing(); },
           activeTab() { this.syncGlassNav(); }

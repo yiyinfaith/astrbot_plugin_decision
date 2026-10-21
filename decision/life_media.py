@@ -98,11 +98,15 @@ def media_instruction(kind: str, low: int, high: int) -> str:
     if high <= 0:
         return ""
     if kind == "audio":
-        # One audio request reads one text, so several clips would only repeat
-        # the same content; no count range is offered for audio.
+        # Each call speaks one text, so the configured range is a per-run budget
+        # that the model spends by calling the tool again with new content.
+        quantity = (
+            f"最多 {low} 段" if low == high else f"最多 {high} 段（至少 {low} 段）"
+        )
         return (
-            f"本次主动发起可以附带{label}。若要开口，请调用 {tool} 工具生成一段，"
-            "由你根据内容自行决定说什么；若此刻说话不如文字自然，也可以不发。"
+            f"本次主动发起可以附带{label}。若要开口，请调用 {tool} 工具，每次生成一段，"
+            f"本次共{quantity}，多段时每段内容或情绪应有所不同，由你根据场景自行决定。"
+            "若此刻说话不如文字自然，也可以不发。"
         )
     unit = "张" if kind == "photo" else "段"
     if low == high:
@@ -118,7 +122,7 @@ def media_instruction(kind: str, low: int, high: int) -> str:
 class AppearanceStore:
     def __init__(self, root: Path):
         self.root = root
-        self.repo = JsonRepository(root / "appearance.json", {"personas": {}})
+        self.repo = JsonRepository(root / "appearance.json", {"personas": {}, "descriptions": {}})
         self.write_lock = asyncio.Lock()
 
     def folder(self, persona_id):
@@ -151,6 +155,27 @@ class AppearanceStore:
                     }
                 )
         return result
+
+    async def get_description(self, persona_id: str) -> str:
+        manifest = await self.repo.load()
+        descriptions = manifest.get("descriptions", {})
+        value = descriptions.get(str(persona_id), "") if isinstance(descriptions, dict) else ""
+        return str(value or "")[:4000]
+
+    async def set_description(self, persona_id: str, description: str) -> str:
+        value = str(description or "").strip()[:4000]
+        async with self.write_lock:
+            manifest = await self.repo.load()
+            descriptions = manifest.setdefault("descriptions", {})
+            if not isinstance(descriptions, dict):
+                descriptions = {}
+                manifest["descriptions"] = descriptions
+            if value:
+                descriptions[str(persona_id)] = value
+            else:
+                descriptions.pop(str(persona_id), None)
+            await self.repo.save(manifest)
+        return value
 
     async def upload(self, persona_id, name, data_url):
         async with self.write_lock:
@@ -248,7 +273,7 @@ class LifeMedia:
         self.last_call: dict[str, float] = {}
         self.usage_lock = asyncio.Lock()
 
-    def aigen(self):
+    def aigen(self, kind: str | None = None):
         getter = getattr(self.owner.context, "get_all_stars", None)
         if not callable(getter):
             return None
@@ -261,13 +286,11 @@ class LifeMedia:
         if len(matches) != 1:
             return None
         instance = getattr(matches[0], "star_cls", None)
-        return (
-            instance
-            if instance
-            and callable(getattr(instance, "generate_image", None))
-            and callable(getattr(instance, "generate_video", None))
-            else None
-        )
+        if instance is None:
+            return None
+        if kind in MEDIA_KINDS:
+            return instance if callable(getattr(instance, {"photo": "generate_image", "video": "generate_video", "audio": "generate_audio"}[kind], None)) else None
+        return instance if any(callable(getattr(instance, method, None)) for method in ("generate_image", "generate_video", "generate_audio")) else None
 
     async def capture(
         self, event, *, kind="photo", scene="", subject="self", count=None, audio_text=""
@@ -290,7 +313,7 @@ class LifeMedia:
             return f"{KIND_LABELS[kind]}生成已关闭。"
         if not settings.get("daily_limit"):
             return "本会话今日生成额度已用完。"
-        aigen = self.aigen()
+        aigen = self.aigen(kind)
         if aigen is None:
             return "aigen 插件未安装、未启用或接口不兼容，尚未提交生成任务。"
         audio_method = getattr(aigen, "generate_audio", None)
@@ -305,22 +328,53 @@ class LifeMedia:
             if now - self.last_call.get(umo, -1e9) < settings["cooldown_seconds"]:
                 return "多媒体生成冷却中，请稍后再试。"
             persona = await runtime.personas.resolve(umo)
-            refs = await self.appearance.list(persona.id)
-            if not refs and kind != "audio":
+            uses_persona = str(subject or "self") == "self"
+            refs = await self.appearance.list(persona.id) if uses_persona else []
+            appearance_text = await self.appearance.get_description(persona.id) if uses_persona else ""
+            if not refs and kind != "audio" and uses_persona:
                 return "当前人格尚未上传外貌参考图，请在 WebUI 的主动发起页面上传后再拍摄。"
             reference_persona = persona.id
-            persona, plan = await runtime._ensure_plan_for_umo(umo)
-            if persona.id != reference_persona:
-                return "准备期间人格已变更，尚未提交生成任务。"
-            if kind != "audio" and not plan.has_outfit:
+            plan = None
+            if uses_persona and kind != "audio":
+                persona, plan = await runtime._ensure_plan_for_umo(umo)
+                if persona.id != reference_persona:
+                    return "准备期间人格已变更，尚未提交生成任务。"
+            if uses_persona and kind != "audio" and not plan.has_outfit:
                 appearance = (runtime.config or {}).get("appearance_settings", {}) or {}
                 if not appearance.get("use_reference_outfit", True):
                     return (
                         "今日穿搭尚未生成；请开启每日穿搭并在 WebUI 生成今日内容后再拍摄，"
                         "或开启“无今日穿搭时沿用参考图穿搭”。"
                     )
-            item = timeline_item_at(plan, runtime._now())
+            item = timeline_item_at(plan, runtime._now()) if plan is not None else None
+            # A proactive run receives one preselected media kind.  Enforce it
+            # here as well as in the prompt so a tool loop cannot bypass the
+            # single-kind and quantity budget by calling another wrapper.
+            proactive = event.get_extra("decision_life_proactive", False)
+            allowed_kind = event.get_extra("decision_life_media_kind", "")
+            if proactive and allowed_kind and kind != allowed_kind:
+                return f"本次主动发起只允许发送{KIND_LABELS.get(allowed_kind, allowed_kind)}。"
+            try:
+                used = max(0, int(event.get_extra("decision_life_media_used", 0) or 0))
+            except (TypeError, ValueError):
+                used = 0
+            max_allowed = event.get_extra("decision_life_media_max", None)
+            try:
+                max_allowed = None if max_allowed is None else max(0, int(max_allowed))
+            except (TypeError, ValueError):
+                max_allowed = None
+            if proactive and max_allowed is not None and used >= max_allowed:
+                return "本次主动发起的多媒体数量已达到上限。"
             resolved_count = clamp_count(settings, kind, 1 if count is None else count)
+            # One ``send_voice`` call reads exactly one text, so asking aigen for
+            # several clips in one call would only duplicate the same utterance.
+            # Audio therefore always produces one clip per call, and the
+            # configured range acts as a per-run budget that the model spends by
+            # calling the tool again with different content.
+            if kind == "audio":
+                resolved_count = 1
+            if proactive and max_allowed is not None:
+                resolved_count = min(resolved_count, max(0, int(max_allowed) - used))
             if resolved_count <= 0:
                 return "本次生成数量为 0，未提交生成任务。"
             prompt = self._render_prompt(
@@ -333,6 +387,7 @@ class LifeMedia:
                 plan=plan,
                 item=item,
                 count=resolved_count,
+                appearance_text=appearance_text,
             )
             if (await runtime.personas.resolve(umo)).id != persona.id:
                 return "准备期间人格已变更，尚未提交生成任务。"
@@ -346,7 +401,7 @@ class LifeMedia:
                 ReferenceEvent(
                     event, [self.appearance.folder(persona.id) / ref["id"] for ref in refs], prompt
                 )
-                if refs
+                if uses_persona and refs
                 else event
             )
             if kind == "photo":
@@ -358,7 +413,7 @@ class LifeMedia:
             kwargs = self._call_kwargs(settings, kind, proxy, prompt, resolved_count, audio_text)
             signature = inspect.signature(method)
             kwargs = {key: value for key, value in kwargs.items() if key in signature.parameters}
-            if self.aigen() is not aigen:
+            if self.aigen(kind) is not aigen:
                 return "aigen 正在重载或已停用，尚未提交生成任务。"
             # Reserve before calling a potentially paid backend. Never retry
             # automatically after ambiguous transport or platform failures.
@@ -376,16 +431,11 @@ class LifeMedia:
                 usage["usage"][key] = quota + 1
                 await self.usage.save(usage)
                 self.last_call[umo] = time.monotonic()
-            # ``n`` lets one image request return several pictures. Video has no
-            # batch parameter but each call is a fresh generation, so one call
-            # per item is meaningful. Audio is different: every call would read
-            # the same text, so a count above one would only produce duplicate
-            # clips, and it is capped at a single call.
+            # ``n`` lets one image request return several pictures. Video and
+            # audio have no batch parameter: video issues one fresh generation
+            # per item, while audio is already pinned to a single clip above.
             batched = "n" in signature.parameters
-            if kind == "audio":
-                calls = 1
-            else:
-                calls = 1 if batched else resolved_count
+            calls = 1 if batched else resolved_count
             results = []
             try:
                 if runtime.closed:
@@ -409,6 +459,11 @@ class LifeMedia:
                 if not results:
                     return f"aigen 生成失败：{str(exc)[:180]}。未自动重试，请先确认任务状态。"
                 results.append(f"aigen 部分生成失败：{str(exc)[:180]}")
+            if proactive:
+                try:
+                    event.set_extra("decision_life_media_used", used + resolved_count)
+                except AttributeError:
+                    pass
             return "\n".join(results) or json.dumps(
                 {
                     "status": "submitted",
@@ -430,12 +485,14 @@ class LifeMedia:
         plan,
         item,
         count,
+        appearance_text="",
     ) -> str:
         template = str(settings.get(f"{kind}_prompt", "") or "")
-        appearance = self._appearance_text(runtime, settings)
+        appearance = appearance_text or self._appearance_text(runtime, settings)
+        has_outfit = bool(getattr(plan, "has_outfit", False))
         outfit = (
             format_outfit(plan)
-            if plan.has_outfit
+            if has_outfit
             else "今日尚未生成穿搭，请沿用外貌参考图中的服装，不要自行发明新的服装。"
         )
         values = {

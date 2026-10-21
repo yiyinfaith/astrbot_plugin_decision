@@ -9,7 +9,13 @@ from dataclasses import fields
 
 
 async def dispatch_life_agent(
-    runtime, umo: str, prompt: str, generation: int, persona_id: str, intent: str
+    runtime,
+    umo: str,
+    prompt: str,
+    generation: int,
+    persona_id: str,
+    intent: str,
+    media_choice: tuple[str, int, int] | None = None,
 ) -> bool:
     from astrbot import logger
     from astrbot.api.message_components import Plain
@@ -25,12 +31,20 @@ async def dispatch_life_agent(
 
     ctx = runtime.context
     session = MessageSession.from_str(umo)
+    extras = {"decision_life_proactive": True, "decision_life_generation": generation}
+    if media_choice:
+        extras.update(
+            decision_life_media_kind=media_choice[0],
+            decision_life_media_min=int(media_choice[1]),
+            decision_life_media_max=int(media_choice[2]),
+            decision_life_media_used=0,
+        )
     event = CronMessageEvent(
         context=ctx,
         session=session,
         message=prompt,
         message_type=session.message_type,
-        extras={"decision_life_proactive": True, "decision_life_generation": generation},
+        extras=extras,
     )
     event.role = "member"  # A scheduled task never inherits administrator rights.
     platform = ctx.get_platform_inst(session.platform_id)

@@ -73,8 +73,18 @@ class CurrentPersonaResolver:
             current = await self.resolve(fallback_umo)
             if current.id == persona_id:
                 return current
+        if str(persona_id) == "default":
+            default = await self.context.persona_manager.get_default_persona_v3()
+            return PersonaContext("default", str((default or {}).get("prompt", "")))
         persona = await self.context.persona_manager.get_persona(persona_id)
-        return PersonaContext(persona_id, str(getattr(persona, "system_prompt", "") or ""))
+        return PersonaContext(
+            persona_id,
+            str(
+                getattr(persona, "system_prompt", "")
+                or getattr(persona, "prompt", "")
+                or ""
+            ),
+        )
 
 
 class JevLifePolicy(ProactivePolicy):
@@ -114,6 +124,9 @@ class LifeRuntime(VirtualLifeBase):
         )
         self.personas = CurrentPersonaResolver(self.context)
         self.policy = JevLifePolicy(settings, self.storage, self.timezone)
+        # The appearance description is stored per persona next to its reference
+        # images, so the plan generator resolves it through this hook.
+        self.plan_generator.appearance_resolver = self._persona_appearance
         self.tasks: set[asyncio.Task] = set()
         self.plan_locks: dict[str, asyncio.Lock] = {}
         self.semaphore = asyncio.Semaphore(settings["integration_settings"]["max_concurrent"])
@@ -139,6 +152,21 @@ class LifeRuntime(VirtualLifeBase):
 
         task.add_done_callback(done)
         return task
+
+    async def _persona_appearance(self, persona_id: str) -> str:
+        """Return the per-persona appearance description, or an empty string."""
+
+        getter = getattr(self.owner, "_get_life_media", None)
+        media = getter() if callable(getter) else None
+        store = getattr(media, "appearance", None)
+        reader = getattr(store, "get_description", None)
+        if not callable(reader):
+            return ""
+        try:
+            return str(await reader(persona_id) or "").strip()
+        except Exception as exc:
+            logger.debug("Decision Engine 读取外貌补充失败：%s", str(exc)[:120])
+            return ""
 
     async def initialize(self):
         await self.storage.load()
@@ -497,10 +525,12 @@ class LifeRuntime(VirtualLifeBase):
         relationship = await self._personal_network_context(persona.id)
         if relationship:
             prompt += "\n" + relationship
-        media = self._proactive_media_instruction()
+        media, media_choice = self._proactive_media_instruction()
         if media:
             prompt += "\n" + media
-        sent = await dispatch_life_agent(self, umo, prompt, generation, persona.id, intent)
+        sent = await dispatch_life_agent(
+            self, umo, prompt, generation, persona.id, intent, media_choice=media_choice
+        )
         if sent:
             self.offline.pop(umo.split(":", 1)[0], None)
         self.record_audit(
@@ -508,7 +538,7 @@ class LifeRuntime(VirtualLifeBase):
         )
         return sent
 
-    def _proactive_media_instruction(self) -> str:
+    def _proactive_media_instruction(self) -> tuple[str, tuple[str, int, int] | None]:
         """Roll the per-kind media probabilities for one proactive delivery.
 
         Every enabled kind is rolled independently; at most one kind is then
@@ -521,10 +551,10 @@ class LifeRuntime(VirtualLifeBase):
         settings = self.config.get("media_settings", {}) or {}
         choice = choose_proactive_media(settings)
         if choice is None:
-            return ""
+            return "", None
         kind, low, high = choice
         if high <= 0:
-            return ""
+            return "", None
         instruction = media_instruction(kind, low, high)
         logger.info(
             "Decision Engine 主动发起附带多媒体：%s（%s~%s）",
@@ -532,7 +562,7 @@ class LifeRuntime(VirtualLifeBase):
             low,
             high,
         )
-        return instruction
+        return instruction, choice
 
     async def inject_cached_state(self, event, req):
         if not self.enabled:

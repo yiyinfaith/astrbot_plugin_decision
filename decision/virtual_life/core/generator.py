@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import random
 from dataclasses import replace
 from datetime import date
@@ -29,18 +30,30 @@ class DailyPlanGenerator:
     def _pool(self) -> dict:
         return self.config.get("creative_pool", {}) or {}
 
-    def _appearance_context(self) -> str:
-        """Describe the persona's uploaded reference images for the prompts.
+    async def _appearance_context(self, persona_id: str | None = None) -> str:
+        """Describe the persona's appearance for the generation prompts.
 
-        The description is persona-scoped and lives in the merged WebUI, so the
-        generator can always include it without touching the reference files.
+        The per-persona description (stored with that persona's reference
+        images) wins; the global ``appearance_settings.description`` stays as a
+        fallback so an older configuration keeps working.
         """
 
-        settings = self.config.get("appearance_settings", {}) or {}
-        text = str(settings.get("description", "") or "").strip()
-        if not text:
+        resolved = ""
+        resolver = getattr(self, "appearance_resolver", None)
+        if callable(resolver) and persona_id:
+            try:
+                value = resolver(persona_id)
+                if inspect.isawaitable(value):
+                    value = await value
+                resolved = str(value or "").strip()
+            except Exception:
+                resolved = ""
+        if not resolved:
+            settings = self.config.get("appearance_settings", {}) or {}
+            resolved = str(settings.get("description", "") or "").strip()
+        if not resolved:
             return "无（未填写外貌补充描述；若有外貌参考图，请以参考图为准）"
-        return text
+        return resolved
 
     @staticmethod
     def _pick(values: object, fallback: str) -> str:
@@ -329,7 +342,7 @@ class DailyPlanGenerator:
                 "timeline": timeline or "无",
                 "current_outfit": outfit_context or "无",
                 "requirements": requirements or "无",
-                "appearance_context": self._appearance_context(),
+                "appearance_context": await self._appearance_context(persona.id),
             }
             components = []
             if include_schedule:

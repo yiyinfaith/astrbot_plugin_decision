@@ -178,15 +178,20 @@ def test_media_instruction_range(kind):
     assert KIND_TOOLS[kind] in text
 
 
-def test_audio_instruction_has_no_count_range():
-    """One audio call reads one text, so a count range would only duplicate it."""
+def test_audio_instruction_offers_a_per_run_budget():
+    """Audio speaks one text per call, so the range caps the whole run."""
 
-    for low, high in ((1, 1), (1, 3), (2, 2)):
-        text = media_instruction("audio", low, high)
-        assert KIND_TOOLS["audio"] in text
-        assert "~" not in text
-        assert "恰好" not in text
-        assert "一段" in text
+    single = media_instruction("audio", 1, 1)
+    assert KIND_TOOLS["audio"] in single
+    assert "每次生成一段" in single
+    assert "最多 1 段" in single
+
+    ranged = media_instruction("audio", 1, 3)
+    assert "最多 3 段" in ranged
+    assert "至少 1 段" in ranged
+
+    for text in (single, ranged):
+        assert "每段内容或情绪应有所不同" in text
 
 
 def test_kind_tool_and_label_maps_are_complete():

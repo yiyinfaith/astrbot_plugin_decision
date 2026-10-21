@@ -8,7 +8,6 @@ command and WebAPI routes to it.
 
 from __future__ import annotations
 
-from .service import PersonalNetworkService
 from .storage import VALID_RELATIONSHIP_STATUSES, NetworkStorage
 
 __all__ = [
@@ -16,3 +15,14 @@ __all__ = [
     "NetworkStorage",
     "PersonalNetworkService",
 ]
+
+
+def __getattr__(name):
+    # Keep storage/generation imports usable with older AstrBot installations
+    # that do not expose ``astrbot.api.web`` at import time.  The service is
+    # loaded lazily only when the owning plugin actually needs its WebUI.
+    if name == "PersonalNetworkService":
+        from .service import PersonalNetworkService
+
+        return PersonalNetworkService
+    raise AttributeError(name)

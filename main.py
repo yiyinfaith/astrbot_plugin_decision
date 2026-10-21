@@ -2627,6 +2627,36 @@ class DecisionPlugin(Star):
             sessions.append(row)
             if len(sessions) >= 2000:
                 break
+        # AstrBot's "自定义规则" can exist before a conversation row is
+        # created.  Include concrete routing entries as selectable sessions so
+        # the appearance page can resolve their persona immediately.
+        try:
+            acm = getattr(self.context, "astrbot_config_mgr", None)
+            router = getattr(acm, "ucr", None)
+            routes = getattr(router, "umop_to_conf_id", {}) or {}
+            conf_meta = getattr(acm, "abconf_data", {}) or {}
+            for routed_umo, conf_id in routes.items():
+                routed_umo = str(routed_umo).strip()
+                if not routed_umo or "*" in routed_umo or routed_umo in seen:
+                    continue
+                parts = routed_umo.split(":", 2)
+                if len(parts) != 3 or parts[1] not in {"FriendMessage", "GroupMessage"}:
+                    continue
+                seen.add(routed_umo)
+                meta = conf_meta.get(str(conf_id), {}) if isinstance(conf_meta, dict) else {}
+                title = str(meta.get("name", "") or "自定义规则")
+                row = {
+                    "umo": routed_umo,
+                    "title": title,
+                    "platform": parts[0],
+                    "message_type": parts[1],
+                    "persona_id": "",
+                    "persona_name": "",
+                }
+                if not query or query in " ".join(row.values()).casefold():
+                    sessions.append(row)
+        except (AttributeError, TypeError, ValueError):
+            pass
         sessions.sort(key=lambda row: (row["message_type"], row["umo"]))
         return json_response({"sessions": sessions})
 
@@ -2711,6 +2741,8 @@ class DecisionPlugin(Star):
                     await store.upload(
                         persona_id, payload.get("name", "reference"), payload.get("data_url", "")
                     )
+                elif payload.get("action") == "set_description":
+                    await store.set_description(persona_id, str(payload.get("description", "")))
                 elif payload.get("action") == "delete":
                     await store.remove(persona_id, str(payload.get("id", "")))
                 elif payload.get("action", "list") != "list":
@@ -2719,6 +2751,12 @@ class DecisionPlugin(Star):
                     {
                         "persona_id": persona_id,
                         "images": await store.list(persona_id, previews=True),
+                        "description": await store.get_description(persona_id)
+                        or str(
+                            ((self._setting("life", {}) or {}).get("appearance_settings", {}) or {}).get(
+                                "description", ""
+                            )
+                        ),
                     }
                 )
         except (ValueError, OSError, TypeError) as exc:

@@ -136,9 +136,15 @@ def is_handoff_tool(tool: Any) -> bool:
     try:
         from astrbot.core.agent.handoff import HandoffTool
 
-        return isinstance(tool, HandoffTool)
+        if isinstance(tool, HandoffTool):
+            return True
     except Exception:
-        return tool.__class__.__name__ == "HandoffTool"
+        pass
+    # Test doubles and older AstrBot releases use a compatible class without
+    # importing the current HandoffTool type.  Preserve the stable class-name
+    # marker as a fallback instead of silently treating SubAgents as ordinary
+    # tools.
+    return tool.__class__.__name__ == "HandoffTool"
 
 
 def is_mcp_tool(tool: Any) -> bool:

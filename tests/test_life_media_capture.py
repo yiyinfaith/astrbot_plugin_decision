@@ -94,13 +94,17 @@ class FakeAigen:
 class FakeEvent:
     unified_msg_origin = "aiocqhttp:FriendMessage:1"
 
-    def __init__(self):
+    def __init__(self, extras=None):
         self.sent = []
+        self._extras = dict(extras or {})
         # ``ReferenceEvent`` copies this and replaces its message list.
         self.message_obj = SimpleNamespace(message=[], message_str="", raw_message=None)
 
     def get_extra(self, key, default=None):
-        return default
+        return self._extras.get(key, default)
+
+    def set_extra(self, key, value):
+        self._extras[key] = value
 
     async def send(self, value):
         self.sent.append(value)
@@ -183,14 +187,67 @@ async def make_media(tmp_path, *, settings=None, aigen=None, outfit=True, with_r
 
 
 @pytest.mark.asyncio
-async def test_audio_issues_exactly_one_call_regardless_of_count(tmp_path):
-    """One audio request reads one text, so extra counts must not duplicate it."""
+async def test_proactive_audio_spends_its_budget_across_calls(tmp_path):
+    """The audio range caps the whole proactive run, not a single call."""
 
-    settings = media_settings(audio_count_min=3, audio_count_max=3)
+    media, aigen = await make_media(tmp_path)
+    event = FakeEvent(
+        {
+            "decision_life_proactive": True,
+            "decision_life_generation": 0,
+            "decision_life_media_kind": "audio",
+            "decision_life_media_min": 1,
+            "decision_life_media_max": 2,
+            "decision_life_media_used": 0,
+        }
+    )
+
+    await media.capture(event, kind="audio", audio_text="第一段", count=1)
+    await media.capture(event, kind="audio", audio_text="第二段", count=1)
+    blocked = await media.capture(event, kind="audio", audio_text="第三段", count=1)
+
+    assert len(aigen.audio_calls) == 2
+    assert [c["text"] for c in aigen.audio_calls] == ["第一段", "第二段"]
+    assert "上限" in blocked
+
+
+@pytest.mark.asyncio
+async def test_proactive_rejects_a_second_media_kind(tmp_path):
+    """Only the preselected kind may be sent during one proactive delivery."""
+
+    media, aigen = await make_media(tmp_path)
+    event = FakeEvent(
+        {
+            "decision_life_proactive": True,
+            "decision_life_generation": 0,
+            "decision_life_media_kind": "photo",
+            "decision_life_media_min": 1,
+            "decision_life_media_max": 1,
+            "decision_life_media_used": 0,
+        }
+    )
+
+    result = await media.capture(event, kind="video", scene="x", count=1)
+    assert "只允许发送" in result
+    assert not aigen.video_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested", [1, 3, 10])
+async def test_audio_generates_one_clip_per_call(tmp_path, requested):
+    """A single call speaks one text, so extra counts must not duplicate it.
+
+    The configured range is a per-run budget the model spends by calling the
+    tool again with new content.
+    """
+
+    settings = media_settings(audio_count_min=1, audio_count_max=3)
     media, aigen = await make_media(tmp_path, settings=settings)
 
-    result = await media.capture(FakeEvent(), kind="audio", audio_text="你好呀", count=3)
-    assert len(aigen.audio_calls) == 1, "audio must never issue duplicate calls"
+    result = await media.capture(
+        FakeEvent(), kind="audio", audio_text="你好呀", count=requested
+    )
+    assert len(aigen.audio_calls) == 1
     assert aigen.audio_calls[0]["text"] == "你好呀"
     assert aigen.audio_calls[0]["mode"] == "朗读"
     assert "audio-ok" in result

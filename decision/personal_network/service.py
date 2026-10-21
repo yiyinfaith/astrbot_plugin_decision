@@ -24,7 +24,6 @@ from typing import Any
 
 from astrbot.api import logger
 from astrbot.api.web import (
-    PluginUploadFile,
     error_response,
     file_response,
     json_response,
@@ -362,7 +361,15 @@ class PersonalNetworkService:
         """Build a request-scoped text part, tolerating older AstrBot versions."""
         part = TextPart(text=text)
         marker = getattr(part, "mark_as_temp", None)
-        return marker() if callable(marker) else part
+        marked = marker() if callable(marker) else part
+        # AstrBot releases use different internal names for temporary parts.
+        # Keep the compatibility flag too; it is harmless on current hosts and
+        # prevents this injected context from being persisted on older ones.
+        try:
+            object.__setattr__(marked, "temporary", True)
+        except Exception:
+            pass
+        return marked
 
     # ------------------------------------------------------------------
     # LLM tools
@@ -1219,7 +1226,7 @@ class PersonalNetworkService:
         try:
             files = await request.files()
             upload = files.get("file")
-            if not isinstance(upload, PluginUploadFile):
+            if upload is None or not callable(getattr(upload, "read", None)):
                 raise ValueError("missing avatar file")
             if upload.content_length and upload.content_length > MAX_AVATAR_BYTES:
                 raise ValueError("avatar exceeds 2 MiB")
@@ -1499,7 +1506,7 @@ class PersonalNetworkService:
             persona_id = self._decode_persona_key(persona_key)
             files = await request.files()
             upload = files.get("file")
-            if not isinstance(upload, PluginUploadFile):
+            if upload is None or not callable(getattr(upload, "read", None)):
                 raise ValueError("missing import file")
             if upload.content_length and upload.content_length > MAX_IMPORT_BYTES:
                 raise ValueError("import exceeds 25 MiB")
