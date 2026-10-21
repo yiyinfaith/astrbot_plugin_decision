@@ -177,6 +177,16 @@ def normalize_life(value: Any) -> dict[str, Any]:
         raise ValueError("生成冷却须在 0 到 3600 秒之间")
     if not 0 <= media["daily_limit"] <= 200:
         raise ValueError("每日生成上限须在 0 到 200 之间")
+    if media["proactive_billing_mode"] not in {"session", "fixed"}:
+        raise ValueError("主动发起计费账户选项无效")
+    billing_user = media["proactive_billing_user_id"].strip()
+    billing_platform = media["proactive_billing_platform"].strip()
+    if media["proactive_billing_mode"] == "fixed" and billing_user and not billing_platform:
+        # An empty platform means "keep the current platform", which is fine, but
+        # a whitespace-only user id must not silently bill the wrong account.
+        raise ValueError("固定计费账户的用户 ID 不能只包含空白字符")
+    if len(billing_user) > 200 or len(billing_platform) > 100:
+        raise ValueError("固定计费账户字段过长")
     if out["delivery_settings"]["sleep_exception_probability"] > 1:
         raise ValueError("睡眠异常概率须在 0 到 1 之间")
     if out["personal_network_integration"]["new_character_probability"] > 1 or any(

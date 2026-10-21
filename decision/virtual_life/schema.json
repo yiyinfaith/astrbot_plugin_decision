@@ -953,6 +953,32 @@
         "hint": "每个会话每天最多提交多少次多媒体生成，0 表示禁止。",
         "default": 5
       },
+      "proactive_billing_mode": {
+        "description": "主动发起计费账户",
+        "type": "string",
+        "hint": "主动发起时的多媒体由 aigen 计费。默认沿用触发者，但主动发起没有真人发送者，群聊会算成群号账户、私聊会算成对方账户。建议改为固定账户。",
+        "options": [
+          "session",
+          "fixed"
+        ],
+        "labels": [
+          "沿用会话（aigen 默认）",
+          "固定账户"
+        ],
+        "default": "fixed"
+      },
+      "proactive_billing_platform": {
+        "description": "固定账户平台名",
+        "type": "string",
+        "hint": "仅“固定账户”生效。填 aigen 记账用的平台名，例如 aiocqhttp；留空表示沿用当前平台。",
+        "default": ""
+      },
+      "proactive_billing_user_id": {
+        "description": "固定账户用户 ID",
+        "type": "string",
+        "hint": "仅“固定账户”生效。填 aigen 记账用的用户 ID（通常是机器人主人的 QQ 号）。留空则保持 aigen 默认行为。这个账户的余额会被主动发起消耗。",
+        "default": ""
+      },
       "photo_probability": {
         "description": "主动发起附带照片概率",
         "type": "float",

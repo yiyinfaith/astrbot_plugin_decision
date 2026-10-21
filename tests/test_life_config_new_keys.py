@@ -95,6 +95,46 @@ def test_personal_network_settings_keys():
     assert network["context_injection_position"] == "system_prompt"
 
 
+def test_proactive_billing_keys():
+    media = life_defaults()["media_settings"]
+    assert media["proactive_billing_mode"] == "fixed"
+    assert media["proactive_billing_platform"] == ""
+    assert media["proactive_billing_user_id"] == ""
+    options = life_schema()["media_settings"]["items"]["proactive_billing_mode"]["options"]
+    assert options == ["session", "fixed"]
+
+
+@pytest.mark.parametrize("value", ["invalid", "", "FIXED"])
+def test_billing_mode_rejects_unknown_values(value):
+    data = copy.deepcopy(life_defaults())
+    data["media_settings"]["proactive_billing_mode"] = value
+    with pytest.raises(ValueError):
+        normalize_life(data)
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [("proactive_billing_user_id", "x" * 201), ("proactive_billing_platform", "y" * 101)],
+)
+def test_billing_fields_are_length_limited(key, value):
+    data = copy.deepcopy(life_defaults())
+    data["media_settings"][key] = value
+    with pytest.raises(ValueError):
+        normalize_life(data)
+
+
+def test_billing_accepts_a_real_account():
+    data = copy.deepcopy(life_defaults())
+    data["media_settings"].update(
+        proactive_billing_mode="fixed",
+        proactive_billing_platform="aiocqhttp",
+        proactive_billing_user_id="2980555633",
+    )
+    result = normalize_life(data)
+    assert result["media_settings"]["proactive_billing_user_id"] == "2980555633"
+    assert result["media_settings"]["proactive_billing_platform"] == "aiocqhttp"
+
+
 def test_scope_mode_defaults_to_whitelist():
     defaults = life_defaults()
     assert defaults["friend_settings"]["session_blacklist"] is False

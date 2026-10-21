@@ -15,6 +15,8 @@ import time
 import uuid
 from pathlib import Path
 
+from astrbot.api import logger
+
 from .virtual_life.core.storage import JsonRepository
 from .virtual_life.core.utils import format_outfit, timeline_item_at
 
@@ -264,6 +266,35 @@ class ReferenceEvent:
         return getattr(self._event, key)
 
 
+class BillingEvent:
+    """Answer aigen's billing identity with a configured account.
+
+    aigen charges ``[get_platform_name(), get_sender_id()]``.  A proactive run
+    is driven by a ``CronMessageEvent`` whose sender is the *session id*, so the
+    default identity is the group number (in groups) or the chat partner (in
+    private chats) — never the operator.  Selecting 固定账户 swaps only those two
+    answers; every other attribute still comes from the real event, so media
+    extraction, sending and platform metadata are unaffected.
+    """
+
+    def __init__(self, event, platform_name: str, user_id: str):
+        self._event = event
+        self._billing_platform = platform_name
+        self._billing_user = user_id
+
+    def get_platform_name(self):
+        return self._billing_platform
+
+    def get_sender_id(self):
+        return self._billing_user
+
+    def get_sender_name(self):
+        return "主动发起"
+
+    def __getattr__(self, key):
+        return getattr(self._event, key)
+
+
 class LifeMedia:
     def __init__(self, owner, root):
         self.owner = owner
@@ -404,6 +435,7 @@ class LifeMedia:
                 if uses_persona and refs
                 else event
             )
+            proxy = self._billing_event(proxy, event, settings)
             if kind == "photo":
                 method = aigen.generate_image
             elif kind == "video":
@@ -524,6 +556,34 @@ class LifeMedia:
         appearance = (life.get("appearance_settings", {}) or {}).get("description", "")
         text = str(appearance or "").strip()
         return text or "未填写外貌补充描述，请完全依据参考图。"
+
+    def _billing_event(self, proxy, event, settings):
+        """Return the event aigen should bill, honouring the configured account.
+
+        Only a proactive run needs the override: an ordinary chat already bills
+        the person who spoke.  When the account is incomplete the proxy is
+        returned untouched so aigen keeps its documented behaviour.
+        """
+
+        if not settings.get("proactive_billing_mode", "fixed") == "fixed":
+            return proxy
+        if not event.get_extra("decision_life_proactive", False):
+            return proxy
+        user_id = str(settings.get("proactive_billing_user_id", "") or "").strip()
+        if not user_id:
+            return proxy
+        platform = str(settings.get("proactive_billing_platform", "") or "").strip()
+        if not platform:
+            try:
+                platform = str(proxy.get_platform_name() or "").strip()
+            except (AttributeError, TypeError):
+                platform = ""
+        if not platform:
+            return proxy
+        logger.info(
+            "Decision Engine 主动发起多媒体按固定账户计费：%s / %s", platform, user_id
+        )
+        return BillingEvent(proxy, platform, user_id)
 
     def _call_kwargs(self, settings, kind, event, prompt, count, audio_text=""):
         if kind == "photo":
