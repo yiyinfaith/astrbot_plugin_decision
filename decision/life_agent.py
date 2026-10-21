@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import dataclasses
 import inspect
 from dataclasses import fields
+
+# AstrBot's own default for the main agent's per-tool time budget.
+TOOL_CALL_TIMEOUT_DEFAULT = 120
 
 
 async def dispatch_life_agent(
@@ -62,6 +66,17 @@ async def dispatch_life_agent(
         raise RuntimeError("当前 AstrBot 不提供原生发送管道")
     pipe = PipelineContext(cfg, manager, event.get_platform_id())
     values = {f.name: settings[f.name] for f in fields(MainAgentBuildConfig) if f.name in settings}
+    # ``tool_call_timeout`` has no default in newer AstrBot releases, and it is
+    # absent from provider_settings on hosts that never customised it. Fill every
+    # required field that has no default so the scheduled agent can still build.
+    for field_info in fields(MainAgentBuildConfig):
+        if field_info.name in values:
+            continue
+        if (
+            field_info.default is dataclasses.MISSING
+            and field_info.default_factory is dataclasses.MISSING
+        ):
+            values[field_info.name] = TOOL_CALL_TIMEOUT_DEFAULT
     values.update(
         streaming_response=False, provider_settings=settings, timezone=cfg.get("timezone")
     )

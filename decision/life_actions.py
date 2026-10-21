@@ -52,9 +52,13 @@ async def perform_life_action(runtime, umo, action, text="", date_range=""):
     if action == "initiate":
         _, plan = await runtime._ensure_plan_for_umo(umo)
         sent, reason = await runtime._attempt_unsolicited(
-            umo, persona, plan, text or "自然地重新联系", "manual"
+            umo, persona, plan, text or "管理员请求此刻自然地发起一次聊天", "manual"
         )
-        return {"sent": sent, "reason": reason}
+        return {
+            "sent": sent,
+            "reason": reason,
+            "message": "已主动发起一条消息。" if sent else f"本次没有发送：{reason}",
+        }
     dispatch = {
         "generate": (runtime.rewrite_schedule, (event, text)),
         "rewrite_schedule": (runtime.rewrite_daily_timeline, (event, text)),

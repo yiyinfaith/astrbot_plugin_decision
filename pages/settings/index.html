@@ -314,6 +314,15 @@
       .life-picker-list strong { display:block; font-size:12.5px; overflow-wrap:anywhere; } .life-picker-list small { display:block; margin-top:3px; color:#9fb2cf; font-size:11px; line-height:1.5; overflow-wrap:anywhere; } .life-picker-empty { padding:10px 11px; color:#93a4c0; font-size:12px; }
       .collapsible-body { padding-top:14px; }
       .life-config-section > summary { list-style:none; } .life-config-section > summary::-webkit-details-marker { display:none; }
+      .life-toast { position:sticky; bottom:12px; z-index:20; display:flex; align-items:flex-start; gap:10px; margin:14px 0 0; padding:12px 16px; border-radius:16px; font-size:13px; line-height:1.6; border:1px solid #ffffff2e; background:#182444f2; color:#e6efff; box-shadow:0 14px 34px #02061780; }
+      .life-toast.ok { border-color:#46d7a066; background:#163331f2; }
+      .life-toast.err { border-color:#ff778966; background:#3a1e28f2; }
+      .life-toast strong { flex-shrink:0; }
+      .life-toast button { margin-left:auto; border:0; background:transparent; color:#9fb2cf; cursor:pointer; font-size:15px; line-height:1; }
+      .life-toast-spin { width:13px; height:13px; flex-shrink:0; margin-top:3px; border-radius:50%; border:2px solid #ffffff33; border-top-color:#7fb0ff; animation:life-spin .7s linear infinite; }
+      @keyframes life-spin { to { transform:rotate(360deg); } }
+      .life-task.fresh { animation:life-flash 1.4s ease-out; }
+      @keyframes life-flash { 0% { background:#315fb54d; } 100% { background:transparent; } }
       .network-manager { margin-top:16px; padding-top:16px; border-top:1px solid #ffffff1f; display:grid; gap:14px; }
       .network-bar { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:end; }
       .network-bar-actions { display:flex; align-items:center; gap:12px; padding-bottom:4px; }
@@ -426,7 +435,7 @@
             </div>
             <div class="life-workspace glass-card">
               <div class="card-heading"><div><div class="section-kicker">Today &amp; Appearance</div><h2>今日生活与外貌</h2><p>先选择会话，页面按该会话解析并读取当前人格；参考图按人格保存，照片与视频使用今日穿搭。</p></div><span class="status-pill">aigen {{ aigenAvailable ? '已连接' : '未连接' }}</span></div>
-              <div class="two-col"><div class="field"><label>目标会话 <span>可搜索选择，也可直接粘贴完整 UMO</span></label><div class="life-picker"><input type="text" :value="sessionSearch" :disabled="lifeBusy" placeholder="搜索会话标题 / 平台，或粘贴 aiocqhttp:FriendMessage:用户ID" autocomplete="off" aria-label="目标会话" @focus="showSessionList = true" @input="onSessionInput($event.target.value)" @keydown.esc="showSessionList = false" @blur="hidePicker('session')"><div v-if="showSessionList" class="life-picker-list"><button v-for="row in filteredSessions" :key="row.umo" type="button" :class="{active: row.umo === lifeUmo}" @mousedown.prevent="pickSession(row)"><strong>{{ row.title || row.umo }}</strong><small>{{ [row.platform, row.message_type, row.persona_name, row.umo].filter(Boolean).join(' · ') }}</small></button><div v-if="!filteredSessions.length" class="life-picker-empty">没有匹配的会话；可直接粘贴完整 UMO。</div></div></div><p class="hint">会话列表来自 AstrBot 的会话；选中的 UMO 决定读取哪个人格的生活与外貌。当前实际 UMO：{{ lifeUmo || '未选择' }}</p></div><div class="field"><label>当前人格</label><div class="life-persona">{{ appearancePersona || '选择会话后点击读取' }}</div><p class="hint">当前人格由所选会话决定，不可在此直接修改。</p></div></div>
+              <div v-if="lifeToast" class="life-toast" :class="lifeToast.kind" role="status" aria-live="polite"><span v-if="lifeToast.kind === 'busy'" class="life-toast-spin"></span><strong>{{ lifeToast.title }}</strong><span>{{ lifeToast.text }}</span><button type="button" aria-label="关闭提示" @click="lifeToast = null">×</button></div><div class="two-col"><div class="field"><label>目标会话 <span>可搜索选择，也可直接粘贴完整 UMO</span></label><div class="life-picker"><input type="text" :value="sessionSearch" :disabled="lifeBusy" placeholder="搜索会话标题 / 平台，或粘贴 aiocqhttp:FriendMessage:用户ID" autocomplete="off" aria-label="目标会话" @focus="showSessionList = true" @input="onSessionInput($event.target.value)" @keydown.esc="showSessionList = false" @blur="hidePicker('session')"><div v-if="showSessionList" class="life-picker-list"><button v-for="row in filteredSessions" :key="row.umo" type="button" :class="{active: row.umo === lifeUmo}" @mousedown.prevent="pickSession(row)"><strong>{{ row.title || row.umo }}</strong><small>{{ [row.platform, row.message_type, row.persona_name, row.umo].filter(Boolean).join(' · ') }}</small></button><div v-if="!filteredSessions.length" class="life-picker-empty">没有匹配的会话；可直接粘贴完整 UMO。</div></div></div><p class="hint">会话列表来自 AstrBot 的会话；选中的 UMO 决定读取哪个人格的生活与外貌。当前实际 UMO：{{ lifeUmo || '未选择' }}</p></div><div class="field"><label>当前人格</label><div class="life-persona">{{ appearancePersona || '选择会话后点击读取' }}</div><p class="hint">当前人格由所选会话决定，不可在此直接修改。</p></div></div>
               <div class="life-actions"><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('generate')">生成今日内容</button><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('rewrite_schedule')">重写日程</button><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('rewrite_outfit')">重写穿搭</button></div>
               <p class="hint">{{ lifeBusy ? '正在处理，请稍候…' : '操作使用已保存的设置；修改配置后请先保存。生成与重写会请求日程模型，不会自动发送聊天消息。' }}</p>
               <div class="field"><label>补充要求 / 长期阶段自然语言要求</label><textarea v-model="lifeActionText" placeholder="例如今天穿浅色休闲服，下午在书店。导入阶段时填写完整 JSON。"></textarea></div>
@@ -489,7 +498,7 @@
             </div></details>
             </div>
             <div class="life-config-grid"><details v-for="(group,key) in lifeConfigGroups" :key="key" class="glass-card life-config-section" ><summary><span>{{ cleanLifeLabel(group.description || key) }}</span><small>{{ Object.keys(group.items || {}).length }} 项设置</small></summary><template v-if="key === 'media_settings' && lifeConfig[key]"><life-settings :schema="mediaSettingsSchema" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><div class="billing-picker-row"><div class="field"><label>固定账户平台名 <span>来自 AstrBot 已配置的平台</span></label><select aria-label="固定账户平台名" v-model="lifeConfig.media_settings.proactive_billing_platform"><option value="">沿用当前平台</option><option v-for="row in billingPlatforms" :key="row.id" :value="row.id">{{ row.name }}</option><option v-if="lifeConfig.media_settings.proactive_billing_platform && !billingPlatforms.some(p => p.id === lifeConfig.media_settings.proactive_billing_platform)" :value="lifeConfig.media_settings.proactive_billing_platform">{{ lifeConfig.media_settings.proactive_billing_platform }}（已保存）</option></select></div><div class="field"><label>固定账户用户 ID <span>来自 aigen 记账账户，可搜索</span></label><div class="life-picker"><input type="text" :value="billingUserLabel" placeholder="搜索平台或用户 ID" autocomplete="off" aria-label="固定账户用户 ID" @focus="showBillingUserList = true" @input="onBillingUserInput($event.target.value)" @keydown.esc="showBillingUserList = false" @blur="hidePicker('billingUser')"><div v-if="showBillingUserList" class="life-picker-list"><button v-for="row in filteredBillingAccounts" :key="row.label" type="button" :class="{active: row.user_id === lifeConfig.media_settings.proactive_billing_user_id}" @mousedown.prevent="pickBillingAccount(row)"><strong>{{ row.user_id }}</strong><small>{{ row.platform }} · 余额 {{ row.amount }}</small></button><div v-if="!filteredBillingAccounts.length" class="life-picker-empty">没有匹配的记账账户；也可直接输入用户 ID。</div></div></div><p class="hint">列出的是 aigen 账本中已有余额行的账户；主动发起会消耗这里选中的账户。</p></div></div></template><life-settings v-else-if="lifeConfig[key]" :schema="group.items" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><p v-if="key === 'media_settings'" class="hint">三项概率独立掷骰，判定为“生成多媒体”后只会从已启用的种类里挑一种发送，数量由模型在配置区间内决定。</p></details></div>
-                        <div class="glass-card"><div class="card-heading"><div><div class="section-kicker">Runtime</div><p>{{ lifeMessage || '配置保存在 AstrBot 数据目录；后台主动发送默认关闭。' }}</p></div><button class="button ghost" @click="refreshLife">刷新状态</button></div><div v-for="(task,id) in lifeTasks" :key="id" class="life-task"><strong>{{ task.action }} · {{ task.state }}</strong><p v-if="task.error">{{ task.error }}</p><template v-if="Array.isArray(task.result)"><template v-for="(part,idx) in task.result" :key="idx"><img v-if="part.type === 'image'" class="life-result-image" :src="part.src" alt="生活查询图片"><pre v-else class="life-json">{{ part.text }}</pre></template></template><pre v-else-if="task.result" class="life-json">{{ typeof task.result === 'object' ? JSON.stringify(task.result,null,2) : task.result }}</pre></div><details><summary>查看计划任务与最近 Jev 决策</summary><pre class="life-json">{{ JSON.stringify(lifeStatus,null,2) }}</pre></details></div>
+                        <div class="glass-card"><div class="card-heading"><div><div class="section-kicker">Runtime</div><p>{{ lifeMessage || '配置保存在 AstrBot 数据目录；后台主动发送默认关闭。' }}</p></div><button class="button ghost" @click="refreshLife">刷新状态</button></div><div v-for="(task,id) in lifeTasks" :key="id" class="life-task" :class="{ fresh: id === lifeFreshTask }"><strong>{{ actionLabel(task.action) }} · {{ refreshStatus(task.state) }}</strong><p v-if="task.error">{{ task.error }}</p><template v-if="Array.isArray(task.result)"><template v-for="(part,idx) in task.result" :key="idx"><img v-if="part.type === 'image'" class="life-result-image" :src="part.src" alt="生活查询图片"><pre v-else class="life-json">{{ part.text }}</pre></template></template><pre v-else-if="task.result" class="life-json">{{ typeof task.result === 'object' ? JSON.stringify(task.result,null,2) : task.result }}</pre></div><details><summary>查看计划任务与最近 Jev 决策</summary><pre class="life-json">{{ JSON.stringify(lifeStatus,null,2) }}</pre></details></div>
           </div>
         </section>
 
@@ -679,6 +688,7 @@
             networkNewEvent: { participants: '', type: '', summary: '' },
             billingOptions: [], billingPlatformList: [], billingUserSearch: '', showBillingUserList: false,
             lifeInspection: {}, aigenAvailable: false, lifePoll: null, lifeInspectTask: '', lifeAppliedTask: '',
+            lifeToast: null, lifeFreshTask: '',
             toolSearch: '',
             statusText: '加载中…',
             saveState: '',
@@ -1002,6 +1012,7 @@
             this._lifeLoading = umo;
             this.lifeBusy = true;
             this.lifeMessage = `正在读取 ${umo} 的人格与今日生活…`;
+            this.showToast('busy', '正在读取', umo);
             try {
               const bridge = await waitForBridge();
               const result = payloadOf(await bridge.apiPost('life/appearance', { umo, action: 'list' }));
@@ -1018,6 +1029,52 @@
               this.lifeBusy = false;
             }
           },
+          actionLabel(action) {
+            return ({
+              inspect: '读取生活与外貌',
+              generate: '生成今日内容',
+              rewrite_schedule: '重写日程',
+              rewrite_outfit: '重写穿搭',
+              render_schedule: '渲染日程图片',
+              render_outfit: '渲染穿搭图片',
+              render_timeline: '渲染长期阶段图片',
+              render_stage: '查询当前阶段',
+              initiate: '请求立即发起',
+              settle_delay: '结算回复等待',
+              generate_timeline: '生成追加草稿',
+              regenerate_timeline: '生成替换草稿',
+              import_timeline: '导入 JSON',
+              approve_timeline: '批准草稿',
+              reject_timeline: '拒绝并重写',
+              add_requirement: '添加一次性要求',
+            })[action] || action;
+          },
+          showToast(kind, title, text) { this.lifeToast = { kind, title, text }; },
+          describeResult(result) {
+            if (result == null) return '完成，没有返回内容。';
+            if (typeof result === 'string') return result.slice(0, 300);
+            if (Array.isArray(result)) {
+              const texts = result.filter(p => p && p.type === 'text').map(p => String(p.text || ''));
+              const images = result.filter(p => p && p.type === 'image').length;
+              const head = texts.join(' ').replace(/\s+/g, ' ').slice(0, 240);
+              const tail = images ? ` （含 ${images} 张图片，见下方结果）` : '';
+              return (head || '完成。') + tail;
+            }
+            if (typeof result === 'object') {
+              if (typeof result.message === 'string') return result.message.slice(0, 300);
+              if (result.sent === true) return '已发送。';
+              if (result.sent === false) return `未发送：${result.reason || '未知原因'}`;
+              return JSON.stringify(result).slice(0, 240);
+            }
+            return String(result).slice(0, 240);
+          },
+          refreshStatus(q) {
+            if (q === 'running') return '处理中…';
+            if (q === 'done') return '已完成';
+            if (q === 'error') return '失败';
+            if (q === 'cancelled') return '已取消';
+            return q;
+          },
           async lifeAction(action) {
             if (!this.lifeUmo.trim()) { this.lifeMessage = '请先填写完整会话 UMO。'; return; }
             this.lifeBusy = true;
@@ -1030,16 +1087,23 @@
               // looks dead because the result only appears later.
               const done = await this.awaitLifeTask(result.task_id);
               await this.refreshLife();
+              const label = this.actionLabel(action);
+              const job = (this.lifeTasks || {})[result.task_id] || {};
               if (!done) {
-                this.lifeMessage = `操作仍在后台运行（${action}）；可稍后点“刷新状态”查看结果。`;
+                this.lifeMessage = `操作仍在后台运行（${label}）；稍后点“刷新状态”查看结果。`;
+                this.showToast('busy', label, '仍在后台运行，可稍后刷新查看结果。');
+              } else if (job.error) {
+                this.lifeMessage = `操作失败：${job.error}`;
+                this.showToast('err', `${label} 失败`, job.error);
               } else {
-                const job = this.lifeTasks[result.task_id] || {};
-                this.lifeMessage = job.error
-                  ? `操作失败：${job.error}`
-                  : `已完成：${action}`;
-                if (job.state === 'done') this.lifeExpanded = true;
+                this.lifeMessage = `已完成：${label}`;
+                this.lifeFreshTask = result.task_id;
+                this.showToast('ok', `${label} 已完成`, this.describeResult(job.result));
               }
-            } catch(e) { this.lifeMessage = `操作失败：${e.message || e}`; }
+            } catch(e) {
+              this.lifeMessage = `操作失败：${e.message || e}`;
+              this.showToast('err', `${this.actionLabel(action)} 失败`, String(e.message || e));
+            }
             finally { this.lifeBusy = false; }
           },
           async awaitLifeTask(taskId, timeoutMs = 120000) {

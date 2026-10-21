@@ -138,6 +138,8 @@ class LifeRuntime(VirtualLifeBase):
         self.action_lock = asyncio.Lock()
         self.closed = False
         self._loaded = False
+        # Sessions currently in a manual (administrator-triggered) delivery.
+        self._manual_umos: set[str] = set()
 
     def spawn(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -364,11 +366,21 @@ class LifeRuntime(VirtualLifeBase):
         now = self._now().strftime("%H:%M")
         return start != end and (start <= now < end if start < end else now >= start or now < end)
 
+    def _manual_sessions(self) -> set[str]:
+        return getattr(self, "_manual_umos", set())
+
+    def _is_manual(self, umo) -> bool:
+        return str(umo) in self._manual_sessions()
+
     def can_commit(self, umo, generation):
+        # A manual request bypasses the scope list and quiet hours for the rest
+        # of this delivery, which is what makes the administrator button work
+        # outside the whitelist.
+        manual = self._is_manual(umo)
         return (
             self.enabled
-            and self.policy.is_enabled(umo)
-            and not self._quiet()
+            and (manual or self.policy.is_enabled(umo))
+            and (manual or not self._quiet())
             and self._conversation_generation(umo) == generation
             and time.monotonic() <= self.deadlines.get(umo, 0)
         )
@@ -385,7 +397,11 @@ class LifeRuntime(VirtualLifeBase):
     async def _attempt_unsolicited(self, umo, persona, plan, intent, trigger, *, attempt_key=""):
         if not self.enabled:
             return False, "disabled"
-        if self._quiet():
+        # A manual request from the WebUI or an administrator is an explicit
+        # instruction: skip the scope list, quiet hours and the budget/cooldown
+        # guardrails, while still requiring a schedule and a usable platform.
+        manual = trigger == "manual"
+        if not manual and self._quiet():
             self._schedule_idle(umo, run_at=self._now() + timedelta(minutes=30))
             return False, "quiet hours"
         platform_id = umo.split(":", 1)[0]
@@ -405,24 +421,32 @@ class LifeRuntime(VirtualLifeBase):
                 if trigger == "window" and not self._window_is_idle_enough(umo, now):
                     return False, "conversation is not idle enough"
                 state = self.policy.ensure_state(umo, persona.id, plan, now)
-                decision = self.policy.evaluate(
-                    umo=umo,
-                    state=state,
-                    current_item=timeline_item_at(plan, now),
-                    now=now,
-                    trigger=trigger,
-                    attempt_key=attempt_key,
-                )
-                if not decision.allowed:
+                if manual:
+                    decision = None
+                else:
+                    decision = self.policy.evaluate(
+                        umo=umo,
+                        state=state,
+                        current_item=timeline_item_at(plan, now),
+                        now=now,
+                        trigger=trigger,
+                        attempt_key=attempt_key,
+                    )
+                if decision is not None and not decision.allowed:
                     return False, decision.reason
-                delivered = await self._deliver(
-                    umo,
-                    persona,
-                    plan,
-                    intent,
-                    state.unanswered_count,
-                    self._conversation_generation(umo),
-                )
+                if manual:
+                    self._manual_sessions().add(umo)
+                try:
+                    delivered = await self._deliver(
+                        umo,
+                        persona,
+                        plan,
+                        intent,
+                        state.unanswered_count,
+                        self._conversation_generation(umo),
+                    )
+                finally:
+                    self._manual_sessions().discard(umo)
                 return delivered, "sent" if delivered else "Jev 未通过或候选已失效"
         except Exception as exc:
             failures += 1
@@ -486,7 +510,9 @@ class LifeRuntime(VirtualLifeBase):
             return False
         scores = [result.answers.get(q, {}).get("noul", 0) for q in questions]
         threshold = settings["jev_threshold"]
-        if not all(
+        # Jev still runs for a manual request because it shapes the message, but
+        # it no longer vetoes: the administrator already said "send now".
+        if not self._is_manual(umo) and not all(
             isinstance(score, (int, float))
             and not isinstance(score, bool)
             and 0 <= score <= 1

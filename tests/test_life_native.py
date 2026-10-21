@@ -765,3 +765,28 @@ def test_proactive_runtime_follows_per_kind_switches(native):
     runtime.config["friend_settings"]["enable"] = True
     runtime.config["integration_settings"]["enable"] = False
     assert runtime.enabled is True
+
+
+def test_manual_trigger_bypasses_whitelist_and_quiet_hours(native):
+    """The administrator button must send even outside the scope list."""
+
+    runtime = native.runtime
+    runtime.closed = False
+    runtime.config["friend_settings"]["enable"] = True
+    runtime.config["friend_settings"]["session_blacklist"] = False
+    runtime.config["friend_settings"]["session_list"] = []  # empty whitelist = nobody
+    runtime.config["integration_settings"]["quiet_start"] = "00:00"
+    runtime.config["integration_settings"]["quiet_end"] = "23:59"
+
+    runtime.deadlines[UMO] = time.monotonic() + 600
+    assert runtime.can_commit(UMO, 0) is False, "scheduled runs stay blocked"
+
+    runtime._manual_umos.add(UMO)
+    try:
+        assert runtime.can_commit(UMO, 0) is True, "manual trigger must pass"
+        # The bypass is scoped to that one session.
+        other = "aiocqhttp:FriendMessage:424242"
+        runtime.deadlines[other] = time.monotonic() + 600
+        assert runtime.can_commit(other, 0) is False
+    finally:
+        runtime._manual_umos.discard(UMO)
