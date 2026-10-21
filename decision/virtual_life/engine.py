@@ -780,8 +780,10 @@ class VirtualLifeBase:
         if run_at is None:
             return
         self._schedule_window_retry(umo, persona, plan, window, run_at, reason)
-        if reason != "agent task active":
-            self._window_retry_counts[key] = count + 1
+        # Every rescheduled attempt must consume budget, including "agent task
+        # active": that reason retries in 30 minutes forever otherwise, because
+        # nothing else ever advances the counter for it.
+        self._window_retry_counts[key] = count + 1
 
     def _delayed_window_intent(
         self,

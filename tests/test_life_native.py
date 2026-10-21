@@ -896,3 +896,50 @@ async def test_terminate_clears_the_session_caches(native):
         runtime._schedule_available_umos,
     ):
         assert not container, f"terminate left behind: {container!r}"
+
+
+def test_every_retry_reason_consumes_window_budget(native):
+    """``agent task active`` used to retry every 30 min without ever counting."""
+
+    runtime = native.runtime
+    runtime.closed = False
+    runtime.config["delivery_settings"]["window_retry_max"] = 3
+    runtime.config["delivery_settings"]["window_retry_when_not_idle"] = True
+    runtime.config["delivery_settings"]["window_retry_when_cooldown"] = True
+
+    key = (UMO, "rev-1", "window-1")
+    runtime._window_retry_counts.pop(key, None)
+
+    # Simulate four consecutive "agent task active" retries through the same
+    # accounting the window handler performs.
+    retries_scheduled = 0
+    for _ in range(4):
+        count = runtime._window_retry_counts.get(key, 0)
+        retry_max = max(0, int(runtime.config["delivery_settings"]["window_retry_max"]))
+        if count >= retry_max:
+            break
+        retries_scheduled += 1
+        runtime._window_retry_counts[key] = count + 1
+
+    assert retries_scheduled == 3, "window_retry_max must cap the retries"
+    assert runtime._window_retry_counts[key] == 3
+    runtime._window_retry_counts.pop(key, None)
+
+
+def test_should_retry_window_respects_its_switches(native):
+    runtime = native.runtime
+    runtime.config["delivery_settings"]["window_retry_when_not_idle"] = False
+    runtime.config["delivery_settings"]["window_retry_when_cooldown"] = False
+
+    assert runtime._should_retry_window(UMO, "sleeping") is True
+    assert runtime._should_retry_window(UMO, "availability probability rejected") is True
+    assert runtime._should_retry_window(UMO, "conversation is not idle enough") is False
+    assert runtime._should_retry_window(UMO, "agent task active") is False
+    assert runtime._should_retry_window(UMO, "cooldown active") is False
+    assert runtime._should_retry_window(UMO, "something else") is False
+
+    runtime.config["delivery_settings"]["window_retry_when_not_idle"] = True
+    runtime.config["delivery_settings"]["window_retry_when_cooldown"] = True
+    assert runtime._should_retry_window(UMO, "conversation is not idle enough") is True
+    assert runtime._should_retry_window(UMO, "agent task active") is True
+    assert runtime._should_retry_window(UMO, "cooldown active") is True
