@@ -453,14 +453,15 @@ class LifeMedia:
             # automatically after ambiguous transport or platform failures.
             async with self.usage_lock:
                 usage = await self.usage.load()
-                key = runtime._now().date().isoformat() + "::" + umo
+                # Read the clock once: taking it again below could cross midnight
+                # and prune away the very key just used to compute the quota.
+                today = runtime._now().date().isoformat()
+                key = today + "::" + umo
                 quota = usage["usage"].get(key, 0)
                 if quota >= settings["daily_limit"]:
                     return "本会话今日生成额度已用完。"
                 usage["usage"] = {
-                    k: v
-                    for k, v in usage["usage"].items()
-                    if k.startswith(runtime._now().date().isoformat())
+                    k: v for k, v in usage["usage"].items() if k.startswith(today)
                 }
                 usage["usage"][key] = quota + 1
                 await self.usage.save(usage)
