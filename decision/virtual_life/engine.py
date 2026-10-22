@@ -656,14 +656,34 @@ class VirtualLifeBase:
         sleep_items = [item for item in plan.timeline if item.state == "sleep"]
         if not sleep_items:
             return
-        item = max(
-            sleep_items,
-            key=lambda value: self._duration_minutes(value.start, value.end),
-        )
-        start = self._at_time(plan.date, item.start)
-        end = self._end_time(plan.date, item.end)
-        if end <= self._now() or (end - start).total_seconds() < 120:
+        # A night split across midnight arrives as two segments. Consider every
+        # segment that has not finished yet and draw one weighted by its length,
+        # so a wake-up can also happen in the evening half instead of always
+        # landing in the longest block.
+        candidates = []
+        for candidate in sleep_items:
+            seg_start = self._at_time(plan.date, candidate.start)
+            seg_end = self._end_time(plan.date, candidate.end)
+            if seg_end <= self._now() or (seg_end - seg_start).total_seconds() < 120:
+                continue
+            candidates.append((candidate, seg_start, seg_end))
+        if not candidates:
             return
+        total = sum(
+            max(1, int((seg_end - seg_start).total_seconds() // 60))
+            for _, seg_start, seg_end in candidates
+        )
+        draw = deterministic_int(f"sleep-pick::{plan.date}::{umo}", 0, max(0, total - 1))
+        chosen = candidates[-1]
+        for candidate in candidates:
+            weight = max(
+                1, int((candidate[2] - candidate[1]).total_seconds() // 60)
+            )
+            if draw < weight:
+                chosen = candidate
+                break
+            draw -= weight
+        _, start, end = chosen
         earliest = max(start, self._now() + timedelta(seconds=10))
         span = max(1, int((end - earliest).total_seconds() // 60) - 1)
         offset = deterministic_int(f"sleep-time::{plan.date}::{umo}", 0, span)
@@ -739,7 +759,11 @@ class VirtualLifeBase:
             plan,
             window,
             delayed=True,
-            attempt_key=scheduled_at,
+            # A retry is a fresh roll of the availability dice. Reusing the
+            # original scheduled_at kept the same deterministic seed, so a window
+            # rejected by the availability probability could never pass no matter
+            # how many times it was retried.
+            attempt_key=f"{scheduled_at}#retry:{self._now().isoformat()}",
             retry_reason=retry_reason,
         )
 

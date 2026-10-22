@@ -546,7 +546,7 @@
       "idle_min_minutes": {
         "description": "最短沉默时间",
         "type": "int",
-        "hint": "会话空闲达到此时间后才可触发，单位为分钟。",
+        "hint": "沉默多久后开始考虑主动发起。与「发送冷却」是两个独立条件：沉默时间到点只是进入候选，能否真的发送还要看冷却是否已过。",
         "default": 90
       },
       "idle_max_minutes": {
@@ -558,7 +558,7 @@
       "cooldown_minutes": {
         "description": "发送冷却",
         "type": "int",
-        "hint": "两次非委托主动消息之间的最短间隔，单位为分钟。",
+        "hint": "两次主动消息之间至少间隔多久，独立于「最短/最长沉默时间」。沉默到点但冷却未过时不会发送，会等到冷却结束。建议让冷却不超过最长沉默时间，否则沉默区间会被冷却完全覆盖。",
         "default": 120
       },
       "daily_budget_min": {
@@ -612,7 +612,7 @@
       "idle_min_minutes": {
         "description": "最短沉默时间",
         "type": "int",
-        "hint": "群聊空闲达到此时间后才可触发，单位为分钟。",
+        "hint": "沉默多久后开始考虑主动发起。与「发送冷却」是两个独立条件：沉默时间到点只是进入候选，能否真的发送还要看冷却是否已过。",
         "default": 45
       },
       "idle_max_minutes": {
@@ -624,7 +624,7 @@
       "cooldown_minutes": {
         "description": "发送冷却",
         "type": "int",
-        "hint": "两次非委托主动消息之间的最短间隔，单位为分钟。",
+        "hint": "两次主动消息之间至少间隔多久，独立于「最短/最长沉默时间」。沉默到点但冷却未过时不会发送，会等到冷却结束。建议让冷却不超过最长沉默时间，否则沉默区间会被冷却完全覆盖。",
         "default": 60
       },
       "daily_budget_min": {
@@ -658,9 +658,9 @@
     "type": "object",
     "items": {
       "max_unanswered": {
-        "description": "未回复阈值",
+        "description": "连续未回应上限",
         "type": "int",
-        "hint": "连续未获回复达到此次数后暂停主动消息。",
+        "hint": "连续多少条主动消息都没得到回复后暂停主动发起。对方任意回一句就立刻清零并恢复，不是每天累计的总次数。",
         "default": 3
       },
       "sleep_exception_probability": {

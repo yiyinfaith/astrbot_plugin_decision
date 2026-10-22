@@ -10,7 +10,7 @@ import holidays
 from astrbot.api import logger
 
 from .long_term import validate_stage_bundle
-from .models import DailyPlan, Outfit, ProactiveWindow, TimelineItem
+from .models import DailyPlan, Outfit, ProactiveWindow, split_timeline
 from .persona import PersonaContext
 from .utils import extract_json_object
 
@@ -471,7 +471,7 @@ class DailyPlanGenerator:
                     revision = hashlib.sha1(
                         f"{base_plan.revision if base_plan else ''}\n{mode}\n{raw}".encode()
                     ).hexdigest()[:12]
-                    parsed_timeline = tuple(TimelineItem.from_dict(item) for item in raw_timeline)
+                    parsed_timeline = split_timeline(raw_timeline)
                     parsed_windows = tuple(ProactiveWindow.from_dict(item) for item in raw_windows)
                     if base_plan is None:
                         return DailyPlan(

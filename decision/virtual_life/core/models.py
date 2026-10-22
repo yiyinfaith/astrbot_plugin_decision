@@ -109,6 +109,49 @@ class TimelineItem:
             ),
         )
 
+    @classmethod
+    def split_at_midnight(cls, value: dict[str, Any]) -> list[TimelineItem]:
+        """Parse one raw item, splitting it when it crosses midnight.
+
+        The model naturally writes "23:00".."07:00" for sleep, but a single item
+        must satisfy ``start < end``. Splitting keeps every downstream consumer
+        working with ordered, same-day intervals instead of special-casing the
+        wrap-around everywhere.
+        """
+
+        try:
+            return [TimelineItem.from_dict(value)]
+        except ValueError as exc:
+            if "earlier than end" not in str(exc):
+                raise
+        start = str(value.get("start", "")).strip()
+        end = str(value.get("end", "")).strip()
+        try:
+            crosses = minute_of_day(start) > minute_of_day(end)
+        except (TypeError, ValueError):
+            crosses = False
+        if not crosses:
+            raise ValueError("timeline start must be earlier than end")
+        ident = str(value.get("id", "")).strip()
+        return [
+            cls.from_dict({**value, "id": f"{ident}#pm", "start": start, "end": "24:00"}),
+            cls.from_dict({**value, "id": f"{ident}#am", "start": "00:00", "end": end}),
+        ]
+
+
+def split_timeline(raw_items) -> tuple[TimelineItem, ...]:
+    """Parse a raw timeline, splitting items that cross midnight.
+
+    A day must run 00:00 -> 24:00 in order, so a "23:00".."07:00" sleep entry has
+    to become an evening half before midnight and a morning half after it, with
+    the morning half sorted to the front of the day rather than left at the end.
+    """
+
+    parsed: list[TimelineItem] = []
+    for raw in raw_items:
+        parsed.extend(TimelineItem.split_at_midnight(raw))
+    return tuple(sorted(parsed, key=lambda item: minute_of_day(item.start)))
+
 
 @dataclass(slots=True, frozen=True)
 class ProactiveWindow:
@@ -266,7 +309,7 @@ class DailyPlan:
             outfit=(
                 Outfit.from_dict(value.get("outfit")) if value.get("outfit") is not None else None
             ),
-            timeline=tuple(TimelineItem.from_dict(item) for item in value.get("timeline", [])),
+            timeline=split_timeline(value.get("timeline", [])),
             proactive_windows=tuple(
                 ProactiveWindow.from_dict(item) for item in value.get("proactive_windows", [])
             ),
