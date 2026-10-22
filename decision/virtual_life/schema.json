@@ -534,8 +534,8 @@
       "session_blacklist": {
         "description": "名单模式",
         "type": "bool",
-        "hint": "关闭为白名单：只有名单内会话会主动发起，名单为空时全部不发起。开启为黑名单（默认）：名单内会话不主动发起，名单为空时全部发起。",
-        "default": true
+        "hint": "关闭为白名单（默认）：只有名单内会话会主动发起，名单为空时全部不发起。开启为黑名单：名单内会话不主动发起，名单为空时全部发起。",
+        "default": false
       },
       "session_list": {
         "description": "私聊会话名单",
@@ -600,8 +600,8 @@
       "session_blacklist": {
         "description": "名单模式",
         "type": "bool",
-        "hint": "关闭为白名单：只有名单内会话会主动发起，名单为空时全部不发起。开启为黑名单（默认）：名单内会话不主动发起，名单为空时全部发起。",
-        "default": true
+        "hint": "关闭为白名单（默认）：只有名单内会话会主动发起，名单为空时全部不发起。开启为黑名单：名单内会话不主动发起，名单为空时全部发起。",
+        "default": false
       },
       "session_list": {
         "description": "群聊会话名单",
