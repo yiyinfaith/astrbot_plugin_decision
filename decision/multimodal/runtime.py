@@ -88,6 +88,14 @@ class MultimodalRuntime:
 
     async def initialize(self) -> None:
         await self.cache.load()
+        from .preprocess import tooling_status
+
+        status = tooling_status()
+        if not all(status.values()):
+            logger.warning(
+                "Decision Engine 多模态：缺少 %s，视频与音频理解将不可用",
+                ", ".join(name for name, ok in status.items() if not ok),
+            )
 
     async def terminate(self) -> None:
         self._closed = True
@@ -185,6 +193,22 @@ class MultimodalRuntime:
             )
 
     # ----------------------------------------------------------- understand
+    @staticmethod
+    def cache_identity(ref: MediaRef, provider_id: str, instruction: str, detail: bool) -> str:
+        """Cache identity: the media plus everything that shapes the answer."""
+
+        import hashlib
+
+        material = "|".join(
+            [
+                ref.content_key,
+                provider_id,
+                "detail" if detail else "normal",
+                (instruction or "").strip(),
+            ]
+        )
+        return hashlib.sha256(material.encode()).hexdigest()[:40]
+
     async def understand(
         self,
         ref: MediaRef,
@@ -195,16 +219,21 @@ class MultimodalRuntime:
     ) -> Understanding:
         """Understand one media item, reusing the cache unless ``force``."""
 
-        key = ref.content_key
+        kind = ref.kind
+        choice, error = adapters.pick_provider(self._context(), self._settings, kind)
+        key = (
+            self.cache_identity(ref, choice.provider_id, instruction, detail)
+            if choice is not None
+            else self.cache_identity(ref, error, instruction, detail)
+        )
         if not force:
             cached = await self.cache.get(key)
             if cached is not None:
                 return cached
-
-        kind = ref.kind
-        choice, error = adapters.pick_provider(self._context(), self._settings, kind)
         if choice is None:
             item = self._failure(ref, error)
+            item.key = key
+            item.media_key = ref.content_key
             await self.cache.put(item)
             return item
 
@@ -222,6 +251,7 @@ class MultimodalRuntime:
                     )
                 item = Understanding(
                     key=key,
+                    media_key=ref.content_key,
                     kind=kind,
                     umo=ref.umo,
                     summary=summary.strip(),
@@ -249,6 +279,8 @@ class MultimodalRuntime:
             if attempt + 1 < attempts:
                 await asyncio.sleep(min(2.0, 0.5 * (attempt + 1)))
         item = self._failure(ref, last_error)
+        item.key = key
+        item.media_key = ref.content_key
         await self.cache.put(item)
         return item
 
@@ -286,17 +318,27 @@ class MultimodalRuntime:
 
         try:
             if kind == "file":
-                prepared = await asyncio.to_thread(
-                    preprocess.extract_file_text, path, self._settings
-                )
-                text = prepared.text
+                try:
+                    prepared = await asyncio.to_thread(
+                        preprocess.extract_file_text, path, self._settings
+                    )
+                except ValueError as exc:
+                    if "扫描件" not in str(exc) or not self._settings.bool("mm_file_ocr"):
+                        raise
+                    return await self._ocr_document(choice, prompt, workdir, path)
+                if len(prepared.text) < 80 and self._settings.bool("mm_file_ocr"):
+                    scanned = await self._ocr_document(
+                        choice, prompt, workdir, path, fallback=prepared
+                    )
+                    if scanned is not None:
+                        return scanned
                 answer = await adapters.call_provider(
                     choice.provider,
-                    prompt=self._compose(prompt, prepared.notes, text),
+                    prompt=self._compose(prompt, prepared.notes, prepared.text),
                     model=choice.model or None,
                     timeout=float(self._settings.int("mm_timeout_seconds")),
                 )
-                return answer, {"chars": len(text), "notes": prepared.notes}
+                return answer, {"chars": len(prepared.text), "notes": prepared.notes}
 
             if kind == "image":
                 prepared = await asyncio.to_thread(
@@ -372,18 +414,18 @@ class MultimodalRuntime:
             )
             return answer, {"duration": duration, "frames": len(frames), "mode": "frames"}
 
-        # Long video: coarse pass, then focused re-reads chosen by the model.
-        stamps = preprocess.plan_timestamps(
-            duration, max(4, int(settings.int("mm_video_agentic_segments")))
-        )
+        # Long video: iterate. Each round asks the model what to look at next and
+        # re-reads those windows at higher density.
+        rounds = max(1, int(settings.int("mm_video_agentic_rounds")))
+        windows_per_round = max(1, int(settings.int("mm_video_agentic_segments")) // 2 or 1)
+        stamps = preprocess.plan_timestamps(duration, max(4, windows_per_round * 2))
         frames = await preprocess.extract_frames(path, workdir, stamps)
         if not frames:
             raise ValueError("无法从视频中提取画面")
-        rounds = max(1, int(settings.int("mm_video_agentic_rounds")))
         overview = await adapters.call_provider(
             choice.provider,
             prompt=self._compose(
-                AGENTIC_PROMPT.format(limit=min(6, len(stamps))),
+                AGENTIC_PROMPT.format(limit=windows_per_round),
                 self._stamp_notes(stamps),
                 "",
             ),
@@ -391,33 +433,117 @@ class MultimodalRuntime:
             model=choice.model or None,
             timeout=timeout,
         )
-        windows = self._parse_windows(overview, duration, len(stamps))
-        details = []
-        for window in windows[: max(1, rounds * 2)]:
-            stamps_detail = preprocess.sample_video(info, settings, window=window)
-            focus = await preprocess.extract_frames(path, workdir, stamps_detail)
-            if not focus:
-                continue
-            part = await adapters.call_provider(
-                choice.provider,
-                prompt=(
-                    f"请聚焦这段视频在 {window[0]:.1f}s 到 {window[1]:.1f}s 之间的内容，"
-                    "说明具体发生了什么，并尽量给出时间点。"
-                ),
-                images=focus,
-                model=choice.model or None,
-                timeout=timeout,
+        details: list[str] = []
+        seen: set[tuple[float, float]] = set()
+        transcript = ""
+        if info.get("has_audio"):
+            transcript = await self._video_transcript(choice, path, workdir, timeout)
+        for round_index in range(rounds):
+            planned = self._parse_windows(
+                overview if round_index == 0 else "\n".join(details) or overview,
+                duration,
+                windows_per_round,
             )
-            details.append(f"[{window[0]:.1f}s-{window[1]:.1f}s] {part.strip()}")
+            fresh = [window for window in planned if window not in seen][:windows_per_round]
+            if not fresh:
+                break
+            for window in fresh:
+                seen.add(window)
+                focus_stamps = preprocess.sample_video(info, settings, window=window)
+                focus = await preprocess.extract_frames(path, workdir, focus_stamps)
+                if not focus:
+                    continue
+                extra = f"这是第 {round_index + 2} 轮重点分析。" if round_index else ""
+                part = await adapters.call_provider(
+                    choice.provider,
+                    prompt=(
+                        f"{extra}请聚焦视频在 {window[0]:.1f}s 到 {window[1]:.1f}s 之间的内容，"
+                        "说明具体发生了什么，尽量给出时间点。"
+                    ),
+                    images=focus,
+                    model=choice.model or None,
+                    timeout=timeout,
+                )
+                details.append(f"[{window[0]:.1f}s-{window[1]:.1f}s] {part.strip()}")
         summary = overview.strip()
+        if transcript:
+            summary = f"{summary}\n\n音轨要点：\n{transcript}"
         if details:
-            summary = f"{summary}\n\n重点片段：\n" + "\n".join(details)
+            summary = f"{summary}\n\n重点片段（{len(details)} 段，{rounds} 轮迭代）：\n" + "\n".join(details)
         return summary, {
             "duration": duration,
             "frames": len(frames),
             "windows": len(details),
+            "rounds": rounds,
             "mode": "agentic",
+            "has_audio": bool(info.get("has_audio")),
         }
+
+    async def _ocr_document(
+        self,
+        choice: adapters.ProviderChoice,
+        prompt: str,
+        workdir: Path,
+        path: Path,
+        fallback: Any = None,
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Read a scanned document by rendering pages for the vision model."""
+
+        if path.suffix.lower() != ".pdf":
+            if fallback is not None:
+                return None
+            raise ValueError("该文件没有可提取文本，且只有 PDF 支持页面渲染 OCR")
+        if not adapters.supports_modality(choice.provider, "image"):
+            raise ValueError("所选模型不支持图像输入，无法对扫描版 PDF 做 OCR")
+        images = await asyncio.to_thread(
+            preprocess.pdf_page_images, path, self._settings, workdir
+        )
+        if not images:
+            if fallback is not None:
+                return None
+            raise ValueError("PDF 中没有可渲染的页面")
+        answer = await adapters.call_provider(
+            choice.provider,
+            prompt=(
+                f"{prompt}\n\n这是扫描版文档的页面图片，共 {len(images)} 页。"
+                "请逐页转写可见文字并保留章节与表格结构；无法辨认处标注“不清”。"
+            ),
+            images=images,
+            model=choice.model or None,
+            timeout=float(self._settings.int("mm_timeout_seconds")),
+        )
+        return answer, {"pages": len(images), "mode": "ocr"}
+
+    async def _video_transcript(
+        self, choice: adapters.ProviderChoice, path: Path, workdir: Path, timeout: float
+    ) -> str:
+        """Understand the soundtrack too, when the model can take audio."""
+
+        if not adapters.supports_modality(choice.provider, "audio"):
+            return ""
+        try:
+            audio_path = await preprocess.extract_audio_track(path, workdir)
+            if not audio_path:
+                return ""
+            prepared = await preprocess.prepare_audio(Path(audio_path), self._settings, workdir)
+            parts = []
+            for chunk in prepared.audio[:4]:
+                parts.append(
+                    await adapters.call_provider(
+                        choice.provider,
+                        prompt=(
+                            "请转写并理解这段视频音轨：主要语音内容、说话人变化，"
+                            "以及音乐或环境声音。"
+                        ),
+                        audio=[chunk],
+                        model=choice.model or None,
+                        timeout=timeout,
+                    )
+                )
+            return "\n".join(part.strip() for part in parts if part.strip())
+        except Exception as exc:  # audio is a bonus, never fail the whole video
+            logger.info("Decision Engine 视频音轨理解跳过：%s", str(exc)[:140])
+            return ""
 
     @staticmethod
     def _stamp_notes(stamps: list[float]) -> list[str]:
@@ -475,8 +601,8 @@ class MultimodalRuntime:
             for key in keys:
                 if key in found:
                     continue
-                item = await self.cache.get(key)
-                if item is not None and item.umo == umo:
+                item = await self.cache.get_for_media(umo, key)
+                if item is not None:
                     found[key] = item
             if len(found) >= len(keys) or time.time() >= deadline:
                 break
@@ -490,6 +616,10 @@ class MultimodalRuntime:
             return 0
         wait = float(self._settings.int("mm_auto_wait_seconds"))
         items = await self.collect_for_event(event, refs, wait=wait)
+        if not items:
+            # A later text-only question must still be able to refer to media that
+            # was discussed earlier in this same conversation.
+            items = await self._recall_session(refs, event)
         if not items:
             return 0
         limit = self._settings.int("mm_inject_max_chars")
@@ -511,6 +641,17 @@ class MultimodalRuntime:
         )
         self._append_text(req, body)
         return len(body)
+
+    async def _recall_session(self, refs: Any, event: Any) -> list[Understanding]:
+        """Recent cached understandings of this conversation, newest first."""
+
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        if not umo:
+            return []
+        limit = self._settings.int("mm_recall_items")
+        if limit <= 0:
+            return []
+        return await self.cache.recent_understandings(umo, limit)
 
     @staticmethod
     def _append_text(req: Any, text: str) -> None:
@@ -556,7 +697,7 @@ class MultimodalRuntime:
                 if workdir is None:
                     workdir = preprocess.new_workdir("mm-gif-")
                 prepared = await asyncio.to_thread(
-                    preprocess.prepare_image, Path(reference), self._settings, workdir
+                    preprocess.animated_montage, Path(reference), self._settings, workdir
                 )
             except Exception as exc:
                 logger.warning(
@@ -565,7 +706,9 @@ class MultimodalRuntime:
                 replaced += 1
                 continue
             if prepared.images:
-                new_images.append(prepared.images[0])
+                # Prefer every produced frame when the montage failed, otherwise the
+                # montage is a single image that still contains all frames.
+                new_images.extend(prepared.images)
                 digest.append(
                     "（该消息附带动图，已按帧序列理解：\n"
                     + "\n".join(prepared.notes)

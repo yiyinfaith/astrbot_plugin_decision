@@ -108,7 +108,7 @@ async def test_auto_understanding_runs_and_caches(tmp_path):
     refs = await runtime.observe(FakeEvent([FakeImage(png(tmp_path))]), auto_allowed=True)
     assert len(refs) == 1
     await asyncio.sleep(0.4)
-    item = await runtime.cache.get(refs[0].content_key)
+    item = await runtime.cache.get_for_media(refs[0].umo, refs[0].content_key)
     assert item is not None and item.ok
     assert item.summary == "描述1"
     assert provider.calls, "provider must have been called"

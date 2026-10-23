@@ -123,6 +123,9 @@ DEFAULT_POLICY = (
 )
 DETAIL_DEFAULTS: dict[str, Any] = {
     "message_interjection_enabled": True,
+    # Multi-modal understanding lives under 对话流增强 → 输入增强. It is a
+    # first-class detail section so load, save and reload all see it.
+    "multimodal": {},
     "life": {},
     "always_keep_tools": [],
     "always_keep_recommend_tools": [],
@@ -589,6 +592,12 @@ class DecisionPlugin(Star):
             )
         self._ready = True
         await self._configure_output_runtime()
+        # Multi-modal understanding is independent of 主动对话: its tools and
+        # auto-understanding have their own switches.
+        try:
+            await self._ensure_multimodal()
+        except Exception as exc:
+            logger.warning("Decision Engine 多模态初始化失败：%s", _safe_error(exc))
         await self._configure_life_runtime()
         if not self.provider.api_key:
             logger.warning(
@@ -2276,9 +2285,12 @@ class DecisionPlugin(Star):
         tools = []
         seen_names: set[str] = set()
         builtin_names = self._builtin_tool_names()
+        allowed_mm = self._mm_allowed_tool_names(self._multimodal_settings())
         for tool in [*self._manager_tool_objects(), *self._subagent_tool_objects()]:
             name = str(getattr(tool, "name", ""))
             if not name or name in seen_names:
+                continue
+            if name.startswith("understand_") and name not in allowed_mm:
                 continue
             seen_names.add(name)
             tools.append(
@@ -2446,8 +2458,6 @@ class DecisionPlugin(Star):
                 self._life_runtime = None
         # 主动发起 is enabled by its own per-kind switches (私聊主动 / 群聊主动),
         # so there is no separate master switch to consult here.
-        if self._bool("proactive_reply_enabled", False):
-            await self._ensure_multimodal()
         await self._get_life_runtime()
 
     def _get_life_media(self):
@@ -2551,6 +2561,44 @@ class DecisionPlugin(Star):
                 "Decision Engine 多模态观察跳过：%s", _safe_error(exc)
             )
 
+    @staticmethod
+    def _mm_allowed_tool_names(settings: dict[str, Any]) -> set[str]:
+        from .decision.multimodal.config import MEDIA_KINDS
+
+        if not settings.get("mm_enabled") or not settings.get("mm_tools_enabled"):
+            return set()
+        return {
+            f"understand_{kind}"
+            for kind in MEDIA_KINDS
+            if settings.get(f"mm_tool_{kind}")
+        }
+
+    def _disable_multimodal_tools(
+        self, req: ProviderRequest, settings: dict[str, Any]
+    ) -> None:
+        """Strip disabled understanding tools from this request.
+
+        ``Context.add_llm_tools`` has no counterpart, so a tool that must not run
+        is removed from the per-request toolset, exactly like the personal network
+        tools are hidden.
+        """
+
+        from .decision.multimodal.config import MEDIA_KINDS
+
+        allowed = self._mm_allowed_tool_names(settings)
+        tool_set = getattr(req, "func_tool", None)
+        remover = getattr(tool_set, "remove_tool", None)
+        if not callable(remover):
+            return
+        for kind in MEDIA_KINDS:
+            name = f"understand_{kind}"
+            if name in allowed:
+                continue
+            try:
+                remover(name)
+            except Exception:  # pragma: no cover - toolset specifics
+                continue
+
     def _mm_scope_allows(self, event: AstrMessageEvent, settings: dict[str, Any]) -> bool:
         """Apply the multi-modal auto-understanding black/white list."""
 
@@ -2568,6 +2616,7 @@ class DecisionPlugin(Star):
         """Make GIFs provider-safe and inject the media digest."""
 
         settings = self._multimodal_settings()
+        self._disable_multimodal_tools(req, settings)
         if not settings.get("mm_enabled"):
             return
         runtime = self._get_multimodal()

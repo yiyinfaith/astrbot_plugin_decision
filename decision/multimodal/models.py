@@ -47,6 +47,8 @@ class Understanding:
     kind: str
     umo: str
     summary: str
+    media_key: str = ""
+    """Identity of the media bytes, independent of the analysis that produced it."""
     detail: str = ""
     provider_id: str = ""
     model: str = ""
@@ -78,6 +80,7 @@ class Understanding:
     def to_dict(self) -> dict[str, Any]:
         return {
             "key": self.key,
+            "media_key": self.media_key,
             "kind": self.kind,
             "umo": self.umo,
             "summary": self.summary,
@@ -96,6 +99,7 @@ class Understanding:
     def from_dict(cls, value: dict[str, Any]) -> Understanding:
         return cls(
             key=str(value.get("key", "")),
+            media_key=str(value.get("media_key", "")),
             kind=str(value.get("kind", "")),
             umo=str(value.get("umo", "")),
             summary=str(value.get("summary", "")),

@@ -158,6 +158,60 @@ class MultimodalCache:
             rows = list(self._index.get(umo, []))
         return rows[-limit:][::-1]
 
+    async def recent_understandings(
+        self, umo: str, limit: int = 3
+    ) -> list[Understanding]:
+        """Newest successful understandings for one conversation."""
+
+        if limit <= 0:
+            return []
+        async with self._lock:
+            await self.load()
+            now = time.time()
+            rows = [
+                item
+                for item in self._entries.values()
+                if item.umo == umo
+                and item.ok
+                and (not item.expires_at or item.expires_at >= now)
+            ]
+        rows.sort(key=lambda item: item.created_at or 0, reverse=True)
+        return rows[:limit]
+
+    async def get_for_media(self, umo: str, media_key: str) -> Understanding | None:
+        """Newest cached analysis of one media item inside one conversation."""
+
+        async with self._lock:
+            await self.load()
+            now = time.time()
+            rows = [
+                item
+                for item in self._entries.values()
+                if item.umo == umo
+                and item.media_key == media_key
+                and (not item.expires_at or item.expires_at >= now)
+            ]
+        if not rows:
+            return None
+        rows.sort(key=lambda item: item.created_at or 0, reverse=True)
+        return rows[0]
+
+    async def drop_media(self, umo: str, media_key: str) -> int:
+        """Invalidate every cached analysis of one media item."""
+
+        async with self._lock:
+            await self.load()
+            removed = [
+                key
+                for key, item in self._entries.items()
+                if item.umo == umo and item.media_key == media_key
+            ]
+            for key in removed:
+                self._entries.pop(key, None)
+            if removed:
+                await self.save()
+        return len(removed)
+
     # -------------------------------------------------------------- writes
     async def put(self, item: Understanding) -> None:
         async with self._lock:

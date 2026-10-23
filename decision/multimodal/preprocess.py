@@ -183,8 +183,73 @@ def prepare_image(path: Path, settings: Any, workdir: Path) -> Prepared:
     return prepared
 
 
+def animated_montage(path: Path, settings: Any, workdir: Path, *, columns: int = 3) -> Prepared:
+    """Tile evenly spaced animation frames into one image.
+
+    A provider request with a single animated file either fails or shows only the
+    first frame. Tiling gives the model several frames at once in the same shape
+    AstrBot itself uses for animation previews, so nothing has to be understood
+    twice and the request stays a single image.
+    """
+
+    from PIL import Image
+
+    prepared = prepare_image(path, settings, workdir)
+    if len(prepared.images) <= 1:
+        return prepared
+    frames = []
+    for frame_path in prepared.images:
+        with Image.open(frame_path) as frame:
+            frames.append(frame.convert("RGB").copy())
+    if not frames:
+        return prepared
+    tile_w = max(frame.width for frame in frames)
+    tile_h = max(frame.height for frame in frames)
+    rows = (len(frames) + columns - 1) // columns
+    sheet = Image.new("RGB", (tile_w * columns, tile_h * rows), (255, 255, 255))
+    for index, frame in enumerate(frames):
+        left = (index % columns) * tile_w + (tile_w - frame.width) // 2
+        top = (index // columns) * tile_h + (tile_h - frame.height) // 2
+        sheet.paste(frame, (left, top))
+    target = workdir / f"{path.stem}-montage.png"
+    sheet.save(target, "PNG")
+    prepared.temp_paths.append(str(target))
+    prepared.images = [str(target)]
+    prepared.notes.insert(
+        0,
+        f"这是一段动图的 {len(frames)} 帧拼图（从左到右、从上到下按时间顺序）。"
+        "请描述画面随时间的连续变化，而不是只描述其中一格。",
+    )
+    return prepared
+
+
 # ---------------------------------------------------------------------- video
+def tooling_status() -> dict[str, bool]:
+    """Which external binaries the deep media paths need."""
+
+    import shutil
+
+    return {
+        "ffmpeg": shutil.which("ffmpeg") is not None,
+        "ffprobe": shutil.which("ffprobe") is not None,
+    }
+
+
+def require_ffmpeg() -> None:
+    """Raise a clear, actionable error when ffmpeg is missing."""
+
+    status = tooling_status()
+    missing = [name for name, ok in status.items() if not ok]
+    if missing:
+        raise ValueError(
+            "缺少 "
+            + " / ".join(missing)
+            + "，无法处理视频或转换音频；请先安装 FFmpeg 后重试"
+        )
+
+
 async def probe_video(path: Path) -> dict[str, Any]:
+    require_ffmpeg()
     code, out, _ = await run_command(
         [
             "ffprobe", "-v", "error", "-print_format", "json",
@@ -293,6 +358,7 @@ def sample_video(
 
 # ---------------------------------------------------------------------- audio
 async def probe_audio(path: Path) -> dict[str, Any]:
+    require_ffmpeg()
     code, out, _ = await run_command(
         ["ffprobe", "-v", "error", "-print_format", "json", "-show_format", str(path)],
         timeout=60,
@@ -440,6 +506,32 @@ def _xlsx_text(path: Path, limit: int) -> str:
     finally:
         workbook.close()
     return "\n\n".join(parts)[:limit]
+
+
+def pdf_page_images(
+    path: Path, settings: Any, workdir: Path, pages: list[int] | None = None
+) -> list[str]:
+    """Render PDF pages to PNG for vision-based OCR of scanned documents."""
+
+    try:
+        import fitz  # PyMuPDF
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise ValueError("缺少 PyMuPDF，无法对扫描版 PDF 做 OCR") from exc
+    limit = int(settings.int("mm_file_ocr_max_pages"))
+    edge = int(settings.int("mm_image_max_edge")) or DEFAULT_EDGE
+    rendered: list[str] = []
+    with fitz.open(str(path)) as document:
+        wanted = pages if pages else list(range(min(limit, document.page_count)))
+        for number in wanted[:limit]:
+            if number < 0 or number >= document.page_count:
+                continue
+            page = document.load_page(number)
+            zoom = min(2.0, max(1.0, edge / max(1.0, float(page.rect.width))))
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+            target = workdir / f"page-{number + 1:02d}.png"
+            pixmap.save(str(target))
+            rendered.append(str(target))
+    return rendered
 
 
 def extract_file_text(path: Path, settings: Any) -> Prepared:

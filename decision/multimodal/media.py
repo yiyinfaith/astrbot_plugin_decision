@@ -182,9 +182,68 @@ async def ensure_local(reference: str, *, timeout: float = 60.0) -> str:
     return await asyncio.wait_for(_download(reference), timeout=timeout)
 
 
+_PRIVATE_HOSTS = {"localhost", "localhost.localdomain", "metadata", "metadata.google.internal"}
+_PRIVATE_SUFFIXES = (".localhost", ".local", ".internal", ".home.arpa")
+
+
+def _is_public_ip(ip: str) -> bool:
+    import ipaddress
+
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return not (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    )
+
+
+async def assert_public_url(url: str) -> None:
+    """Reject URLs that could reach the local network (SSRF guard).
+
+    The host is resolved and every resulting address must be public, which also
+    covers DNS rebinding to a private address. Redirects are refused at the HTTP
+    layer, so a public URL cannot bounce to an internal one.
+    """
+
+    import ipaddress
+    import socket
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    if parts.scheme not in {"http", "https"}:
+        raise ValueError("只允许 http/https 媒体链接")
+    host = (parts.hostname or "").strip().lower()
+    if not host:
+        raise ValueError("媒体链接缺少主机名")
+    if host in _PRIVATE_HOSTS or host.endswith(_PRIVATE_SUFFIXES):
+        raise ValueError("拒绝访问内网或元数据地址")
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None and not _is_public_ip(str(literal)):
+        raise ValueError("拒绝访问内网地址")
+    try:
+        infos = await asyncio.to_thread(socket.getaddrinfo, host, None)
+    except OSError as exc:
+        raise ValueError(f"无法解析媒体主机：{exc}") from exc
+    addresses = {info[4][0] for info in infos if info[4]}
+    if not addresses:
+        raise ValueError("媒体主机没有可用地址")
+    if any(not _is_public_ip(address) for address in addresses):
+        raise ValueError("拒绝访问内网地址")
+
+
 async def _download(url: str) -> str:
     import aiohttp
 
+    await assert_public_url(url)
     suffix = Path(url.split("?", 1)[0]).suffix[:8] or ".bin"
     handle = None
     try:

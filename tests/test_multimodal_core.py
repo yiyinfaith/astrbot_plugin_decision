@@ -440,3 +440,23 @@ async def test_extract_media_from_fake_components():
     assert refs[0].urn == "aiocqhttp:GroupMessage:9::mid-1::0"
     assert refs[0].message_id == "mid-1"
     assert refs[0].umo == "aiocqhttp:GroupMessage:9"
+
+def test_capability_classification_distinguishes_native_and_preprocessed():
+    image_only = FakeProvider(["text", "image"])
+    assert adapters.classify_kind(image_only, "image") == "native"
+    assert adapters.classify_kind(image_only, "video") == "preprocessed"
+    assert adapters.classify_kind(image_only, "audio") == "unsupported"
+    assert adapters.classify_kind(image_only, "file") == "preprocessed"
+
+    text_only = FakeProvider(["text"])
+    assert adapters.classify_kind(text_only, "image") == "unsupported"
+    assert adapters.classify_kind(text_only, "video") == "unsupported"
+
+    everything = FakeProvider(None)
+    assert adapters.classify_kind(everything, "video") == "native"
+    assert adapters.classify_kind(everything, "audio") == "native"
+
+    catalog = adapters.provider_catalog(
+        type("Ctx", (), {"get_all_providers": lambda self: [image_only]})()
+    )
+    assert catalog[0]["capability"]["video"] == "preprocessed"

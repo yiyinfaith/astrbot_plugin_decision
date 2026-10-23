@@ -49,6 +49,8 @@ MULTIMODAL_DEFAULTS: dict[str, Any] = {
     "mm_max_auto_per_message": 4,
     "mm_max_auto_per_minute": 12,
     "mm_inject_max_chars": 1200,
+    # How many earlier media summaries a text-only question may recall.
+    "mm_recall_items": 3,
     # --- image / animation -------------------------------------------------
     "mm_gif_max_frames": 16,
     "mm_gif_max_pixels": 40_000_000,
@@ -65,6 +67,10 @@ MULTIMODAL_DEFAULTS: dict[str, Any] = {
     "mm_audio_segment_seconds": 120,
     # --- file --------------------------------------------------------------
     "mm_file_max_chars": 12_000,
+    # Scanned pages are rendered and read by the vision model. Keeping this
+    # explicit means a plain text PDF never costs an image request.
+    "mm_file_ocr": True,
+    "mm_file_ocr_max_pages": 5,
     "mm_file_chunk_chars": 6_000,
     # --- runtime -----------------------------------------------------------
     "mm_timeout_seconds": 180,
@@ -89,6 +95,7 @@ INT_BOUNDS: dict[str, tuple[int, int]] = {
     "mm_max_auto_per_message": (1, 16),
     "mm_max_auto_per_minute": (0, 600),
     "mm_inject_max_chars": (120, 8000),
+    "mm_recall_items": (0, 10),
     "mm_gif_max_frames": (2, 64),
     "mm_gif_max_pixels": (1_000_000, 200_000_000),
     "mm_image_max_edge": (256, 4096),
@@ -100,6 +107,7 @@ INT_BOUNDS: dict[str, tuple[int, int]] = {
     "mm_audio_max_seconds": (10, 3600),
     "mm_audio_segment_seconds": (20, 600),
     "mm_file_max_chars": (500, 200_000),
+    "mm_file_ocr_max_pages": (1, 30),
     "mm_file_chunk_chars": (500, 100_000),
     "mm_timeout_seconds": (10, 900),
     "mm_concurrency": (1, 8),
@@ -237,6 +245,9 @@ def page_settings(settings: MultimodalSettings) -> dict[str, Any]:
     """The editable section the WebUI renders under 输入增强."""
 
     payload = dict(settings.values)
+    from .preprocess import tooling_status
+
+    payload["mm_tooling"] = tooling_status()
     payload["mm_auto_kinds_label"] = ", ".join(
         KIND_LABELS[kind] for kind in settings.auto_kinds
     )

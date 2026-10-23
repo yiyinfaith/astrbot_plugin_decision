@@ -61,6 +61,30 @@ def kind_supported(provider: Any, kind: str) -> bool:
     return all(supports_modality(provider, name) for name in KIND_MODALITIES.get(kind, ()))
 
 
+def classify_kind(provider: Any, kind: str) -> str:
+    """How a media kind can be handled: native, preprocessed or unsupported.
+
+    ``native`` means the provider accepts the modality itself. ``preprocessed``
+    means the plugin reduces the media to something the provider does take (video
+    to frames, a document to text). ``unsupported`` means there is no usable path.
+    """
+
+    declared = _modalities(provider)
+    if declared is None:
+        return "native"
+    if kind == "file":
+        return "preprocessed"
+    if kind == "video":
+        return "native" if "video" in declared else (
+            "preprocessed" if "image" in declared else "unsupported"
+        )
+    if kind == "image":
+        return "native" if "image" in declared else "unsupported"
+    if kind == "audio":
+        return "native" if "audio" in declared else "unsupported"
+    return "unsupported"
+
+
 def describe_provider(provider: Any) -> dict[str, Any]:
     meta = None
     try:
@@ -84,6 +108,7 @@ def describe_provider(provider: Any) -> dict[str, Any]:
         "supports": {
             kind: kind_supported(provider, kind) for kind in KIND_LABELS
         },
+        "capability": {kind: classify_kind(provider, kind) for kind in KIND_LABELS},
     }
 
 
