@@ -675,3 +675,50 @@ AstrBot 会把 `image_urls` 原样交给 Provider，很多 OpenAI 兼容端点�
 - **能力分级**：模型目录新增 `capability`，区分 `native`（原生支持）、`preprocessed`（预处理兼容）、`unsupported`（不可用），
   不再仅凭声明假定可用。
 
+### 原生视频、本地 OCR 与 Office 深度解析
+
+#### 视频策略（WebUI：多模态理解 → 视频处理策略）
+
+| 策略 | 行为 |
+|---|---|
+| 自动选择（默认） | 能原生就用原生，否则自动回退抽帧 |
+| 优先原生 | 强制尝试原生；Provider 不支持时明确报错，不静默降级 |
+| 强制通用处理 | 始终走 FFmpeg 抽帧 + 多轮精读 |
+
+原生路线使用 Gemini Files API：上传 → 轮询 `ACTIVE` → `generateContent`(`fileData`) → **删除服务端文件**。
+API Key 与 `api_base` 直接复用 AstrBot 已配置的 Gemini Provider，不需要二次填写。
+上传失败、超时、取消都会清理并回退到抽帧，取消时同样执行删除。
+
+`capability.video` 只有在**原生上传通道真实可用**时才为 `native`；仅声明了模态不会得到该标签。
+
+#### OCR 策略（WebUI：多模态理解 → OCR 策略 / 本地 OCR 引擎）
+
+| 策略 | 行为 |
+|---|---|
+| 自动（默认） | 有本地引擎就用，没有就用视觉模型 |
+| 本地 OCR 优先 | 先跑本地引擎，识别为空再交给视觉模型 |
+| 视觉模型优先 | 跳过本地引擎 |
+| 仅本地 OCR | 只用本地引擎，不可用时明确报错，不调用视觉模型 |
+
+本地引擎为可选依赖，未安装时 WebUI 会显示具体安装命令：
+
+```bash
+# Tesseract（含中文）
+apt install tesseract-ocr tesseract-ocr-chi-sim
+pip install pytesseract
+
+# PaddleOCR
+pip install paddleocr paddlepaddle
+```
+
+#### Office 深度解析
+
+| 格式 | 保留内容 | 定向精读 |
+|---|---|---|
+| DOCX | 标题层级、段落、表格（逐行）、章节编号、内嵌图片列表 | 章节标题、表格 |
+| PPTX | 幻灯片顺序、标题、正文、表格、备注、图片/图表计数 | 幻灯片页码 |
+| XLSX | 工作表名、行列坐标、表头、合并单元格、公式原文、缓存计算值 | 工作表名 |
+
+`understand_file` 新增 `target` 参数，可指定页码、幻灯片、章节、工作表或单元格区域，只读取该部分。
+公式只读取不计算，宏与外部链接不会被执行。
+

@@ -70,14 +70,26 @@ def classify_kind(provider: Any, kind: str) -> str:
     """
 
     declared = _modalities(provider)
+    if kind == "video":
+        from .native_video import native_available
+
+        if native_available(provider)[0]:
+            return "native"
+        if declared is None:
+            return "preprocessed"
+        return "preprocessed" if "image" in declared else "unsupported"
     if declared is None:
         return "native"
     if kind == "file":
         return "preprocessed"
     if kind == "video":
-        return "native" if "video" in declared else (
-            "preprocessed" if "image" in declared else "unsupported"
-        )
+        # A native label is only valid when the native upload route is really
+        # available for this provider, never from a modality declaration alone.
+        from .native_video import native_available
+
+        if native_available(provider)[0]:
+            return "native"
+        return "preprocessed" if "image" in declared else "unsupported"
     if kind == "image":
         return "native" if "image" in declared else "unsupported"
     if kind == "audio":

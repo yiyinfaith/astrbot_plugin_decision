@@ -70,6 +70,14 @@ MULTIMODAL_DEFAULTS: dict[str, Any] = {
     # Scanned pages are rendered and read by the vision model. Keeping this
     # explicit means a plain text PDF never costs an image request.
     "mm_file_ocr": True,
+    # auto / local_first / vision_first / local_only
+    "mm_ocr_strategy": "auto",
+    # auto / tesseract / paddleocr
+    "mm_ocr_engine": "auto",
+    # auto / native / frames
+    "mm_video_strategy": "auto",
+    "mm_ocr_lang": "chi_sim+eng",
+    "mm_ocr_timeout_seconds": 120,
     "mm_file_ocr_max_pages": 5,
     "mm_file_chunk_chars": 6_000,
     # --- runtime -----------------------------------------------------------
@@ -108,6 +116,7 @@ INT_BOUNDS: dict[str, tuple[int, int]] = {
     "mm_audio_segment_seconds": (20, 600),
     "mm_file_max_chars": (500, 200_000),
     "mm_file_ocr_max_pages": (1, 30),
+    "mm_ocr_timeout_seconds": (10, 600),
     "mm_file_chunk_chars": (500, 100_000),
     "mm_timeout_seconds": (10, 900),
     "mm_concurrency": (1, 8),
@@ -245,9 +254,10 @@ def page_settings(settings: MultimodalSettings) -> dict[str, Any]:
     """The editable section the WebUI renders under 输入增强."""
 
     payload = dict(settings.values)
+    from .ocr import engine_status
     from .preprocess import tooling_status
 
-    payload["mm_tooling"] = tooling_status()
+    payload["mm_tooling"] = {**tooling_status(), "ocr": engine_status()}
     payload["mm_auto_kinds_label"] = ", ".join(
         KIND_LABELS[kind] for kind in settings.auto_kinds
     )

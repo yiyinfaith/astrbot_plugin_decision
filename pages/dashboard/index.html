@@ -785,6 +785,14 @@
                 <div class="field"><label>音频工具</label><label class="switch"><input v-model="mm.multimodal.mm_tool_audio" type="checkbox"><span class="switch-track"></span></label></div>
                 <div class="field"><label>文件工具</label><label class="switch"><input v-model="mm.multimodal.mm_tool_file" type="checkbox"><span class="switch-track"></span></label></div>
               </div>
+              <div class="two-col">
+                <div class="field"><label>视频处理策略 <span>原生视频需要 Gemini Provider</span></label><select v-model="mm.multimodal.mm_video_strategy"><option value="auto">自动选择（默认）</option><option value="native">优先原生</option><option value="frames">强制通用处理</option></select></div>
+                <div class="field"><label>OCR 策略</label><select v-model="mm.multimodal.mm_ocr_strategy"><option value="auto">自动（默认）</option><option value="local_first">本地 OCR 优先</option><option value="vision_first">视觉模型优先</option><option value="local_only">仅本地 OCR</option></select></div>
+                <div class="field"><label>本地 OCR 引擎</label><select v-model="mm.multimodal.mm_ocr_engine"><option value="auto">自动（默认）</option><option value="tesseract">Tesseract</option><option value="paddleocr">PaddleOCR</option></select></div>
+                <div class="field"><label>OCR 语言 <span>Tesseract 语言包</span></label><input v-model="mm.multimodal.mm_ocr_lang" type="text" placeholder="chi_sim+eng"></div>
+                <div class="field"><label>OCR 超时 <span>秒</span></label><input v-model.number="mm.multimodal.mm_ocr_timeout_seconds" type="number" min="10" max="600" step="10"></div>
+              </div>
+              <p class="hint">{{ mmOcrHint }}</p>
               <div class="field"><label>默认理解模型 <span>来自 AstrBot 已配置的模型</span></label><select v-model="mm.multimodal.mm_default_model"><option value="">（未选择）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }} · {{ row.modalities_label }}</option></select></div>
               <div class="two-col">
                 <div class="field"><label>图片理解模型 <span>留空沿用默认</span></label><select v-model="mm.multimodal.mm_model_image"><option value="">（沿用默认）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }}</option></select></div>
@@ -1085,6 +1093,17 @@
           },
           billingPlatforms() { return this.billingPlatformList || []; },
           mm() { return this.form.dialogue_enhancement || {}; },
+          mmOcrHint() {
+            const tooling = (this.mm.multimodal && this.mm.multimodal.mm_tooling) || {};
+            const ocr = tooling.ocr || {};
+            const rows = [];
+            if (ocr.tesseract && ocr.tesseract.available) rows.push('Tesseract 可用');
+            else if (ocr.tesseract && ocr.tesseract.reason) rows.push('Tesseract 不可用：' + ocr.tesseract.reason);
+            if (ocr.paddleocr && ocr.paddleocr.available) rows.push('PaddleOCR 可用');
+            else if (ocr.paddleocr && ocr.paddleocr.reason) rows.push('PaddleOCR 不可用：' + ocr.paddleocr.reason);
+            if (tooling.ffmpeg === false) rows.push('缺少 ffmpeg，视频与音频将不可用');
+            return rows.join('；') || '本地 OCR 引擎状态未知';
+          },
           mmModels() {
             const models = this.mm.multimodal && this.mm.multimodal.models;
             return Array.isArray(models) ? models : [];

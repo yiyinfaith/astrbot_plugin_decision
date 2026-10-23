@@ -23,6 +23,14 @@ SELECTOR_ARG = {
     ),
 }
 
+TARGET_ARG = {
+    "type": "string",
+    "description": (
+        "只分析其中一部分：PDF 页码（如 3 或 2-5）、PPTX 幻灯片页码、"
+        "DOCX 章节标题、XLSX 工作表名或单元格区域（如 Sheet1!A1:D20）"
+    ),
+}
+
 INSTRUCTION_ARG = {
     "type": "string",
     "description": "可选的自定义分析指令，例如“分析这段视频第 20 秒发生了什么”",
@@ -43,6 +51,7 @@ def _schema(kind: str) -> dict[str, Any]:
     properties = {
         "selector": SELECTOR_ARG,
         "instruction": INSTRUCTION_ARG,
+        "target": TARGET_ARG,
         "detail": DETAIL_ARG,
         "force": FORCE_ARG,
     }
@@ -116,6 +125,7 @@ def _handler(runtime: Any, kind: str):
         if not umo:
             return "无法确定当前会话，已拒绝访问媒体。"
         selector = str(kwargs.get("selector") or "latest")
+        target = str(kwargs.get("target") or "")
         instruction = str(kwargs.get("instruction") or "")
         detail = bool(kwargs.get("detail"))
         force = bool(kwargs.get("force"))
@@ -126,6 +136,7 @@ def _handler(runtime: Any, kind: str):
             instruction=instruction,
             detail=detail,
             force=force,
+            target=target,
         )
         return _result(item, error, detail=detail)
 

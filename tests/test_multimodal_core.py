@@ -453,10 +453,31 @@ def test_capability_classification_distinguishes_native_and_preprocessed():
     assert adapters.classify_kind(text_only, "video") == "unsupported"
 
     everything = FakeProvider(None)
-    assert adapters.classify_kind(everything, "video") == "native"
+    assert adapters.classify_kind(everything, "image") == "native"
     assert adapters.classify_kind(everything, "audio") == "native"
+    # Even an "everything supported" declaration must not claim native video:
+    # that label requires a provider we can really upload to.
+    assert adapters.classify_kind(everything, "video") == "preprocessed"
 
     catalog = adapters.provider_catalog(
         type("Ctx", (), {"get_all_providers": lambda self: [image_only]})()
     )
     assert catalog[0]["capability"]["video"] == "preprocessed"
+
+
+def test_native_video_label_follows_the_real_route():
+    from types import SimpleNamespace
+
+    class Gemini:
+        provider_config = {"type": "gemini_chat_completion", "api_base": "https://x.invalid"}
+
+        def get_current_key(self):
+            return "k"
+
+    gemini = Gemini()
+    assert adapters.classify_kind(gemini, "video") == "native"
+    no_key = SimpleNamespace(
+        provider_config={"type": "gemini_chat_completion", "modalities": ["text", "image"]},
+        get_current_key=lambda: "",
+    )
+    assert adapters.classify_kind(no_key, "video") == "preprocessed"

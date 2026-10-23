@@ -210,7 +210,13 @@ class MultimodalRuntime:
 
     # ----------------------------------------------------------- understand
     @staticmethod
-    def cache_identity(ref: MediaRef, provider_id: str, instruction: str, detail: bool) -> str:
+    def cache_identity(
+        ref: MediaRef,
+        provider_id: str,
+        instruction: str,
+        detail: bool,
+        route_signature: str = "",
+    ) -> str:
         """Cache identity: the media plus everything that shapes the answer."""
 
         import hashlib
@@ -222,6 +228,7 @@ class MultimodalRuntime:
                 provider_id,
                 "detail" if detail else "normal",
                 (instruction or "").strip(),
+                str(route_signature or ""),
             ]
         )
         return hashlib.sha256(material.encode()).hexdigest()[:40]
@@ -238,10 +245,13 @@ class MultimodalRuntime:
 
         kind = ref.kind
         choice, error = adapters.pick_provider(self._context(), self._settings, kind)
+        signature = self._route_signature(kind)
         key = (
-            self.cache_identity(ref, choice.provider_id, instruction, detail)
+            self.cache_identity(
+                ref, choice.provider_id, instruction, detail, signature
+            )
             if choice is not None
-            else self.cache_identity(ref, error, instruction, detail)
+            else self.cache_identity(ref, error, instruction, detail, signature)
         )
         if force:
             return await self._understand_uncached(
@@ -359,6 +369,20 @@ class MultimodalRuntime:
             error=error or "未知错误",
         )
 
+    def _route_signature(self, kind: str) -> str:
+        """Cache-affecting route settings, so options never share a result."""
+
+        settings = self._settings
+        if kind == "video":
+            return f"video:{settings.text('mm_video_strategy') or 'auto'}"
+        if kind == "file":
+            return "file:{ocr}:{engine}:{pages}".format(
+                ocr=settings.text("mm_ocr_strategy") or "auto",
+                engine=settings.text("mm_ocr_engine") or "auto",
+                pages=settings.int("mm_file_ocr_max_pages"),
+            )
+        return ""
+
     async def _run_kind(
         self,
         ref: MediaRef,
@@ -381,27 +405,7 @@ class MultimodalRuntime:
 
         try:
             if kind == "file":
-                try:
-                    prepared = await asyncio.to_thread(
-                        preprocess.extract_file_text, path, self._settings
-                    )
-                except ValueError as exc:
-                    if "扫描件" not in str(exc) or not self._settings.bool("mm_file_ocr"):
-                        raise
-                    return await self._ocr_document(choice, prompt, workdir, path)
-                if len(prepared.text) < 80 and self._settings.bool("mm_file_ocr"):
-                    scanned = await self._ocr_document(
-                        choice, prompt, workdir, path, fallback=prepared
-                    )
-                    if scanned is not None:
-                        return scanned
-                answer = await adapters.call_provider(
-                    choice.provider,
-                    prompt=self._compose(prompt, prepared.notes, prepared.text),
-                    model=choice.model or None,
-                    timeout=float(self._settings.int("mm_timeout_seconds")),
-                )
-                return answer, {"chars": len(prepared.text), "notes": prepared.notes}
+                return await self._run_file(ref, choice, prompt, workdir, path)
 
             if kind == "image":
                 prepared = await asyncio.to_thread(
@@ -455,6 +459,16 @@ class MultimodalRuntime:
         path: Path,
     ) -> tuple[str, dict[str, Any]]:
         settings = self._settings
+        strategy = (settings.text("mm_video_strategy") or "auto").lower()
+        if strategy in {"auto", "native"}:
+            native = await self._native_video(ref, choice, prompt, path, workdir)
+            if native is not None:
+                return native
+            if strategy == "native":
+                raise ValueError(
+                    "当前模型/Provider 不支持原生视频理解（需要 Gemini 且可复用其 API Key）；"
+                    "请改用“自动选择”或“强制通用处理”"
+                )
         info = await preprocess.probe_video(path)
         duration = float(info.get("duration") or 0)
         limit = float(settings.int("mm_video_max_seconds"))
@@ -549,6 +563,69 @@ class MultimodalRuntime:
             "has_audio": bool(info.get("has_audio")),
         }
 
+    async def _run_file(
+        self,
+        ref: MediaRef,
+        choice: adapters.ProviderChoice,
+        prompt: str,
+        workdir: Path,
+        path: Path,
+    ) -> tuple[str, dict[str, Any]]:
+        """Documents: structure first, then local OCR, then the vision model."""
+
+        from . import office
+
+        timeout = float(self._settings.int("mm_timeout_seconds"))
+        target = str((ref.extra or {}).get("target") or "")
+        if office.is_office(path):
+            index = await asyncio.to_thread(
+                office.parse_document,
+                path,
+                limit_chars=self._settings.int("mm_file_max_chars"),
+            )
+            body = office.read_target(
+                index, target, limit_chars=self._settings.int("mm_file_max_chars")
+            )
+            outline = index.outline()
+            answer = await adapters.call_provider(
+                choice.provider,
+                prompt=self._compose(
+                    prompt,
+                    [f"文档结构：\n{outline}"] if outline else [],
+                    body,
+                ),
+                model=choice.model or None,
+                timeout=timeout,
+            )
+            return answer, {
+                "chars": len(body),
+                "blocks": len(index.blocks),
+                "target": target,
+                "format": index.kind,
+            }
+
+        try:
+            prepared = await asyncio.to_thread(
+                preprocess.extract_file_text, path, self._settings
+            )
+        except ValueError as exc:
+            if "扫描件" not in str(exc) or not self._settings.bool("mm_file_ocr"):
+                raise
+            return await self._ocr_document(choice, prompt, workdir, path, target=target)
+        if len(prepared.text) < 80 and self._settings.bool("mm_file_ocr"):
+            scanned = await self._ocr_document(
+                choice, prompt, workdir, path, fallback=prepared, target=target
+            )
+            if scanned is not None:
+                return scanned
+        answer = await adapters.call_provider(
+            choice.provider,
+            prompt=self._compose(prompt, prepared.notes, prepared.text),
+            model=choice.model or None,
+            timeout=timeout,
+        )
+        return answer, {"chars": len(prepared.text), "notes": prepared.notes}
+
     async def _ocr_document(
         self,
         choice: adapters.ProviderChoice,
@@ -563,11 +640,32 @@ class MultimodalRuntime:
             if fallback is not None:
                 return None
             raise ValueError("该文件没有可提取文本，且只有 PDF 支持页面渲染 OCR")
-        if not adapters.supports_modality(choice.provider, "image"):
-            raise ValueError("所选模型不支持图像输入，无法对扫描版 PDF 做 OCR")
+        strategy = (self._settings.text("mm_ocr_strategy") or "auto").lower()
         images = await asyncio.to_thread(
             preprocess.pdf_page_images, path, self._settings, workdir
         )
+        local_text, engine_note = await self._local_ocr_pages(images, strategy)
+        if local_text:
+            if strategy == "local_only" or strategy == "local_first":
+                combined = local_text
+                if strategy == "local_first" and adapters.supports_modality(
+                    choice.provider, "image"
+                ):
+                    combined = local_text
+                return combined, {
+                    "mode": "local_ocr",
+                    "engine": engine_note or self._settings.text("mm_ocr_engine"),
+                    "pages": len(images),
+                }
+        if strategy == "local_only":
+            raise ValueError(
+                (engine_note or "本地 OCR 不可用") + "；当前策略为“仅本地 OCR”，未调用视觉模型"
+            )
+        if not adapters.supports_modality(choice.provider, "image"):
+            raise ValueError(
+                (engine_note + "；" if engine_note else "")
+                + "所选模型不支持图像输入，无法对扫描版 PDF 做 OCR"
+            )
         if not images:
             if fallback is not None:
                 return None
@@ -583,6 +681,32 @@ class MultimodalRuntime:
             timeout=float(self._settings.int("mm_timeout_seconds")),
         )
         return answer, {"pages": len(images), "mode": "ocr"}
+
+    async def _local_ocr_pages(
+        self, images: list[str], strategy: str
+    ) -> tuple[str, str]:
+        """Run the optional local OCR backend over rendered pages."""
+
+        from . import ocr
+
+        if strategy == "vision_first":
+            return "", ""
+        engine = self._settings.text("mm_ocr_engine") or "auto"
+        lang = self._settings.text("mm_ocr_lang") or "chi_sim+eng"
+        timeout = float(self._settings.int("mm_ocr_timeout_seconds"))
+        chunks: list[str] = []
+        used = ""
+        notes: list[str] = []
+        for number, image in enumerate(images[: self._settings.int("mm_file_ocr_max_pages")], 1):
+            result = await ocr.ocr_image(
+                Path(image), engine=engine, lang=lang, timeout=timeout
+            )
+            if result.ok:
+                used = result.engine
+                chunks.append(f"[第 {number} 页]\n{result.text}")
+            elif result.error:
+                notes.append(result.error)
+        return "\n\n".join(chunks), used or (notes[0] if notes else "")
 
     async def _video_transcript(
         self, choice: adapters.ProviderChoice, path: Path, workdir: Path, timeout: float
@@ -614,6 +738,35 @@ class MultimodalRuntime:
         except Exception as exc:  # audio is a bonus, never fail the whole video
             logger.info("Decision Engine 视频音轨理解跳过：%s", str(exc)[:140])
             return ""
+
+    async def _native_video(
+        self,
+        ref: MediaRef,
+        choice: adapters.ProviderChoice,
+        prompt: str,
+        path: Path,
+        workdir: Path,
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Native upload path; returns None when it is unavailable or fails."""
+
+        from . import native_video
+
+        ok, reason = native_video.native_available(choice.provider)
+        if not ok:
+            logger.info("Decision Engine 不启用原生视频：%s", reason)
+            return None
+        result = await native_video.analyze(
+            path,
+            prompt,
+            provider=choice.provider,
+            model=choice.model or "",
+            timeout=float(self._settings.int("mm_timeout_seconds")) * 2,
+            workdir=workdir,
+        )
+        if result.route != "native" or not result.text:
+            logger.info("Decision Engine 原生视频失败，回退抽帧：%s", result.error)
+            return None
+        return result.text, {"mode": "native", "provider": choice.provider_id}
 
     @staticmethod
     def _stamp_notes(stamps: list[float]) -> list[str]:
@@ -828,6 +981,7 @@ class MultimodalRuntime:
         instruction: str = "",
         detail: bool = False,
         force: bool = False,
+        target: str = "",
     ) -> tuple[Understanding | None, str]:
         rows = await self.cache.recent_media(umo, 40)
         if kind:
@@ -852,6 +1006,19 @@ class MultimodalRuntime:
                 return None, f"没有找到名称包含“{selector}”的媒体"
             chosen = matched[0]
         ref = self.ref_from_row(chosen)
+        if target:
+            ref = MediaRef(
+                kind=ref.kind,
+                reference=ref.reference,
+                urn=ref.urn,
+                umo=ref.umo,
+                message_id=ref.message_id,
+                name=ref.name,
+                mime=ref.mime,
+                index=ref.index,
+                received_at=ref.received_at,
+                extra={**ref.extra, "target": target},
+            )
         item = await self.understand(
             ref, instruction=instruction, detail=detail, force=force
         )
