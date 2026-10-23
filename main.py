@@ -106,6 +106,9 @@ PROACTIVE_PAGE_DEFAULTS: dict[str, Any] = {
     # blacklist with no entries intentionally means every conversation.
     "conversation_flow_scope": [],
     "conversation_flow_scope_blacklist": True,
+    # Off by default: pure media messages keep the old text-only behaviour
+    # unless the operator explicitly opts in.
+    "non_text_proactive_enabled": False,
 }
 OUTPUT_PAGE_DEFAULTS: dict[str, Any] = {
     "output_enhancement_enabled": False,
@@ -198,6 +201,8 @@ class DecisionPlugin(Star):
         self._active_reply_warning_emitted = False
         self._output_runtime: Any | None = None
         self._life_runtime: Any | None = None
+        self._multimodal: Any | None = None
+        self._multimodal_tools: list[Any] = []
         self._life_media: Any | None = None
         self._personal_network: Any | None = None
         self._life_lock = asyncio.Lock()
@@ -454,6 +459,13 @@ class DecisionPlugin(Star):
             )
 
         self.context.register_web_api(
+            f"/{PLUGIN_NAME}/multimodal/models",
+            self.page_multimodal_models,
+            ["GET"],
+            "Multi-modal model catalog",
+        )
+
+        self.context.register_web_api(
             f"/{PLUGIN_NAME}/tools",
             self.page_tools,
             ["GET"],
@@ -628,6 +640,14 @@ class DecisionPlugin(Star):
         self._life_tasks.clear()
         self._life_jobs.clear()
         self._life_media = None
+        if self._multimodal is not None:
+            try:
+                await self._multimodal.terminate()
+            except Exception as exc:
+                logger.warning(
+                    "Decision Engine 多模态关闭失败：%s", _safe_error(exc)
+                )
+            self._multimodal = None
         if self._life_runtime is not None:
             await self._life_runtime.terminate()
             self._life_runtime = None
@@ -708,7 +728,20 @@ class DecisionPlugin(Star):
             ],
             "output_scope_blacklist": self._bool("output_scope_blacklist", True),
             "output_pipeline": merged,
+            "multimodal": self._multimodal_page_settings(),
         }
+
+    def _multimodal_page_settings(self) -> dict[str, Any]:
+        """Editable multi-modal section plus the provider dropdown."""
+
+        from .decision.multimodal import page_settings
+        from .decision.multimodal.adapters import provider_catalog
+        from .decision.multimodal.config import MultimodalSettings
+
+        settings = MultimodalSettings(self._multimodal_settings())
+        payload = page_settings(settings)
+        payload["models"] = provider_catalog(self.context)
+        return payload
 
     def _tool_list(self, req: ProviderRequest) -> list[Any]:
         return list(getattr(getattr(req, "func_tool", None), "tools", None) or [])
@@ -1923,8 +1956,15 @@ class DecisionPlugin(Star):
 
         session = str(event.unified_msg_origin)
         text = str(event.get_message_str() or "").strip()
+        media_refs = event.get_extra("decision_mm_refs") or []
         if not text:
-            return
+            # Pure media messages only become candidates when the operator turns
+            # this on; understanding itself is controlled separately.
+            if not self._bool("non_text_proactive_enabled", False) or not media_refs:
+                return
+            text = self._media_placeholder(media_refs)
+        elif media_refs and self._bool("non_text_proactive_enabled", False):
+            text = f"{text}\n（本条消息还附带：{self._media_kind_summary(media_refs)}）"
         sender_id = str(event.get_sender_id() or "")
         sender_name = str(event.get_sender_name() or sender_id or "user")
         at_self, reply_self, at_all, parse_failed = self._message_address_flags(event)
@@ -2313,6 +2353,77 @@ class DecisionPlugin(Star):
         )
         return json_response({"tools": tools})
 
+    def _multimodal_settings(self) -> dict[str, Any]:
+        from .decision.multimodal import normalize_settings
+
+        return normalize_settings(dict(self._setting("multimodal", {}) or {}))
+
+    def _get_multimodal(self):
+        """Create the multi-modal runtime on first use."""
+
+        if self._multimodal is not None:
+            return self._multimodal
+        from .decision.multimodal.runtime import MultimodalRuntime
+
+        base = (
+            Path(self._settings_path).parent
+            if getattr(self, "_settings_path", None)
+            else Path.cwd()
+        )
+        runtime = MultimodalRuntime(
+            self, data_dir=base, settings=self._multimodal_settings()
+        )
+        self._multimodal = runtime
+        return runtime
+
+    async def _ensure_multimodal(self):
+        runtime = self._get_multimodal()
+        await runtime.initialize()
+        self._sync_multimodal_tools(runtime)
+        return runtime
+
+    def _sync_multimodal_tools(self, runtime) -> None:
+        """(Re)register the understanding tools according to the current switches."""
+
+        from .decision.multimodal.tools import build_tools
+
+        wanted = set(runtime.settings.tool_kinds)
+        existing = {tool.name: tool for tool in self._multimodal_tools}
+        for name, tool in list(existing.items()):
+            if name not in {
+                f"understand_{kind}" for kind in wanted
+            }:
+                self._life_tools.remove(tool) if tool in self._life_tools else None
+                self._multimodal_tools.remove(tool)
+        for tool in build_tools(runtime, tuple(wanted)):
+            if any(item.name == tool.name for item in self._multimodal_tools):
+                continue
+            self._multimodal_tools.append(tool)
+            self._life_tools.append(tool)
+            self.context.add_llm_tools(tool)
+
+    @staticmethod
+    def _media_kind_summary(refs: Any) -> str:
+        labels = {"image": "图片", "video": "视频", "audio": "音频", "file": "文件"}
+        counts: dict[str, int] = {}
+        for ref in refs:
+            counts[ref.kind] = counts.get(ref.kind, 0) + 1
+        return "、".join(f"{labels.get(kind, kind)}×{count}" for kind, count in counts.items())
+
+    def _media_placeholder(self, refs: Any) -> str:
+        summary = self._media_kind_summary(refs)
+        cached = []
+        runtime = self._multimodal
+        if runtime is not None:
+            for ref in refs:
+                item = runtime.cache._entries.get(ref.content_key)
+                if item is not None and getattr(item, "ok", False):
+                    cached.append(item.summary)
+        detail = ""
+        if cached:
+            detail = "\n已有理解结果：" + "\n".join(cached)[:800]
+        return f"[非文字消息] 对方发送了{summary}，没有文字正文。{detail}"
+
     async def _get_life_runtime(self):
         async with self._life_lock:
             if self._life_runtime is None:
@@ -2336,7 +2447,8 @@ class DecisionPlugin(Star):
         # 主动发起 is enabled by its own per-kind switches (私聊主动 / 群聊主动),
         # so there is no separate master switch to consult here.
         if self._bool("proactive_reply_enabled", False):
-            await self._get_life_runtime()
+            await self._ensure_multimodal()
+        await self._get_life_runtime()
 
     def _get_life_media(self):
         if self._life_media is None:
@@ -2411,6 +2523,65 @@ class DecisionPlugin(Star):
                 self._life_runtime._mark_conversation_activity(str(event.unified_msg_origin))
                 return
             await self._life_runtime.record_incoming(event)
+
+    @filter.event_message_type(
+        EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE, priority=1001
+    )
+    async def multimodal_observe_message(self, event: AstrMessageEvent):
+        """Index media and start background understanding for any message.
+
+        This deliberately runs for messages that are not addressed to the bot: the
+        listener only marks ``is_wake`` for plugin handlers and never sets
+        ``is_at_or_wake_command``, so no reply is triggered here.
+        """
+
+        if event.get_extra("decision_life_proactive", False):
+            return
+        settings = self._multimodal_settings()
+        if not settings.get("mm_enabled"):
+            return
+        try:
+            runtime = self._get_multimodal()
+            allowed = self._mm_scope_allows(event, settings)
+            refs = await runtime.observe(event, auto_allowed=allowed)
+            if refs:
+                event.set_extra("decision_mm_refs", refs)
+        except Exception as exc:
+            logger.debug(
+                "Decision Engine 多模态观察跳过：%s", _safe_error(exc)
+            )
+
+    def _mm_scope_allows(self, event: AstrMessageEvent, settings: dict[str, Any]) -> bool:
+        """Apply the multi-modal auto-understanding black/white list."""
+
+        configured = settings.get("mm_auto_scope") or []
+        values = {str(item).strip() for item in configured if str(item).strip()}
+        matched = bool(self._event_scope_candidates(event) & values)
+        if settings.get("mm_auto_scope_blacklist"):
+            return not matched
+        return matched
+
+    @filter.on_llm_request(priority=900)
+    async def multimodal_prepare_request(
+        self, event: AstrMessageEvent, req: ProviderRequest
+    ):
+        """Make GIFs provider-safe and inject the media digest."""
+
+        settings = self._multimodal_settings()
+        if not settings.get("mm_enabled"):
+            return
+        runtime = self._get_multimodal()
+        try:
+            await runtime.sanitize_request_images(req)
+        except Exception as exc:
+            logger.warning("Decision Engine 动图兼容处理失败：%s", _safe_error(exc))
+        refs = event.get_extra("decision_mm_refs") or []
+        if not refs:
+            return
+        try:
+            await runtime.inject(event, req, refs)
+        except Exception as exc:
+            logger.warning("Decision Engine 注入多模态结果失败：%s", _safe_error(exc))
 
     @filter.on_llm_request(priority=1100)
     async def life_inject_state(self, event: AstrMessageEvent, req: ProviderRequest):
@@ -2615,6 +2786,15 @@ class DecisionPlugin(Star):
                 entry["result"] = result
             payload[ident] = entry
         return payload
+
+    async def page_multimodal_models(self):
+        """List the providers the multi-modal understanding can use."""
+
+        from astrbot.api.web import json_response
+
+        from .decision.multimodal.adapters import provider_catalog
+
+        return json_response({"models": provider_catalog(self.context)})
 
     async def page_life(self):
         from astrbot.api.web import json_response
@@ -3229,6 +3409,24 @@ class DecisionPlugin(Star):
         ):
             if key in dialogue_payload:
                 proactive_payload[key] = dialogue_payload[key]
+        multimodal_payload = dialogue_payload.get("multimodal")
+        if multimodal_payload is not None:
+            if not isinstance(multimodal_payload, Mapping):
+                return error_response("multimodal must be an object", status_code=400)
+            from .decision.multimodal import validate_page_payload
+
+            cleaned_mm, mm_error = validate_page_payload(multimodal_payload)
+            if mm_error:
+                return error_response(mm_error, status_code=400)
+            if cleaned_mm:
+                self._detail_settings["multimodal"] = {
+                    **self._multimodal_settings(),
+                    **cleaned_mm,
+                }
+                self._save_detail_settings(self._detail_settings)
+                if self._multimodal is not None:
+                    self._multimodal.refresh(self._multimodal_settings())
+                    self._sync_multimodal_tools(self._multimodal)
         output_enabled = dialogue_payload.get("output_enhancement_enabled")
         output_scope = dialogue_payload.get("output_scope")
         output_scope_blacklist = dialogue_payload.get("output_scope_blacklist")

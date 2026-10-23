@@ -756,22 +756,73 @@
         </section>
 
         <section v-show="activeTab === 'flow'" class="dialogue-flow-page">
+        <div class="life-subnav" role="tablist" aria-label="对话流增强模式"><button type="button" :class="{selected: flowTab === 'input'}" @click="flowTab = 'input'">输入增强<span>对话流分析与多模态理解</span></button><button type="button" :class="{selected: flowTab === 'output'}" @click="flowTab = 'output'">输出增强<span>OutputPro 输出管道与阶梯</span></button></div>
           <div class="section-grid">
-            <div class="glass-card">
+            <div v-show="flowTab === 'input'" class="glass-card">
               <div class="card-heading"><div><div class="section-kicker">Input Enhancement</div><h2>输入增强</h2><p>输入增强总开关在 AstrBot 原生配置页；这里配置对话流分析这一项子功能。</p></div></div>
               <div class="switch-row"><div class="switch-copy"><strong>对话流分析</strong><small>根据 @、引用回复、机器人最近回复和发送者 ID 推断对话对象。</small></div><label class="switch"><input v-model="form.dialogue_enhancement.conversation_flow_analysis_enabled" type="checkbox"><span class="switch-track"></span></label></div>
               <div class="field"><label>对话流窗口 <span>参与“谁在和谁说话”推断的最近消息条数</span></label><input v-model.number="form.dialogue_enhancement.conversation_flow_window" type="number" min="2" max="30" step="1"></div>
               <div class="scope-mode"><div><strong>{{ form.dialogue_enhancement.conversation_flow_scope_blacklist ? '输入增强黑名单' : '输入增强白名单' }}</strong><small>{{ form.dialogue_enhancement.conversation_flow_scope_blacklist ? '名单内不进行对话流增强；名单为空时全部应用。' : '只对名单内会话进行对话流增强；名单为空时全部不应用。' }}</small></div><button class="scope-toggle" type="button" @click="form.dialogue_enhancement.conversation_flow_scope_blacklist = !form.dialogue_enhancement.conversation_flow_scope_blacklist">{{ form.dialogue_enhancement.conversation_flow_scope_blacklist ? '黑名单' : '白名单' }}</button></div>
               <div class="field"><label>{{ form.dialogue_enhancement.conversation_flow_scope_blacklist ? '不应用输入增强的会话' : '应用输入增强的会话' }} <span>每行一个群聊 ID、私聊用户 ID 或 unified_msg_origin</span></label><textarea v-model="form.dialogue_enhancement.conversation_flow_scope" class="list-editor" placeholder="群聊 ID\n私聊用户 ID"></textarea></div>
             </div>
-            <div class="glass-card">
+            <div v-show="flowTab === 'input'" class="glass-card">
+              <div class="card-heading"><div><div class="section-kicker">Multimodal Understanding</div><h2>多模态理解</h2><p>理解图片、视频、音频和文件。自动理解不会唤醒机器人，也不会触发回复；它与“非文字消息进入判断”是两套独立开关。</p></div></div>
+              <div class="switch-row"><div class="switch-copy"><strong>启用多模态理解</strong><small>总开关。关闭时自动理解与工具都不生效，也不会产生任何模型调用。</small></div><label class="switch"><input v-model="mm.multimodal.mm_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="scope-mode"><div><strong>{{ mm.multimodal.mm_auto_scope_blacklist ? '自动理解黑名单' : '自动理解白名单' }}</strong><small>{{ mm.multimodal.mm_auto_scope_blacklist ? '名单内不自动理解；名单为空时全部会话自动理解。' : '只对名单内会话自动理解；名单为空时不对任何会话自动理解。' }}</small></div><button class="scope-toggle" type="button" @click="mm.multimodal.mm_auto_scope_blacklist = !mm.multimodal.mm_auto_scope_blacklist">{{ mm.multimodal.mm_auto_scope_blacklist ? '黑名单' : '白名单' }}</button></div>
+              <div class="field"><label>{{ mm.multimodal.mm_auto_scope_blacklist ? '不自动理解的会话' : '自动理解的会话' }} <span>每行一个群聊 ID、私聊用户 ID 或 unified_msg_origin</span></label><textarea v-model="mm.multimodal.mm_auto_scope" class="list-editor" placeholder="aiocqhttp:GroupMessage:123456"></textarea></div>
+              <div class="switch-row"><div class="switch-copy"><strong>自动理解</strong><small>收到媒体后自动开始理解并缓存结果，即使消息没有 @ 机器人。</small></div><label class="switch"><input v-model="mm.multimodal.mm_auto_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="two-col">
+                <div class="field"><label>自动理解图片</label><label class="switch"><input v-model="mm.multimodal.mm_auto_image" type="checkbox"><span class="switch-track"></span></label></div>
+                <div class="field"><label>自动理解视频</label><label class="switch"><input v-model="mm.multimodal.mm_auto_video" type="checkbox"><span class="switch-track"></span></label></div>
+                <div class="field"><label>自动理解音频</label><label class="switch"><input v-model="mm.multimodal.mm_auto_audio" type="checkbox"><span class="switch-track"></span></label></div>
+                <div class="field"><label>自动理解文件</label><label class="switch"><input v-model="mm.multimodal.mm_auto_file" type="checkbox"><span class="switch-track"></span></label></div>
+              </div>
+              <div class="switch-row"><div class="switch-copy"><strong>主动调用工具理解</strong><small>注册 understand_image / understand_video / understand_audio / understand_file 四个工具，由模型自行决定何时分析。</small></div><label class="switch"><input v-model="mm.multimodal.mm_tools_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="two-col">
+                <div class="field"><label>图片工具</label><label class="switch"><input v-model="mm.multimodal.mm_tool_image" type="checkbox"><span class="switch-track"></span></label></div>
+                <div class="field"><label>视频工具</label><label class="switch"><input v-model="mm.multimodal.mm_tool_video" type="checkbox"><span class="switch-track"></span></label></div>
+                <div class="field"><label>音频工具</label><label class="switch"><input v-model="mm.multimodal.mm_tool_audio" type="checkbox"><span class="switch-track"></span></label></div>
+                <div class="field"><label>文件工具</label><label class="switch"><input v-model="mm.multimodal.mm_tool_file" type="checkbox"><span class="switch-track"></span></label></div>
+              </div>
+              <div class="field"><label>默认理解模型 <span>来自 AstrBot 已配置的模型</span></label><select v-model="mm.multimodal.mm_default_model"><option value="">（未选择）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }} · {{ row.modalities_label }}</option></select></div>
+              <div class="two-col">
+                <div class="field"><label>图片理解模型 <span>留空沿用默认</span></label><select v-model="mm.multimodal.mm_model_image"><option value="">（沿用默认）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }}</option></select></div>
+                <div class="field"><label>视频理解模型 <span>需要图像能力</span></label><select v-model="mm.multimodal.mm_model_video"><option value="">（沿用默认）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }}</option></select></div>
+                <div class="field"><label>音频理解模型 <span>需要音频能力</span></label><select v-model="mm.multimodal.mm_model_audio"><option value="">（沿用默认）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }}</option></select></div>
+                <div class="field"><label>文件理解模型 <span>留空沿用默认</span></label><select v-model="mm.multimodal.mm_model_file"><option value="">（沿用默认）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }}</option></select></div>
+              </div>
+              <p class="hint">模型列表来自 AstrBot 当前的 Provider 配置；需要新增或删除模型请到 AstrBot 的模型提供方页面。<button class="button ghost" type="button" @click="reloadModels">重新加载模型列表</button></p>
+              <div class="two-col">
+                <div class="field"><label>媒体体积上限 <span>MB</span></label><input v-model.number="mm.multimodal.mm_max_file_mb" type="number" min="1" max="500" step="1"></div>
+                <div class="field"><label>单条消息最多自动理解 <span>个</span></label><input v-model.number="mm.multimodal.mm_max_auto_per_message" type="number" min="1" max="16" step="1"></div>
+                <div class="field"><label>每分钟自动理解上限 <span>按会话</span></label><input v-model.number="mm.multimodal.mm_max_auto_per_minute" type="number" min="0" max="600" step="1"></div>
+                <div class="field"><label>注入长度上限 <span>字符</span></label><input v-model.number="mm.multimodal.mm_inject_max_chars" type="number" min="120" max="8000" step="20"></div>
+                <div class="field"><label>动图最大帧数</label><input v-model.number="mm.multimodal.mm_gif_max_frames" type="number" min="2" max="64" step="1"></div>
+                <div class="field"><label>图片最长边 <span>像素</span></label><input v-model.number="mm.multimodal.mm_image_max_edge" type="number" min="256" max="4096" step="64"></div>
+                <div class="field"><label>短视频阈值 <span>秒</span></label><input v-model.number="mm.multimodal.mm_video_short_seconds" type="number" min="5" max="600" step="5"></div>
+                <div class="field"><label>视频时长上限 <span>秒</span></label><input v-model.number="mm.multimodal.mm_video_max_seconds" type="number" min="10" max="3600" step="10"></div>
+                <div class="field"><label>视频最大帧数</label><input v-model.number="mm.multimodal.mm_video_max_frames" type="number" min="2" max="96" step="1"></div>
+                <div class="field"><label>长视频精读轮次</label><input v-model.number="mm.multimodal.mm_video_agentic_rounds" type="number" min="1" max="5" step="1"></div>
+                <div class="field"><label>音频时长上限 <span>秒</span></label><input v-model.number="mm.multimodal.mm_audio_max_seconds" type="number" min="10" max="3600" step="10"></div>
+                <div class="field"><label>音频分段长度 <span>秒</span></label><input v-model.number="mm.multimodal.mm_audio_segment_seconds" type="number" min="20" max="600" step="10"></div>
+                <div class="field"><label>文件文本上限 <span>字符</span></label><input v-model.number="mm.multimodal.mm_file_max_chars" type="number" min="500" max="200000" step="500"></div>
+                <div class="field"><label>理解超时 <span>秒</span></label><input v-model.number="mm.multimodal.mm_timeout_seconds" type="number" min="10" max="900" step="10"></div>
+                <div class="field"><label>并发任务数</label><input v-model.number="mm.multimodal.mm_concurrency" type="number" min="1" max="8" step="1"></div>
+                <div class="field"><label>失败重试次数</label><input v-model.number="mm.multimodal.mm_retries" type="number" min="0" max="3" step="1"></div>
+                <div class="field"><label>缓存有效期 <span>小时</span></label><input v-model.number="mm.multimodal.mm_cache_ttl_hours" type="number" min="0" max="720" step="1"></div>
+                <div class="field"><label>缓存条目上限</label><input v-model.number="mm.multimodal.mm_cache_max_entries" type="number" min="10" max="10000" step="10"></div>
+                <div class="field"><label>等待理解完成 <span>秒，0 表示不等待</span></label><input v-model.number="mm.multimodal.mm_auto_wait_seconds" type="number" min="0" max="30" step="1"></div>
+              </div>
+              <p class="hint">新功能默认全部关闭：在没有选择模型并打开开关之前，不会产生任何理解调用或费用。</p>
+            </div>
+            <div v-show="flowTab === 'output'" class="glass-card">
               <div class="card-heading"><div><div class="section-kicker">Output Enhancement</div><h2>输出增强</h2><p>输出增强总开关在 AstrBot 原生配置页；这里配置发送前处理和适用范围。</p></div></div>
               <div class="switch-row"><div class="switch-copy"><strong>启用输出增强</strong><small>使用内置兼容管道；出错时自动保留原消息，不阻断 AstrBot。</small></div><label class="switch"><input v-model="form.dialogue_enhancement.output_enhancement_enabled" type="checkbox"><span class="switch-track"></span></label></div>
               <div class="scope-mode"><div><strong>{{ form.dialogue_enhancement.output_scope_blacklist ? '输出增强黑名单' : '输出增强白名单' }}</strong><small>{{ form.dialogue_enhancement.output_scope_blacklist ? '名单内不处理输出；名单为空时全部应用。' : '只处理名单内会话；名单为空时全部不处理。' }}</small></div><button class="scope-toggle" type="button" @click="form.dialogue_enhancement.output_scope_blacklist = !form.dialogue_enhancement.output_scope_blacklist">{{ form.dialogue_enhancement.output_scope_blacklist ? '黑名单' : '白名单' }}</button></div>
               <div class="field"><label>{{ form.dialogue_enhancement.output_scope_blacklist ? '不应用输出增强的会话' : '应用输出增强的会话' }} <span>每行一个群聊 ID、私聊用户 ID 或 unified_msg_origin</span></label><textarea v-model="form.dialogue_enhancement.output_scope" class="list-editor" placeholder="群聊 ID\n私聊用户 ID"></textarea></div>
             </div>
           </div>
-          <div class="glass-card output-config-card">
+          <div v-show="flowTab === 'output'" class="glass-card output-config-card">
             <div class="card-heading"><div><div class="section-kicker">Output Pipeline</div><h2>输出阶梯</h2><p>始终按内置顺序执行；关闭某一步即可跳过。只有勾选“仅 LLM”对应步骤时才限制到模型回复。</p></div></div>
             <div class="output-step-grid"><div v-for="step in outputStepOptions" :key="step.key" class="output-step"><label class="output-step-main"><input type="checkbox" :checked="outputStepEnabled(step.key)" @change="toggleOutputStep(step.key)"><span><strong>{{ step.label }}</strong><small>{{ step.hint }}</small></span></label><label class="output-llm-only"><input type="checkbox" :checked="outputLlmStepEnabled(step.key)" @change="toggleOutputLlmStep(step.key)">仅 LLM</label></div></div>
             <div class="output-config-groups">
@@ -929,7 +980,7 @@
             glassReady: false,
             saving: false,
             activeTab: 'tools',
-            proactiveTab: 'reactive', messageInterjection: true,
+            proactiveTab: 'reactive', flowTab: 'input', messageInterjection: true,
             lifeConfig: {}, lifeSchema: {}, lifeProviders: [], lifeStatus: {}, lifeTasks: {},
             lifeUmo: '', lifeActionText: '', lifeDateRange: '', lifeMessage: '', lifeBusy: false,
             appearancePersona: '', appearanceImages: [], appearanceDescription: '', appearancePersonaId: '', personaOptions: [], sessionOptions: [], sessionSearch: '', personaSearch: '', showSessionList: false, showPersonaList: false,
@@ -993,6 +1044,7 @@
                 conversation_flow_window: 8,
                 conversation_flow_scope: '',
                 conversation_flow_scope_blacklist: true,
+                multimodal: {models: []},
                 output_enhancement_enabled: false,
                 output_scope: '',
                 output_scope_blacklist: true,
@@ -1031,6 +1083,15 @@
             return Object.fromEntries(Object.entries(items).filter(([k]) => !skip.has(k)));
           },
           billingPlatforms() { return this.billingPlatformList || []; },
+          mm() { return this.form.dialogue_enhancement || {}; },
+          mmModels() {
+            const models = this.mm.multimodal && this.mm.multimodal.models;
+            return Array.isArray(models) ? models : [];
+          },
+          mmScopeText() {
+            const value = this.mm.multimodal && this.mm.multimodal.mm_auto_scope;
+            return Array.isArray(value) ? value.join('\n') : String(value || '');
+          },
           billingUserLabel() {
             const media = this.lifeConfig?.media_settings;
             if (!media || !media.proactive_billing_user_id) return this.billingUserSearch;
@@ -1104,6 +1165,23 @@
               tag.onerror = () => reject(new Error(`无法加载 ${src}`));
               document.head.appendChild(tag);
             });
+          },
+          setMmScope(raw) {
+            if (!this.mm.multimodal) return;
+            this.mm.multimodal.mm_auto_scope = String(raw || '')
+              .split(/\n|[,，]/).map(item => item.trim()).filter(Boolean);
+          },
+          async reloadModels() {
+            try {
+              const bridge = await waitForBridge();
+              const result = payloadOf(await bridge.apiGet('multimodal/models'));
+              if (result && Array.isArray(result.models) && this.mm.multimodal) {
+                this.mm.multimodal.models = result.models;
+                this.statusText = `已重新加载 ${result.models.length} 个可用模型`;
+              }
+            } catch (e) {
+              this.statusText = `模型列表加载失败：${e.message || e}`;
+            }
           },
           toggleScope(group) { const settings = this.lifeConfig?.[group]; if (settings) settings.session_blacklist = !settings.session_blacklist; },
           hidePicker(kind) { if (kind === 'session') this.showSessionList = false; else if (kind === 'billingUser') this.showBillingUserList = false; else if (kind === 'networkPersona') this.showNetworkPersonaList = false; else this.showPersonaList = false; },
