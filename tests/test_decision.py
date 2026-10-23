@@ -935,7 +935,7 @@ def test_public_schema_contains_only_global_settings_and_master_switches():
 
 
 def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
-    page = (Path(__file__).resolve().parents[1] / "pages" / "settings" / "index.html").read_text(
+    page = (Path(__file__).resolve().parents[1] / "pages" / "dashboard" / "index.html").read_text(
         encoding="utf-8"
     )
     assert "<title>jev决策综合插件设置</title>" in page
@@ -1004,7 +1004,7 @@ def test_proactive_details_are_page_only_and_excluded_from_public_schema():
     schema = json.loads(
         (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
     )
-    page = (Path(__file__).resolve().parents[1] / "pages" / "settings" / "index.html").read_text(
+    page = (Path(__file__).resolve().parents[1] / "pages" / "dashboard" / "index.html").read_text(
         encoding="utf-8"
     )
     for field in (

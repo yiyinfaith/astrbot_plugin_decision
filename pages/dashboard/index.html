@@ -312,6 +312,10 @@
       .life-picker { position:relative; } .life-picker-list { margin-top:8px; max-height:260px; overflow:auto; padding:6px; border:1px solid #ffffff30; border-radius:16px; background:#151d38f5; box-shadow:0 12px 32px #02061780; }
       .life-picker-list button { display:block; width:100%; padding:9px 11px; border:0; border-radius:11px; color:#e8f0ff; background:transparent; text-align:left; } .life-picker-list button:hover, .life-picker-list button.active { background:linear-gradient(120deg,#315fb54d,#6a4fd04d); }
       .life-picker-list strong { display:block; font-size:12.5px; overflow-wrap:anywhere; } .life-picker-list small { display:block; margin-top:3px; color:#9fb2cf; font-size:11px; line-height:1.5; overflow-wrap:anywhere; } .life-picker-empty { padding:10px 11px; color:#93a4c0; font-size:12px; }
+      .network-detail-shell { display:grid; gap:12px; margin-top:12px; }
+      .network-detail-shell .hint { margin:0; }
+      .network-detail-actions { display:flex; flex-wrap:wrap; align-items:center; gap:12px; }
+      .network-detail-actions .hint { margin:0; }
       .life-rule-note { margin-top:10px; padding:10px 12px; border-radius:12px; border:1px solid #7fb0ff33; background:#7fb0ff14; color:#b9cdf0; line-height:1.65; }
       .collapsible-body { padding-top:14px; }
       .life-config-section > summary { list-style:none; } .life-config-section > summary::-webkit-details-marker { display:none; }
@@ -494,12 +498,13 @@
                     </div>
                   </details>
                   <p v-if="networkMessage" class="hint">{{ networkMessage }}</p>
-                  <p class="hint">上面的增删改都在本页完成。关系图视图、批量生成、头像与导入导出仍在独立页面：<a :href="networkAdvancedUrl" target="_blank" rel="noopener">打开关系图与高级工具</a>。</p>
+                  <p class="hint">上面的增删改都在本页完成。关系图视图、批量生成、头像与导入导出仍在独立页面：<a v-if="networkAdvancedUrl" :href="networkAdvancedUrl" target="_blank" rel="noopener">打开关系图与高级工具</a><span v-else>下拉到页面底部的「人际网络详情」获取入口</span>。</p>
                 </template>
               </div>
             </div></details>
             </div>
             <div class="life-config-grid"><details v-for="(group,key) in lifeConfigGroups" :key="key" class="glass-card life-config-section" ><summary><span>{{ cleanLifeLabel(group.description || key) }}</span><small>{{ Object.keys(group.items || {}).length }} 项设置</small></summary><template v-if="key === 'media_settings' && lifeConfig[key]"><life-settings :schema="mediaSettingsSchema" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><div class="billing-picker-row"><div class="field"><label>固定账户平台名 <span>来自 AstrBot 已配置的平台</span></label><select aria-label="固定账户平台名" v-model="lifeConfig.media_settings.proactive_billing_platform"><option value="">沿用当前平台</option><option v-for="row in billingPlatforms" :key="row.id" :value="row.id">{{ row.name }}</option><option v-if="lifeConfig.media_settings.proactive_billing_platform && !billingPlatforms.some(p => p.id === lifeConfig.media_settings.proactive_billing_platform)" :value="lifeConfig.media_settings.proactive_billing_platform">{{ lifeConfig.media_settings.proactive_billing_platform }}（已保存）</option></select></div><div class="field"><label>固定账户用户 ID <span>来自 aigen 记账账户，可搜索</span></label><div class="life-picker"><input type="text" :value="billingUserLabel" placeholder="搜索平台或用户 ID" autocomplete="off" aria-label="固定账户用户 ID" @focus="showBillingUserList = true" @input="onBillingUserInput($event.target.value)" @keydown.esc="showBillingUserList = false" @blur="hidePicker('billingUser')"><div v-if="showBillingUserList" class="life-picker-list"><button v-for="row in filteredBillingAccounts" :key="row.label" type="button" :class="{active: row.user_id === lifeConfig.media_settings.proactive_billing_user_id}" @mousedown.prevent="pickBillingAccount(row)"><strong>{{ row.user_id }}</strong><small>{{ row.platform }} · 余额 {{ row.amount }}</small></button><div v-if="!filteredBillingAccounts.length" class="life-picker-empty">没有匹配的记账账户；也可直接输入用户 ID。</div></div></div><p class="hint">列出的是 aigen 账本中已有余额行的账户；主动发起会消耗这里选中的账户。</p></div></div></template><life-settings v-else-if="lifeConfig[key]" :schema="group.items" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><p v-if="key === 'media_settings'" class="hint">三项概率独立掷骰，判定为“生成多媒体”后只会从已启用的种类里挑一种发送，数量由模型在配置区间内决定。</p></details></div>
+                        <details class="glass-card life-config-section" id="network-detail" @toggle="onNetworkDetailToggle"><summary><span>人际网络详情</span><small>{{ networkDetailLoaded ? '关系图与人物卡片' : '默认收起 · 点击展开' }}</small></summary><div class="collapsible-body"><p class="hint">关系图、人物卡片、批量生成、头像与导入导出都在这里；下方「人际网络」分组只控制是否注入上下文与是否注册 LLM 工具。</p><div class="network-detail-shell"><p class="hint">完整的关系图、人物卡片、批量生成、头像与导入导出都在这个独立页面里。AstrBot 会用安全沙箱加载插件页（页面来源为 opaque），禁止把一个插件页直接嵌进另一个插件页，所以这里提供入口而不是内嵌视图。</p><div class="network-detail-actions"><a v-if="networkDetailUrl" class="button secondary" :href="networkDetailUrl" target="_blank" rel="noopener" @click="onNetworkLinkClick">打开关系图页面</a><span v-else class="hint">{{ networkDetailError || '正在准备关系图链接…' }}</span><span class="hint">也可以直接点左侧插件页列表里的 "network"。</span></div></div></div></details>
                         <div class="glass-card"><div class="card-heading"><div><div class="section-kicker">Runtime</div><p>{{ lifeMessage || '配置保存在 AstrBot 数据目录；后台主动发送默认关闭。' }}</p></div><button class="button ghost" @click="refreshLife">刷新状态</button></div><div v-for="(task,id) in lifeTasks" :key="id" class="life-task" :class="{ fresh: id === lifeFreshTask }"><strong>{{ actionLabel(task.action) }} · {{ refreshStatus(task.state) }}</strong><p v-if="task.error">{{ task.error }}</p><template v-if="Array.isArray(task.result)"><template v-for="(part,idx) in task.result" :key="idx"><img v-if="part.type === 'image' && part.src" class="life-result-image" :src="part.src" alt="生活查询图片"><pre v-else-if="part.text" class="life-json">{{ part.text }}</pre></template></template><pre v-else-if="task.result" class="life-json">{{ typeof task.result === 'object' ? JSON.stringify(task.result,null,2) : task.result }}</pre><p v-if="task.image_count" class="hint">本次返回 {{ task.image_count }} 张图片（已发送，此处不再重复传输）。</p></div><details><summary>查看计划任务与最近 Jev 决策</summary><pre class="life-json">{{ JSON.stringify(lifeStatus,null,2) }}</pre></details></div>
           </div>
         </section>
@@ -682,6 +687,9 @@
             lifeConfig: {}, lifeSchema: {}, lifeProviders: [], lifeStatus: {}, lifeTasks: {},
             lifeUmo: '', lifeActionText: '', lifeDateRange: '', lifeMessage: '', lifeBusy: false,
             appearancePersona: '', appearanceImages: [], appearanceDescription: '', appearancePersonaId: '', personaOptions: [], sessionOptions: [], sessionSearch: '', personaSearch: '', showSessionList: false, showPersonaList: false,
+            networkDetailLoaded: false,
+            networkDetailUrl: '',
+            networkDetailError: '',
             networkPersonaId: '', networkPersonaSearch: '', showNetworkPersonaList: false,
             networkEnabled: false, networkCharacters: [], networkRelations: [], networkEvents: [],
             networkStats: { characters: 0, relationships: 0, events: 0 }, networkBusy: false, networkMessage: '',
@@ -779,12 +787,9 @@
           },
           billingPlatforms() { return this.billingPlatformList || []; },
           networkAdvancedUrl() {
-            try {
-              const path = String(window.location.pathname || '');
-              const index = path.lastIndexOf('/settings');
-              if (index >= 0) return `${path.slice(0, index)}/network/`;
-            } catch (e) { /* fall through */ }
-            return '/plugin/astrbot_plugin_decision/network/';
+            // Only a network-scoped token can open that view, so both links use
+            // the URL the plugin mints on demand.
+            return this.networkDetailUrl || '';
           },
           billingUserLabel() {
             const media = this.lifeConfig?.media_settings;
@@ -818,6 +823,33 @@
           },
           listText(group, key) { const value = this.lifeConfig?.[group]?.[key]; return Array.isArray(value) ? value.join('\n') : String(value || ''); },
           setScopeList(group, key, raw) { if (!this.lifeConfig[group]) return; this.lifeConfig[group][key] = String(raw || '').split('\n').map(item => item.trim()).filter(Boolean); },
+          onNetworkDetailToggle(event) {
+            // Load the frame once, on first open, and keep it afterwards so
+            // collapsing the card does not throw away the graph state.
+            if (event.target.open) {
+              this.loadNetworkDetail();
+              const shell = event.target;
+              this.$nextTick(() => shell.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+            }
+          },
+          async loadNetworkDetail() {
+            // Only the bridge can reach the plugin API here: the page is
+            // sandboxed with an opaque origin, so fetch() and cross-frame
+            // navigation are both blocked.
+            if (this.networkDetailUrl || this.networkDetailError) return;
+            try {
+              const bridge = await waitForBridge();
+              const result = payloadOf(await bridge.apiGet('network/embed'));
+              if (result && result.url) {
+                this.networkDetailUrl = result.url;
+              } else {
+                this.networkDetailError =
+                  (result && result.reason) || '无法签发关系图页面链接。';
+              }
+            } catch (e) {
+              this.networkDetailError = `无法签发关系图页面链接：${e.message || e}`;
+            }
+          },
           toggleScope(group) { const settings = this.lifeConfig?.[group]; if (settings) settings.session_blacklist = !settings.session_blacklist; },
           hidePicker(kind) { if (kind === 'session') this.showSessionList = false; else if (kind === 'billingUser') this.showBillingUserList = false; else if (kind === 'networkPersona') this.showNetworkPersonaList = false; else this.showPersonaList = false; },
           onBillingUserInput(raw) { this.billingUserSearch = String(raw || ''); this.showBillingUserList = true; },
@@ -1326,7 +1358,7 @@
           activeTab() { this.syncGlassNav(); }
         },
         beforeUnmount() { if (this.lifePoll) clearTimeout(this.lifePoll); if(this._navMedia && this._navLabelChange) this._navMedia.removeEventListener('change',this._navLabelChange); },
-        mounted() { this.load(); nextTick(() => this.initGlass().catch(() => { this.glassReady = false; })); }
+        mounted() { this.load(); this.loadNetworkDetail(); nextTick(() => this.initGlass().catch(() => { this.glassReady = false; })); }
       });
       app.component('life-settings', {
         name: 'LifeSettings', props: ['schema','value','providers'],

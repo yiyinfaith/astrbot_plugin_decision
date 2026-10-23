@@ -133,7 +133,7 @@ def test_cooldown_hint_explains_it_is_independent():
 
 
 def test_page_explains_silence_vs_cooldown():
-    page = (Path(__file__).resolve().parents[1] / "pages/settings/index.html").read_text(
+    page = (Path(__file__).resolve().parents[1] / "pages/dashboard/index.html").read_text(
         encoding="utf-8"
     )
     assert page.count("life-rule-note") == 3, "note markup plus its CSS rule"

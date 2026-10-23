@@ -473,6 +473,7 @@ class DecisionPlugin(Star):
         )
         for route, handler, methods in (
             ("network/personas", self.network_personas, ["GET"]),
+            ("network/embed", self.network_embed_url, ["GET"]),
             ("network/network", self.network_network, ["GET"]),
             ("network/network/enabled", self.network_set_enabled, ["POST"]),
             ("network/character/save", self.network_save_character, ["POST"]),
@@ -2742,6 +2743,42 @@ class DecisionPlugin(Star):
 
     async def network_personas(self):
         return await self._network().api_personas()
+
+    async def network_embed_url(self):
+        """Return a page URL for the network view that this session may load.
+
+        AstrBot's plugin page token is bound to a single view name, so a
+        dashboard token cannot open the network view inside an iframe. Mint a
+        correctly scoped token for the signed-in user instead of linking to a URL
+        that would 401.
+        """
+
+        from astrbot.api.web import json_response, request
+
+        username = getattr(request, "username", None)
+        raw = getattr(request, "_request", None)
+        app = getattr(raw, "app", None)
+        services = getattr(getattr(app, "state", None), "services", None)
+        pages = getattr(services, "plugin_pages", None)
+        if not pages or not isinstance(username, str) or not username.strip():
+            return json_response({"url": "", "reason": "当前会话无法为关系图签发访问令牌"})
+        try:
+            locale = "zh-CN"
+            token = pages.issue_plugin_page_asset_token(
+                plugin_name=PLUGIN_NAME,
+                view_name="network",
+                username=username,
+                locale=locale,
+            )
+            if not token:
+                return json_response({"url": "", "reason": "页面令牌签发失败"})
+            url = pages.build_plugin_page_view_content_path(
+                PLUGIN_NAME, "network", token
+            )
+        except Exception as exc:
+            logger.warning("Decision Engine 关系图内嵌地址生成失败：%s", _safe_error(exc))
+            return json_response({"url": "", "reason": _safe_error(exc)})
+        return json_response({"url": url})
 
     async def network_network(self):
         return await self._network().api_network()
