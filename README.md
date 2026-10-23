@@ -517,7 +517,7 @@ aigen 按「平台名 + 发送者 ID」记账（`["aiocqhttp","123456"]` 这样�
 - 数据位置：`<plugin_data>/astrbot_plugin_decision/personal_network/`，其中 `personal_network.sqlite3` 是数据库、`avatars/` 存头像、`exports/` 存导出文件。
 - **一次性迁移**：首次加载时，如果旧目录 `<plugin_data>/astrbot_plugin_personal_network/personal_network.sqlite3` 存在且新库不存在，会把 sqlite 主文件与 `-wal` / `-shm` 以及 `avatars/` 复制到新位置，并写入标记文件 `migrated_from_standalone.json` 保证只执行一次。迁移失败只记录日志，不会阻止插件加载。
 - LLM 工具名保持不变：`update_personal_network` 与 `query_personal_network`；聊天命令仍是 `/关系查询`（别名 `查询关系`、`人际关系`）。工具与命令都受 **人际网络** 分组中的开关控制，`enable` 关闭时 `/关系查询` 会提示先到 WebUI 开启。
-- 管理页在 `pages/network/`，从 WebUI 的“人际网络”卡片点击“打开人际网络管理”打开；也可以直接访问插件详情页的 `network` 视图（地址形如 `#/plugin-view/astrbot_plugin_decision/network`）。页面用于维护人物、关系与共同经历，并支持按人格生成关系网草稿、导入导出。
+- 管理工作已并入插件主页 `pages/dashboard/`：**主动发起 → 人际网络详情**（页面倒数第二张卡片，默认收起）。关系图、人物卡片、批量生成、头像与导入导出都在那张卡片里，修改即时保存，不再需要单独打开 `network` 视图。
 - 配置位于 WebUI 的 **人际网络** 分组（`personal_network_integration`），默认关闭；虚拟生活生成新人物时也写入同一份数据。
 
 ## 配置文件和插件更新

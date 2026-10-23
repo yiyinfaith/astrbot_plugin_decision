@@ -937,4 +937,8 @@ async function start() {
   catch (error) { console.error(error); toast(`${t("loadFailed")}: ${error.message}`, true); }
 }
 
+// The view now lives inside a collapsible card, so the host page needs a way to
+// ask cytoscape to re-measure after the card is shown again.
+window.__decisionNetworkResize = () => state.cy?.resize();
+
 start();

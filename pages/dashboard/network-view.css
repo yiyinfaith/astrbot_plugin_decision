@@ -1,0 +1,896 @@
+/* Generated from pages/network/style.css, scoped to #network-shell and re-themed
+   to the dashboard's dark liquid-glass look. Regenerate with output/_scope_css.py. */
+
+#network-shell {
+  --bg: #0d1526;
+  --surface: #162137;
+  --surface-alt: #1d2a45;
+  --text: #e6efff;
+  --muted: #9fb2cf;
+  --border: #ffffff1f;
+  --accent: #7fb0ff;
+  --accent-strong: #a9c8ff;
+  --accent-soft: #7fb0ff26;
+  --coral: #ff8f9c;
+  --amber: #ffca7a;
+  --shadow: 0 18px 44px #02061773;
+  display: block;
+  color: var(--text);
+  font-family: inherit;
+  letter-spacing: 0;
+}
+
+#network-shell *,
+#network-shell *::before,
+#network-shell *::after { box-sizing: border-box; }
+
+#network-shell button,
+#network-shell input,
+#network-shell select,
+#network-shell textarea { font: inherit; letter-spacing: 0; }
+
+#network-shell button { cursor: pointer; }
+#network-shell .app-shell { min-height: 0; }
+
+#network-shell .app-shell {
+ min-height: 100vh;
+}
+
+#network-shell .topbar {
+ min-height: 76px; padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; gap: 18px; background: var(--surface); border-bottom: 1px solid var(--border);
+}
+
+#network-shell .brand-block,
+#network-shell .topbar-actions,
+#network-shell .persona-picker,
+#network-shell .switch-control,
+#network-shell .graph-toolbar,
+#network-shell .people-toolbar,
+#network-shell .people-actions,
+#network-shell .dialog-title-row,
+#network-shell .dialog-actions,
+#network-shell .range-row {
+ display: flex; align-items: center;
+}
+
+#network-shell .brand-block {
+ gap: 12px; min-width: 210px;
+}
+
+#network-shell .brand-mark {
+ width: 42px; height: 42px; display: grid; place-items: center; border-radius: 8px; background: var(--text); color: var(--surface); font-weight: 800; font-size: 14px;
+}
+
+#network-shell h1 {
+ margin: 0; font-size: 18px; line-height: 1.25;
+}
+
+#network-shell .brand-block p {
+ margin: 3px 0 0; font-size: 12px; color: var(--muted);
+}
+
+#network-shell .topbar-actions {
+ gap: 8px; flex-wrap: wrap; justify-content: flex-end;
+}
+
+#network-shell .persona-picker {
+ gap: 8px; color: var(--muted); font-size: 13px;
+}
+
+#network-shell select,
+#network-shell input,
+#network-shell textarea {
+ color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; outline: none;
+}
+
+#network-shell select:focus,
+#network-shell input:focus,
+#network-shell textarea:focus {
+ border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+#network-shell select {
+ min-height: 36px; padding: 0 32px 0 10px;
+}
+
+#network-shell .persona-picker select {
+ min-width: 180px;
+}
+
+#network-shell .switch-control {
+ gap: 8px; margin: 0 4px; font-size: 13px;
+}
+
+#network-shell .switch-control input {
+ position: absolute; opacity: 0; pointer-events: none;
+}
+
+#network-shell .switch-track {
+ position: relative; width: 38px; height: 22px; border-radius: 11px; background: var(--border); transition: background 160ms ease;
+}
+
+#network-shell .switch-track::after {
+ content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: white; box-shadow: 0 1px 4px rgb(0 0 0 / 20%); transition: transform 160ms ease;
+}
+
+#network-shell .switch-control input:checked + .switch-track {
+ background: var(--accent);
+}
+
+#network-shell .switch-control input:checked + .switch-track::after {
+ transform: translateX(16px);
+}
+
+#network-shell .icon-button {
+ width: 36px; height: 36px; display: grid; place-items: center; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: 20px;
+}
+
+#network-shell .icon-button:hover,
+#network-shell .tool-button:hover,
+#network-shell .secondary-button:hover {
+ background: var(--surface-alt);
+}
+
+#network-shell .tabs {
+ height: 47px; display: flex; align-items: end; gap: 24px; padding: 0 20px; background: var(--surface); border-bottom: 1px solid var(--border);
+}
+
+#network-shell .tab {
+ height: 46px; padding: 0 2px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); font-weight: 600;
+}
+
+#network-shell .tab.active {
+ color: var(--accent); border-color: var(--accent);
+}
+
+#network-shell .view {
+ display: none;
+}
+
+#network-shell .view.active {
+ display: block;
+}
+
+#network-shell .graph-toolbar,
+#network-shell .people-toolbar {
+ min-height: 58px; gap: 10px; padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--surface);
+}
+
+#network-shell .search-field {
+ height: 38px; min-width: 240px; flex: 1; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--muted);
+}
+
+#network-shell .search-field input {
+ width: 100%; height: 34px; border: 0; background: transparent; box-shadow: none;
+}
+
+#network-shell .tool-button,
+#network-shell .secondary-button,
+#network-shell .primary-button,
+#network-shell .danger-button {
+ min-height: 36px; padding: 0 14px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 6px; font-weight: 600; font-size: 13px; white-space: nowrap;
+}
+
+#network-shell .tool-button,
+#network-shell .secondary-button {
+ color: var(--text); border: 1px solid var(--border); background: var(--surface);
+}
+
+#network-shell .primary-button {
+ color: white; border: 1px solid var(--accent); background: var(--accent);
+}
+
+#network-shell .primary-button:hover {
+ background: var(--accent-strong);
+}
+
+#network-shell .danger-button {
+ color: white; border: 1px solid var(--coral); background: var(--coral);
+}
+
+#network-shell .graph-workspace {
+ display: grid; grid-template-columns: minmax(0, 1fr) 340px; height: calc(100vh - 181px); min-height: 480px;
+}
+
+#network-shell .graph-canvas {
+ position: relative; min-width: 0; height: 100%; overflow: hidden;
+}
+
+#network-shell #network-graph {
+ min-width: 0; height: 100%; background-color: var(--bg); background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px); background-size: 28px 28px; background-position: -1px -1px;
+}
+
+#network-shell .connection-overlay {
+ position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; overflow: visible; pointer-events: none;
+}
+
+#network-shell .connection-overlay line {
+ display: none; stroke: var(--coral); stroke-width: 3; stroke-linecap: round; stroke-dasharray: 7 5;
+}
+
+#network-shell .connection-overlay.active line {
+ display: block;
+}
+
+#network-shell .connection-handle {
+ position: absolute; z-index: 4; width: 28px; height: 28px; padding: 0; display: grid; place-items: center; transform: translate(-50%, -50%); border: 2px solid var(--surface); border-radius: 50%; background: var(--coral); color: white; box-shadow: 0 2px 9px rgb(23 33 38 / 28%); font-size: 18px; font-weight: 700; line-height: 1; touch-action: none; cursor: crosshair;
+}
+
+#network-shell .connection-handle:hover,
+#network-shell .connection-handle:focus-visible {
+ box-shadow: 0 0 0 4px color-mix(in srgb, var(--coral) 24%, transparent), 0 2px 9px rgb(23 33 38 / 28%);
+}
+
+#network-shell .connection-handle.dragging {
+ opacity: 0;
+}
+
+#network-shell .inspector {
+ overflow: auto; padding: 18px; background: var(--surface); border-left: 1px solid var(--border);
+}
+
+#network-shell .inspector.empty {
+ display: grid; place-items: center;
+}
+
+#network-shell .empty-state {
+ text-align: center; color: var(--muted);
+}
+
+#network-shell .empty-glyph {
+ font-size: 42px; color: var(--border);
+}
+
+#network-shell .empty-state h2 {
+ font-size: 14px;
+}
+
+#network-shell .profile-heading {
+ text-align: center; padding-bottom: 16px; border-bottom: 1px solid var(--border);
+}
+
+#network-shell .avatar {
+ flex: 0 0 auto; display: grid; place-items: center; overflow: hidden; border-radius: 50%; background: var(--accent-soft); color: var(--accent-strong); font-weight: 800;
+}
+
+#network-shell .avatar img {
+ width: 100%; height: 100%; object-fit: cover;
+}
+
+#network-shell .avatar.large {
+ width: 76px; height: 76px; margin: 0 auto 10px; font-size: 24px;
+}
+
+#network-shell .avatar.medium {
+ width: 48px; height: 48px; font-size: 17px;
+}
+
+#network-shell .profile-heading h2 {
+ margin: 0; font-size: 20px;
+}
+
+#network-shell .alias-line {
+ margin: 5px 0 0; color: var(--muted); font-size: 12px;
+}
+
+#network-shell .inspector-actions {
+ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 14px 0;
+}
+
+#network-shell .detail-section {
+ padding: 13px 0; border-top: 1px solid var(--border);
+}
+
+#network-shell .detail-section h3 {
+ margin: 0 0 8px; color: var(--muted); font-size: 11px; text-transform: uppercase;
+}
+
+#network-shell .detail-section p {
+ margin: 0; font-size: 13px; line-height: 1.55; white-space: pre-wrap;
+}
+
+#network-shell .tag-list {
+ display: flex; flex-wrap: wrap; gap: 6px;
+}
+
+#network-shell .tag {
+ padding: 3px 7px; border-radius: 4px; background: var(--surface-alt); color: var(--text); font-size: 11px;
+}
+
+#network-shell .relation-row,
+#network-shell .identity-row,
+#network-shell .event-row {
+ padding: 9px 0; border-top: 1px solid var(--border); font-size: 12px;
+}
+
+#network-shell .relation-row button {
+ width: 100%; padding: 0; border: 0; background: transparent; color: var(--text); text-align: left;
+}
+
+#network-shell .event-row button {
+ width: 100%; padding: 0; border: 0; background: transparent; color: var(--text); text-align: left;
+}
+
+#network-shell .relation-meta {
+ color: var(--muted); margin-top: 3px;
+}
+
+#network-shell .nickname-list {
+ margin-top: 7px;
+}
+
+#network-shell .people-toolbar {
+ justify-content: space-between;
+}
+
+#network-shell .people-toolbar .search-field {
+ max-width: 480px;
+}
+
+#network-shell .people-actions {
+ gap: 8px;
+}
+
+#network-shell .people-grid {
+ display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; padding: 18px 20px 32px;
+}
+
+#network-shell .person-card {
+ min-height: 174px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 2px 8px rgb(23 33 38 / 4%);
+}
+
+#network-shell .person-card:hover {
+ border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); box-shadow: var(--shadow);
+}
+
+#network-shell .person-card-head {
+ display: flex; gap: 12px; align-items: center;
+}
+
+#network-shell .person-card h2 {
+ margin: 0; font-size: 16px;
+}
+
+#network-shell .person-card .bio {
+ min-height: 42px; margin: 14px 0; color: var(--muted); font-size: 13px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+#network-shell .person-card-footer {
+ display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 11px;
+}
+
+#network-shell .person-card-footer button {
+ border: 0; background: transparent; color: var(--accent); font-weight: 700;
+}
+
+#network-shell .root-badge,
+#network-shell .status-badge {
+ display: inline-flex; padding: 3px 7px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-strong); font-size: 10px; font-weight: 700;
+}
+
+#network-shell .status-badge.ended {
+ background: var(--surface-alt); color: var(--muted);
+}
+
+#network-shell .status-badge.uncertain {
+ background: color-mix(in srgb, var(--amber) 18%, transparent); color: var(--amber);
+}
+
+#network-shell dialog {
+ width: min(720px, calc(100vw - 28px)); max-height: calc(100vh - 40px); padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: var(--shadow);
+}
+
+#network-shell dialog::backdrop {
+ background: rgb(12 18 20 / 55%);
+}
+
+#network-shell dialog form {
+ padding: 0 22px 20px;
+}
+
+#network-shell .dialog-title-row {
+ justify-content: space-between; min-height: 62px;
+}
+
+#network-shell .dialog-title {
+ margin: 0; font-size: 18px;
+}
+
+#network-shell .dialog-subtitle {
+ margin: 4px 0 0; color: var(--muted); font-size: 12px;
+}
+
+#network-shell .dialog-title-row .icon-button {
+ border: 0;
+}
+
+#network-shell .form-grid {
+ display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+}
+
+#network-shell .form-grid label {
+ display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 600;
+}
+
+#network-shell .form-grid label.full {
+ grid-column: 1 / -1;
+}
+
+#network-shell .alias-field {
+ grid-column: 1 / -1; display: grid; gap: 8px;
+}
+
+#network-shell .field-heading {
+ display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 12px; font-weight: 600;
+}
+
+#network-shell .compact-button {
+ min-height: 30px; padding: 0 10px;
+}
+
+#network-shell .alias-editor {
+ display: grid; gap: 7px;
+}
+
+#network-shell .alias-row {
+ display: grid; grid-template-columns: minmax(0, 1fr) 110px 36px; gap: 7px; align-items: center;
+}
+
+#network-shell .alias-row input {
+ width: 100%; min-height: 38px; padding: 8px 10px;
+}
+
+#network-shell .alias-count {
+ position: relative;
+}
+
+#network-shell .alias-count::before {
+ content: "次数"; position: absolute; left: 9px; top: 50%; z-index: 1; transform: translateY(-50%); color: var(--muted); font-size: 11px; pointer-events: none;
+}
+
+#network-shell .alias-count input {
+ padding-left: 40px;
+}
+
+#network-shell .alias-empty {
+ padding: 10px; border: 1px dashed var(--border); border-radius: 6px; color: var(--muted); font-size: 12px; text-align: center;
+}
+
+#network-shell .form-grid input,
+#network-shell .form-grid textarea,
+#network-shell .form-grid select {
+ width: 100%; min-height: 38px; padding: 8px 10px;
+}
+
+#network-shell .form-grid select[multiple] {
+ min-height: 132px; padding: 6px;
+}
+
+#network-shell .form-grid textarea {
+ min-height: 76px; resize: vertical;
+}
+
+#network-shell .range-row {
+ gap: 12px;
+}
+
+#network-shell .range-row input {
+ padding: 0;
+}
+
+#network-shell .range-row output {
+ width: 48px; text-align: center; color: var(--text);
+}
+
+#network-shell .dialog-actions {
+ gap: 8px; margin-top: 20px; justify-content: flex-end;
+}
+
+#network-shell .dialog-spacer {
+ flex: 1;
+}
+
+#network-shell .confirm-dialog {
+ width: min(440px, calc(100vw - 28px));
+}
+
+#network-shell .confirm-message {
+ margin: 0; color: var(--text); font-size: 14px; line-height: 1.6; white-space: pre-line;
+}
+
+#network-shell .generation-dialog {
+ width: min(1040px, calc(100vw - 28px));
+}
+
+#network-shell .generation-dialog form {
+ max-height: calc(100vh - 42px); overflow: auto;
+}
+
+#network-shell .generation-settings {
+ display: grid; grid-template-columns: 140px 180px minmax(220px, 1fr) auto; gap: 12px; align-items: end; padding-bottom: 18px; border-bottom: 1px solid var(--border);
+}
+
+#network-shell .generation-settings label {
+ display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 600;
+}
+
+#network-shell .generation-settings input,
+#network-shell .generation-settings select,
+#network-shell .generation-settings textarea {
+ width: 100%; min-height: 38px; padding: 8px 10px;
+}
+
+#network-shell .generation-settings .checkbox-field {
+ min-height: 38px; display: flex; align-items: center; gap: 8px; color: var(--text);
+}
+
+#network-shell .generation-settings .checkbox-field input {
+ width: 17px; min-height: 17px;
+}
+
+#network-shell .generation-settings .generation-hint {
+ grid-column: 1 / -1;
+}
+
+#network-shell .generation-settings .generation-hint textarea {
+ min-height: 76px; resize: vertical;
+}
+
+#network-shell .generation-result {
+ display: grid; gap: 14px; padding-top: 16px;
+}
+
+#network-shell .generation-errors {
+ padding: 11px 13px; border-left: 4px solid var(--coral); background: color-mix(in srgb, var(--coral) 10%, var(--surface)); color: var(--text); font-size: 13px; line-height: 1.55; white-space: pre-wrap;
+}
+
+#network-shell .generation-raw-panel {
+ border: 1px solid var(--border); border-radius: 6px;
+}
+
+#network-shell .generation-raw-panel > summary,
+#network-shell .generation-expected > summary {
+ padding: 11px 13px; cursor: pointer; color: var(--text); font-size: 13px; font-weight: 700;
+}
+
+#network-shell .generation-raw-panel > textarea {
+ width: calc(100% - 24px); min-height: 220px; margin: 0 12px; padding: 11px; resize: vertical; font-family: Consolas, "SFMono-Regular", monospace; font-size: 12px; line-height: 1.5;
+}
+
+#network-shell .generation-raw-actions {
+ display: flex; justify-content: flex-end; padding: 10px 12px;
+}
+
+#network-shell .generation-expected {
+ margin: 0 12px 12px; border-top: 1px solid var(--border);
+}
+
+#network-shell .generation-expected pre {
+ max-height: 300px; margin: 0; padding: 0 12px 12px; overflow: auto; color: var(--muted); font-size: 11px; white-space: pre-wrap;
+}
+
+#network-shell .generation-preview {
+ display: grid; gap: 22px;
+}
+
+#network-shell .section-heading {
+ display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px;
+}
+
+#network-shell .section-heading h3 {
+ margin: 0; font-size: 14px;
+}
+
+#network-shell .section-heading span {
+ color: var(--muted); font-size: 12px;
+}
+
+#network-shell .generation-items {
+ display: grid; gap: 8px;
+}
+
+#network-shell .generation-item {
+ border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+}
+
+#network-shell .generation-item.excluded {
+ opacity: 0.55;
+}
+
+#network-shell .generation-item > summary {
+ min-height: 44px; padding: 9px 12px; display: flex; align-items: center; gap: 9px; cursor: pointer; list-style: none;
+}
+
+#network-shell .generation-item > summary::-webkit-details-marker {
+ display: none;
+}
+
+#network-shell .generation-item > summary::after {
+ content: "+"; margin-left: auto; color: var(--muted); font-size: 17px;
+}
+
+#network-shell .generation-item[open] > summary::after {
+ content: "−";
+}
+
+#network-shell .generation-item-title {
+ min-width: 0; display: flex; align-items: baseline; gap: 8px;
+}
+
+#network-shell .generation-item-title strong {
+ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px;
+}
+
+#network-shell .generation-item-title span {
+ color: var(--muted); font-size: 11px;
+}
+
+#network-shell .generation-item-body {
+ display: grid; grid-template-columns: 1fr 1fr; gap: 11px; padding: 12px; border-top: 1px solid var(--border);
+}
+
+#network-shell .generation-item-body label {
+ display: grid; gap: 5px; color: var(--muted); font-size: 11px; font-weight: 600;
+}
+
+#network-shell .generation-item-body label.full {
+ grid-column: 1 / -1;
+}
+
+#network-shell .generation-item-body input,
+#network-shell .generation-item-body textarea,
+#network-shell .generation-item-body select {
+ width: 100%; min-height: 36px; padding: 7px 9px;
+}
+
+#network-shell .generation-item-body textarea {
+ min-height: 66px; resize: vertical;
+}
+
+#network-shell .generation-toggle {
+ flex: 0 0 auto; width: 17px; height: 17px;
+}
+
+#network-shell .generation-strength {
+ display: grid; grid-template-columns: 1fr 46px; align-items: center; gap: 8px;
+}
+
+#network-shell .generation-strength input {
+ padding: 0;
+}
+
+#network-shell .generation-strength output {
+ color: var(--text); text-align: center;
+}
+
+#network-shell .dialog-status {
+ color: var(--muted); font-size: 12px;
+}
+
+#network-shell .hidden {
+ display: none !important;
+}
+
+#network-shell .toast-region {
+ position: fixed; right: 18px; bottom: 18px; z-index: 100; display: grid; gap: 8px;
+}
+
+#network-shell .toast {
+ max-width: 360px; padding: 11px 14px; border-radius: 6px; background: var(--text); color: var(--surface); box-shadow: var(--shadow); font-size: 13px;
+}
+
+#network-shell .toast.error {
+ background: var(--coral); color: white;
+}
+
+#network-shell .topbar {
+ align-items: flex-start; flex-direction: column;
+}
+
+#network-shell .topbar-actions {
+ width: 100%; justify-content: flex-start;
+}
+
+#network-shell .persona-picker {
+ flex: 1;
+}
+
+#network-shell .persona-picker select {
+ min-width: 0; width: 100%;
+}
+
+#network-shell .graph-toolbar {
+ flex-wrap: wrap;
+}
+
+#network-shell .search-field {
+ min-width: 180px;
+}
+
+#network-shell .graph-workspace {
+ grid-template-columns: 1fr; height: auto;
+}
+
+#network-shell .graph-canvas,
+#network-shell #network-graph {
+ height: 58vh; min-height: 420px;
+}
+
+#network-shell .inspector {
+ min-height: 280px; border-left: 0; border-top: 1px solid var(--border);
+}
+
+#network-shell .people-toolbar {
+ align-items: stretch; flex-direction: column;
+}
+
+#network-shell .people-actions {
+ justify-content: flex-end;
+}
+
+#network-shell .generation-settings {
+ grid-template-columns: 1fr 1fr;
+}
+
+#network-shell .generation-settings .checkbox-field {
+ grid-column: 1 / -1;
+}
+
+#network-shell .topbar,
+#network-shell .graph-toolbar,
+#network-shell .people-toolbar {
+ padding-left: 12px; padding-right: 12px;
+}
+
+#network-shell .switch-control > span:last-child,
+#network-shell .persona-picker > span {
+ display: none;
+}
+
+#network-shell .tabs {
+ padding: 0 12px;
+}
+
+#network-shell .graph-toolbar .search-field {
+ order: -1; flex-basis: 100%;
+}
+
+#network-shell .graph-toolbar select {
+ flex: 1;
+}
+
+#network-shell .tool-button span:last-child {
+ display: none;
+}
+
+#network-shell .people-grid {
+ grid-template-columns: 1fr; padding: 12px;
+}
+
+#network-shell .form-grid {
+ grid-template-columns: 1fr;
+}
+
+#network-shell .form-grid label.full {
+ grid-column: auto;
+}
+
+#network-shell .alias-field {
+ grid-column: auto;
+}
+
+#network-shell .alias-row {
+ grid-template-columns: minmax(0, 1fr) 96px 36px;
+}
+
+#network-shell .dialog-actions {
+ flex-wrap: wrap;
+}
+
+#network-shell .generation-settings,
+#network-shell .generation-item-body {
+ grid-template-columns: 1fr;
+}
+
+#network-shell .generation-settings .checkbox-field,
+#network-shell .generation-settings .generation-hint,
+#network-shell .generation-item-body label.full {
+ grid-column: auto;
+}
+
+/* ------------------------------------------------------------ layout guard */
+/* The host page ships a cross-origin stylesheet that reflows generic containers
+   (it turned .topbar into a column and stretched the persona picker). Pin the
+   layout the view was designed for so it stays intact inside a card. */
+/* A grid keeps the two topbar groups apart regardless of the flex and width
+   declarations the host stylesheet forces on generic containers. */
+#network-shell .topbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 0;
+  padding: 10px 14px;
+}
+
+#network-shell .topbar-actions {
+  width: auto;
+  max-width: 100%;
+  justify-self: end;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+/* The card heading already names this section, so the duplicated title block
+   shrinks to a compact label instead of taking a full row. */
+#network-shell .brand-block { min-width: 0; flex: 0 1 auto; gap: 8px; }
+#network-shell .brand-mark { display: none; }
+#network-shell .brand-block h1 { font-size: 14px; }
+#network-shell .brand-block p { margin: 1px 0 0; font-size: 11px; white-space: nowrap; }
+
+#network-shell .persona-picker { flex: 0 0 auto; }
+#network-shell .persona-picker select { width: auto; min-width: 160px; max-width: 260px; }
+#network-shell .brand-block { flex: 0 0 auto; }
+
+#network-shell .graph-toolbar,
+#network-shell .people-toolbar {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+#network-shell .people-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+}
+
+#network-shell .graph-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+
+#network-shell .inspector { display: block; }
+#network-shell .form-grid { display: grid; grid-template-columns: 1fr 1fr; }
+#network-shell .dialog-actions { flex-direction: row; justify-content: flex-end; }
+#network-shell .dialog-title-row { flex-direction: row; justify-content: space-between; }
+#network-shell .alias-row { grid-template-columns: minmax(0, 1fr) 110px 36px; }
+#network-shell .generation-settings,
+#network-shell .generation-preview { display: grid; }
+
+/* ---------------------------------------------------------------- glass theme */
+#network-shell .topbar,
+#network-shell .tabs,
+#network-shell .graph-toolbar,
+#network-shell .people-toolbar,
+#network-shell .inspector,
+#network-shell .person-card,
+#network-shell dialog,
+#network-shell .search-field {
+  background: #ffffff0d;
+  border-color: var(--border);
+  backdrop-filter: blur(18px) saturate(1.4);
+}
+
+#network-shell .topbar { border: 1px solid var(--border); border-radius: 18px; }
+#network-shell .tabs { border-radius: 14px; margin-top: 12px; }
+#network-shell .graph-toolbar,
+#network-shell .people-toolbar { border-radius: 14px; margin-top: 12px; }
+#network-shell .person-card { border-radius: 14px; }
+#network-shell .person-card:hover { background: #ffffff14; }
+
+/* The standalone page sized the graph against the viewport; inside a card it
+   must stay inside the card instead. */
+#network-shell .graph-workspace { height: min(70vh, 640px); min-height: 420px; }
+#network-shell #network-graph { background-color: #0b1224; }
+#network-shell .inspector { border-radius: 0 14px 14px 0; }
+#network-shell .people-grid { border-radius: 14px; }
+#network-shell dialog { backdrop-filter: blur(26px) saturate(1.5); }
+#network-shell .toast { backdrop-filter: blur(14px); }
+
+@media (max-width: 900px) {
+  #network-shell .graph-workspace { grid-template-columns: 1fr; height: auto; }
+  #network-shell .inspector { border-radius: 14px; margin-top: 12px; }
+  #network-shell .people-grid { grid-template-columns: 1fr; }
+}

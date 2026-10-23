@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./network-view.css" />
     <title>jev决策综合插件设置</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <script defer src="https://glass.goose.cc.cd/liquid-glass.js"></script>
@@ -498,13 +499,258 @@
                     </div>
                   </details>
                   <p v-if="networkMessage" class="hint">{{ networkMessage }}</p>
-                  <p class="hint">上面的增删改都在本页完成。关系图视图、批量生成、头像与导入导出仍在独立页面：<a v-if="networkAdvancedUrl" :href="networkAdvancedUrl" target="_blank" rel="noopener">打开关系图与高级工具</a><span v-else>下拉到页面底部的「人际网络详情」获取入口</span>。</p>
+                  <p class="hint">上面的增删改都在本页完成。关系图视图、人物卡片、批量生成、头像与导入导出在页面底部的「人际网络详情」里。</p>
                 </template>
               </div>
             </div></details>
             </div>
             <div class="life-config-grid"><details v-for="(group,key) in lifeConfigGroups" :key="key" class="glass-card life-config-section" ><summary><span>{{ cleanLifeLabel(group.description || key) }}</span><small>{{ Object.keys(group.items || {}).length }} 项设置</small></summary><template v-if="key === 'media_settings' && lifeConfig[key]"><life-settings :schema="mediaSettingsSchema" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><div class="billing-picker-row"><div class="field"><label>固定账户平台名 <span>来自 AstrBot 已配置的平台</span></label><select aria-label="固定账户平台名" v-model="lifeConfig.media_settings.proactive_billing_platform"><option value="">沿用当前平台</option><option v-for="row in billingPlatforms" :key="row.id" :value="row.id">{{ row.name }}</option><option v-if="lifeConfig.media_settings.proactive_billing_platform && !billingPlatforms.some(p => p.id === lifeConfig.media_settings.proactive_billing_platform)" :value="lifeConfig.media_settings.proactive_billing_platform">{{ lifeConfig.media_settings.proactive_billing_platform }}（已保存）</option></select></div><div class="field"><label>固定账户用户 ID <span>来自 aigen 记账账户，可搜索</span></label><div class="life-picker"><input type="text" :value="billingUserLabel" placeholder="搜索平台或用户 ID" autocomplete="off" aria-label="固定账户用户 ID" @focus="showBillingUserList = true" @input="onBillingUserInput($event.target.value)" @keydown.esc="showBillingUserList = false" @blur="hidePicker('billingUser')"><div v-if="showBillingUserList" class="life-picker-list"><button v-for="row in filteredBillingAccounts" :key="row.label" type="button" :class="{active: row.user_id === lifeConfig.media_settings.proactive_billing_user_id}" @mousedown.prevent="pickBillingAccount(row)"><strong>{{ row.user_id }}</strong><small>{{ row.platform }} · 余额 {{ row.amount }}</small></button><div v-if="!filteredBillingAccounts.length" class="life-picker-empty">没有匹配的记账账户；也可直接输入用户 ID。</div></div></div><p class="hint">列出的是 aigen 账本中已有余额行的账户；主动发起会消耗这里选中的账户。</p></div></div></template><life-settings v-else-if="lifeConfig[key]" :schema="group.items" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><p v-if="key === 'media_settings'" class="hint">三项概率独立掷骰，判定为“生成多媒体”后只会从已启用的种类里挑一种发送，数量由模型在配置区间内决定。</p></details></div>
-                        <details class="glass-card life-config-section" id="network-detail" @toggle="onNetworkDetailToggle"><summary><span>人际网络详情</span><small>{{ networkDetailLoaded ? '关系图与人物卡片' : '默认收起 · 点击展开' }}</small></summary><div class="collapsible-body"><p class="hint">关系图、人物卡片、批量生成、头像与导入导出都在这里；下方「人际网络」分组只控制是否注入上下文与是否注册 LLM 工具。</p><div class="network-detail-shell"><p class="hint">完整的关系图、人物卡片、批量生成、头像与导入导出都在这个独立页面里。AstrBot 会用安全沙箱加载插件页（页面来源为 opaque），禁止把一个插件页直接嵌进另一个插件页，所以这里提供入口而不是内嵌视图。</p><div class="network-detail-actions"><a v-if="networkDetailUrl" class="button secondary" :href="networkDetailUrl" target="_blank" rel="noopener" @click="onNetworkLinkClick">打开关系图页面</a><span v-else class="hint">{{ networkDetailError || '正在准备关系图链接…' }}</span><span class="hint">也可以直接点左侧插件页列表里的 "network"。</span></div></div></div></details>
+                        <details class="glass-card life-config-section" id="network-detail" @toggle="onNetworkDetailToggle"><summary><span>人际网络详情</span><small>{{ networkDetailLoaded ? '关系图与人物卡片' : '默认收起 · 点击展开' }}</small></summary><div class="collapsible-body">
+<p class="hint">完整的人际网络管理已并入本页：关系图、人物卡片、批量生成、头像与导入导出都在下方，修改即时保存，无需跳转其它页面。</p>
+<div v-if="networkDetailError" class="hint">{{ networkDetailError }}</div>
+<div id="network-shell" class="network-shell" v-show="networkDetailLoaded">
+      <header class="topbar">
+        <div class="brand-block">
+          <div class="brand-mark">人</div>
+          <div>
+            <h1>人际网络</h1>
+            <p id="network-summary">0 个人物 · 0 条关系</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <label class="persona-picker">
+            <span>人格</span>
+            <select id="persona-select"></select>
+          </label>
+          <label class="switch-control">
+            <input id="network-enabled" type="checkbox" />
+            <span class="switch-track" aria-hidden="true"></span>
+            <span>启用</span>
+          </label>
+          <button id="refresh-button" class="icon-button" type="button" title="刷新" aria-label="刷新">↻</button>
+          <button id="export-button" class="icon-button" type="button" title="导出" aria-label="导出">↓</button>
+          <button id="import-button" class="icon-button" type="button" title="导入" aria-label="导入">↑</button>
+          <input id="import-file" type="file" accept="application/json,.json" hidden />
+        </div>
+      </header>
+
+      <nav class="tabs" aria-label="视图">
+        <button class="tab active" type="button" data-view="graph">关系网络</button>
+        <button class="tab" type="button" data-view="people">人物卡片</button>
+      </nav>
+
+      <main>
+        <section id="graph-view" class="view active">
+          <div class="graph-toolbar">
+            <div class="search-field">
+              <span aria-hidden="true">⌕</span>
+              <input id="graph-search" type="search" placeholder="搜索人物或关系" />
+            </div>
+            <select id="status-filter" aria-label="关系状态">
+              <option value="">全部状态</option>
+              <option value="active">进行中</option>
+              <option value="uncertain">不确定</option>
+              <option value="ended">已结束</option>
+            </select>
+            <button id="fit-button" class="tool-button" type="button"><span aria-hidden="true">◎</span><span>适应画布</span></button>
+            <button id="add-life-event-button" class="tool-button" type="button"><span aria-hidden="true">＋</span><span>添加经历</span></button>
+            <button id="add-relation-button" class="tool-button" type="button"><span aria-hidden="true">＋</span><span>添加关系</span></button>
+          </div>
+          <div class="graph-workspace">
+            <div id="graph-canvas" class="graph-canvas">
+              <div id="network-graph" role="img" aria-label="人物关系网络"></div>
+              <svg id="connection-overlay" class="connection-overlay" aria-hidden="true">
+                <line id="connection-line" x1="0" y1="0" x2="0" y2="0"></line>
+              </svg>
+              <button id="connection-handle" class="connection-handle hidden" type="button" title="拖到另一人物以添加关系" aria-label="拖拽添加关系">＋</button>
+            </div>
+            <aside id="inspector" class="inspector empty">
+              <div class="empty-state">
+                <div class="empty-glyph">⌁</div>
+                <h2>未选择项目</h2>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="people-view" class="view">
+          <div class="people-toolbar">
+            <div class="search-field">
+              <span aria-hidden="true">⌕</span>
+              <input id="people-search" type="search" placeholder="搜索人物" />
+            </div>
+            <div class="people-actions">
+              <button id="merge-button" class="secondary-button" type="button">合并人物</button>
+              <button id="generate-network-button" class="secondary-button" type="button">应用人格生成</button>
+              <button id="add-person-button" class="primary-button" type="button"><span aria-hidden="true">＋</span><span>添加人物</span></button>
+            </div>
+          </div>
+          <div id="people-grid" class="people-grid"></div>
+        </section>
+      </main>
+
+<div id="toast-region" class="toast-region" aria-live="polite"></div>
+
+    <dialog id="character-dialog">
+      <form id="character-form" method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">人物信息</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <input id="character-id" type="hidden" />
+        <div class="form-grid">
+          <label><span>姓名</span><input id="character-name" maxlength="100" required /></label>
+          <div class="full alias-field">
+            <div class="field-heading">
+              <span>人物别名</span>
+              <button id="add-alias-button" class="secondary-button compact-button" type="button">添加别名</button>
+            </div>
+            <div id="character-aliases" class="alias-editor"></div>
+          </div>
+          <label class="full"><span>身份简介</span><textarea id="character-bio" maxlength="4000"></textarea></label>
+          <label class="full"><span>性格</span><textarea id="character-personality" maxlength="4000"></textarea></label>
+          <label><span>偏好</span><textarea id="character-preferences" maxlength="4000"></textarea></label>
+          <label><span>重要事实</span><textarea id="character-facts" maxlength="4000"></textarea></label>
+          <label class="full"><span>管理员备注</span><textarea id="character-notes" maxlength="4000"></textarea></label>
+        </div>
+        <div class="dialog-actions">
+          <button id="delete-character-button" class="danger-button hidden" type="button">删除人物</button>
+          <span class="dialog-spacer"></span>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="relationship-dialog">
+      <form id="relationship-form" method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">关系信息</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <input id="relationship-id" type="hidden" />
+        <div class="form-grid">
+          <label><span>关系主体（谁的）</span><select id="relationship-source" required></select></label>
+          <label><span>关联人物（是谁）</span><select id="relationship-target" required></select></label>
+          <label><span>关联人物的身份</span><input id="relationship-type" maxlength="100" required /></label>
+          <label><span>状态</span><select id="relationship-status"><option value="active">进行中</option><option value="uncertain">不确定</option><option value="ended">已结束</option></select></label>
+          <label class="full"><span>关系亲密度</span><div class="range-row"><input id="relationship-strength" type="range" min="0" max="100" value="0" /><output id="strength-output">0</output></div></label>
+          <label class="full"><span>关系描述</span><textarea id="relationship-description" maxlength="2000"></textarea></label>
+        </div>
+        <div class="dialog-actions">
+          <button id="delete-relationship-button" class="danger-button hidden" type="button">删除</button>
+          <span class="dialog-spacer"></span>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="life-event-dialog">
+      <form id="life-event-form" method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">人生经历</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <input id="life-event-id" type="hidden" />
+        <div class="form-grid">
+          <label><span>发生时间</span><input id="life-event-time" type="datetime-local" required /></label>
+          <label><span>类型</span><input id="life-event-type" maxlength="100" required placeholder="见面、通话、聚餐、争执" /></label>
+          <label class="full"><span>参与人物</span><select id="life-event-participants" multiple required></select></label>
+          <label><span>重要度</span><div class="range-row"><input id="life-event-importance" type="range" min="0" max="100" value="50" /><output id="life-event-importance-output">50</output></div></label>
+          <label><span>情绪基调</span><input id="life-event-tone" maxlength="100" placeholder="温暖、紧张、平静" /></label>
+          <label class="full"><span>经历摘要</span><textarea id="life-event-summary" maxlength="2000" required></textarea></label>
+        </div>
+        <div class="dialog-actions">
+          <button id="delete-life-event-button" class="danger-button hidden" type="button">删除经历</button>
+          <span class="dialog-spacer"></span>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="merge-dialog">
+      <form id="merge-form" method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">合并人物</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="form-grid">
+          <label><span>保留人物</span><select id="merge-target" required></select></label>
+          <label><span>重复人物</span><select id="merge-duplicate" required></select></label>
+        </div>
+        <div class="dialog-actions">
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button class="primary-button" type="submit">合并人物</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="generation-dialog" class="generation-dialog">
+      <form method="dialog">
+        <div class="dialog-title-row">
+          <div>
+            <h2 class="dialog-title">应用人格生成关系网</h2>
+            <p class="dialog-subtitle" id="generation-persona-name"></p>
+          </div>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <section class="generation-settings">
+          <label><span>生成人数</span><input id="generation-count" type="number" min="1" max="32" value="6" required /></label>
+          <label><span>关系密度</span><select id="generation-density"><option value="sparse">稀疏</option><option value="balanced" selected>均衡</option><option value="rich">丰富</option></select></label>
+          <label class="checkbox-field"><input id="generation-fill-existing" type="checkbox" /><span>补全现有人物的空白资料</span></label>
+          <button id="generation-submit" class="primary-button" type="button">生成草稿</button>
+          <label class="generation-hint"><span>额外生成要求（可选）</span><textarea id="generation-hint" maxlength="2000"></textarea></label>
+        </section>
+        <section id="generation-result" class="generation-result hidden">
+          <div id="generation-errors" class="generation-errors hidden"></div>
+          <details id="generation-raw-panel" class="generation-raw-panel">
+            <summary>模型返回与 JSON 修正</summary>
+            <textarea id="generation-raw" spellcheck="false" aria-label="模型返回 JSON"></textarea>
+            <div class="generation-raw-actions">
+              <button id="generation-validate" class="secondary-button" type="button">校验修改</button>
+            </div>
+            <details class="generation-expected">
+              <summary>预期结果</summary>
+              <pre id="generation-expected"></pre>
+            </details>
+          </details>
+          <div id="generation-preview" class="generation-preview hidden">
+            <section>
+              <div class="section-heading"><h3>人物草稿</h3><span id="generation-character-count"></span></div>
+              <div id="generation-characters" class="generation-items"></div>
+            </section>
+            <section>
+              <div class="section-heading"><h3>关系草稿</h3><span id="generation-relationship-count"></span></div>
+              <div id="generation-relationships" class="generation-items"></div>
+            </section>
+          </div>
+        </section>
+        <div class="dialog-actions">
+          <span id="generation-status" class="dialog-status"></span>
+          <span class="dialog-spacer"></span>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button id="generation-apply" class="primary-button" type="button" disabled>确认应用</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="confirm-dialog" class="confirm-dialog">
+      <form method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">确认操作</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <p id="confirm-message" class="confirm-message"></p>
+        <div class="dialog-actions">
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button id="confirm-submit" class="danger-button" type="button">确认</button>
+        </div>
+      </form>
+    </dialog>
+</div>
+</div></details>
                         <div class="glass-card"><div class="card-heading"><div><div class="section-kicker">Runtime</div><p>{{ lifeMessage || '配置保存在 AstrBot 数据目录；后台主动发送默认关闭。' }}</p></div><button class="button ghost" @click="refreshLife">刷新状态</button></div><div v-for="(task,id) in lifeTasks" :key="id" class="life-task" :class="{ fresh: id === lifeFreshTask }"><strong>{{ actionLabel(task.action) }} · {{ refreshStatus(task.state) }}</strong><p v-if="task.error">{{ task.error }}</p><template v-if="Array.isArray(task.result)"><template v-for="(part,idx) in task.result" :key="idx"><img v-if="part.type === 'image' && part.src" class="life-result-image" :src="part.src" alt="生活查询图片"><pre v-else-if="part.text" class="life-json">{{ part.text }}</pre></template></template><pre v-else-if="task.result" class="life-json">{{ typeof task.result === 'object' ? JSON.stringify(task.result,null,2) : task.result }}</pre><p v-if="task.image_count" class="hint">本次返回 {{ task.image_count }} 张图片（已发送，此处不再重复传输）。</p></div><details><summary>查看计划任务与最近 Jev 决策</summary><pre class="life-json">{{ JSON.stringify(lifeStatus,null,2) }}</pre></details></div>
           </div>
         </section>
@@ -688,7 +934,6 @@
             lifeUmo: '', lifeActionText: '', lifeDateRange: '', lifeMessage: '', lifeBusy: false,
             appearancePersona: '', appearanceImages: [], appearanceDescription: '', appearancePersonaId: '', personaOptions: [], sessionOptions: [], sessionSearch: '', personaSearch: '', showSessionList: false, showPersonaList: false,
             networkDetailLoaded: false,
-            networkDetailUrl: '',
             networkDetailError: '',
             networkPersonaId: '', networkPersonaSearch: '', showNetworkPersonaList: false,
             networkEnabled: false, networkCharacters: [], networkRelations: [], networkEvents: [],
@@ -786,11 +1031,6 @@
             return Object.fromEntries(Object.entries(items).filter(([k]) => !skip.has(k)));
           },
           billingPlatforms() { return this.billingPlatformList || []; },
-          networkAdvancedUrl() {
-            // Only a network-scoped token can open that view, so both links use
-            // the URL the plugin mints on demand.
-            return this.networkDetailUrl || '';
-          },
           billingUserLabel() {
             const media = this.lifeConfig?.media_settings;
             if (!media || !media.proactive_billing_user_id) return this.billingUserSearch;
@@ -824,31 +1064,46 @@
           listText(group, key) { const value = this.lifeConfig?.[group]?.[key]; return Array.isArray(value) ? value.join('\n') : String(value || ''); },
           setScopeList(group, key, raw) { if (!this.lifeConfig[group]) return; this.lifeConfig[group][key] = String(raw || '').split('\n').map(item => item.trim()).filter(Boolean); },
           onNetworkDetailToggle(event) {
-            // Load the frame once, on first open, and keep it afterwards so
-            // collapsing the card does not throw away the graph state.
-            if (event.target.open) {
-              this.loadNetworkDetail();
-              const shell = event.target;
-              this.$nextTick(() => shell.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+            // Boot the ported network view on first open, then leave its own
+            // state alone so collapsing the card never loses the graph.
+            if (!event.target.open) return;
+            if (this.networkDetailLoaded) {
+              // cytoscape measured the canvas while the card was collapsed, so
+              // tell it to re-measure now that it is visible again.
+              if (typeof window.__decisionNetworkResize === 'function') {
+                window.setTimeout(() => window.__decisionNetworkResize(), 0);
+              }
+              return;
             }
+            this.loadNetworkDetail();
           },
           async loadNetworkDetail() {
-            // Only the bridge can reach the plugin API here: the page is
-            // sandboxed with an opaque origin, so fetch() and cross-frame
-            // navigation are both blocked.
-            if (this.networkDetailUrl || this.networkDetailError) return;
+            if (this.networkDetailLoaded || this._networkLoading) return;
+            this._networkLoading = true;
             try {
-              const bridge = await waitForBridge();
-              const result = payloadOf(await bridge.apiGet('network/embed'));
-              if (result && result.url) {
-                this.networkDetailUrl = result.url;
-              } else {
-                this.networkDetailError =
-                  (result && result.reason) || '无法签发关系图页面链接。';
+              // The panel must be visible before cytoscape measures its canvas,
+              // otherwise the graph initialises to a zero-sized viewport.
+              this.networkDetailLoaded = true;
+              await this.$nextTick();
+              // cytoscape is a classic script; the view itself is a module.
+              if (!window.cytoscape) {
+                await this.loadScript('./vendor/cytoscape.min.js');
               }
+              await import('./network-app.js');
             } catch (e) {
-              this.networkDetailError = `无法签发关系图页面链接：${e.message || e}`;
+              this.networkDetailLoaded = false;
+              this._networkLoading = false;
+              this.networkDetailError = `关系图加载失败：${e.message || e}`;
             }
+          },
+          loadScript(src) {
+            return new Promise((resolve, reject) => {
+              const tag = document.createElement('script');
+              tag.src = src;
+              tag.onload = () => resolve();
+              tag.onerror = () => reject(new Error(`无法加载 ${src}`));
+              document.head.appendChild(tag);
+            });
           },
           toggleScope(group) { const settings = this.lifeConfig?.[group]; if (settings) settings.session_blacklist = !settings.session_blacklist; },
           hidePicker(kind) { if (kind === 'session') this.showSessionList = false; else if (kind === 'billingUser') this.showBillingUserList = false; else if (kind === 'networkPersona') this.showNetworkPersonaList = false; else this.showPersonaList = false; },
@@ -1358,7 +1613,7 @@
           activeTab() { this.syncGlassNav(); }
         },
         beforeUnmount() { if (this.lifePoll) clearTimeout(this.lifePoll); if(this._navMedia && this._navLabelChange) this._navMedia.removeEventListener('change',this._navLabelChange); },
-        mounted() { this.load(); this.loadNetworkDetail(); nextTick(() => this.initGlass().catch(() => { this.glassReady = false; })); }
+        mounted() { this.load(); nextTick(() => this.initGlass().catch(() => { this.glassReady = false; })); }
       });
       app.component('life-settings', {
         name: 'LifeSettings', props: ['schema','value','providers'],
