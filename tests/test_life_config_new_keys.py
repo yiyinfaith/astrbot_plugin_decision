@@ -152,9 +152,9 @@ def test_group_cooldown_does_not_exceed_its_idle_ceiling():
     assert group["cooldown_minutes"] <= group["idle_max_minutes"]
 
 
-def test_sleep_skips_quiet_defaults_to_on():
+def test_sleep_skips_quiet_defaults_to_off():
     delivery = life_defaults()["delivery_settings"]
-    assert delivery["sleep_skips_quiet"] is True
+    assert delivery["sleep_skips_quiet"] is False
     assert delivery["sleep_exception_probability"] > 0
 
 

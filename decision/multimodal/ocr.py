@@ -26,7 +26,10 @@ class OcrResult:
 
     @property
     def ok(self) -> bool:
-        return bool(self.text.strip()) and not self.error
+        # ``error`` may carry a non-fatal fallback note (for example, the
+        # requested PaddleOCR backend was unavailable and Tesseract was used).
+        # Text is usable whenever the selected engine returned it.
+        return bool(self.text.strip())
 
 
 def _tesseract_ready() -> tuple[bool, str]:

@@ -672,8 +672,8 @@
       "sleep_skips_quiet": {
         "description": "睡眠偶发唤醒跳过免打扰",
         "type": "bool",
-        "hint": "睡眠时段必然落在免打扰区间内。开启后，这类偶发唤醒不再被免打扰拦下（其它类型的主动发起仍然遵守）。",
-        "default": true
+        "hint": "默认关闭。只有你明确开启后，睡眠偶发消息才可跳过免打扰；普通主动发起仍然遵守免打扰。",
+        "default": false
       },
       "minimum_idle_for_window_minutes": {
         "description": "窗口最短沉默",
@@ -976,13 +976,13 @@
       "proactive_billing_platform": {
         "description": "固定账户平台名",
         "type": "string",
-        "hint": "仅“固定账户”生效。填 aigen 记账用的平台名，例如 aiocqhttp；留空表示沿用当前平台。",
+        "hint": "主动媒体生成必须明确设置。填 aigen 账本的平台名，例如 aiocqhttp。",
         "default": ""
       },
       "proactive_billing_user_id": {
         "description": "固定账户用户 ID",
         "type": "string",
-        "hint": "仅“固定账户”生效。填 aigen 记账用的用户 ID（通常是机器人主人）。留空时会自动选用 aigen 账本中余额最高的账户，避免群聊主动发起把账记到不存在的群号上。",
+        "hint": "主动媒体生成必须明确设置。填获授权用于付费生成的 aigen 账户 ID；未设置时会安全拒绝主动媒体任务。",
         "default": ""
       },
       "photo_probability": {

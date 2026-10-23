@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -68,16 +67,23 @@ def _guard_size(path: Path, limit_mb: int) -> None:
 
 
 async def run_command(cmd: list[str], *, timeout: float = 120.0) -> tuple[int, bytes, bytes]:
-    def execute() -> tuple[int, bytes, bytes]:
-        process = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            cmd,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
-        return process.returncode, process.stdout, process.stderr
-
-    return await asyncio.to_thread(execute)
+    # Use an async child process so cancellation of a media job also stops the
+    # expensive ffmpeg/ffprobe process. A to_thread(subprocess.run) wrapper keeps
+    # running after its awaiting task is cancelled and can accumulate orphaned
+    # encoders during plugin reloads.
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        return int(process.returncode or 0), stdout, stderr
+    except BaseException:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+        raise
 
 
 # --------------------------------------------------------------------- images
@@ -456,6 +462,32 @@ def _pdf_text(path: Path, limit: int) -> str:
             text = f"(第 {number} 页解析失败：{exc})"
         if text.strip():
             chunks.append(f"[第 {number} 页]\n{text.strip()}")
+    return "\n\n".join(chunks)[:limit]
+
+
+def pdf_text_pages(path: Path, limit: int, pages: list[int] | None = None) -> str:
+    """Extract only selected zero-based PDF pages, preserving page labels."""
+
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(path))
+    wanted = pages if pages is not None else list(range(len(reader.pages)))
+    chunks: list[str] = []
+    used = 0
+    for number in wanted:
+        if number < 0 or number >= len(reader.pages):
+            continue
+        try:
+            text = reader.pages[number].extract_text() or ""
+        except Exception as exc:  # pragma: no cover - malformed pdf
+            text = f"(第 {number + 1} 页解析失败：{exc})"
+        if not text.strip():
+            continue
+        chunk = f"[第 {number + 1} 页]\n{text.strip()}"
+        if used + len(chunk) > limit:
+            break
+        chunks.append(chunk)
+        used += len(chunk)
     return "\n\n".join(chunks)[:limit]
 
 

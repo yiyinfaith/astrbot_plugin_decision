@@ -12,6 +12,14 @@ from dataclasses import fields
 TOOL_CALL_TIMEOUT_DEFAULT = 120
 
 
+class PlatformUnavailableError(RuntimeError):
+    """The target platform instance is absent, proving it is disconnected."""
+
+
+class PlatformSendError(RuntimeError):
+    """The platform rejected or failed one outgoing proactive message."""
+
+
 async def dispatch_life_agent(
     runtime,
     umo: str,
@@ -53,7 +61,7 @@ async def dispatch_life_agent(
     event.role = "member"  # A scheduled task never inherits administrator rights.
     platform = ctx.get_platform_inst(session.platform_id)
     if platform is None:
-        raise RuntimeError("目标平台未连接")
+        raise PlatformUnavailableError("目标平台未连接")
     event.platform_meta = platform.meta()
     cfg = ctx.get_config(umo=umo)
     plugins = cfg.get("plugin_set", ["*"])
@@ -105,10 +113,13 @@ async def dispatch_life_agent(
             raise RuntimeError("主动候选已过期或会话已更新")
         try:
             if not await original_send(session, chain):
-                raise RuntimeError("平台未确认主动消息发送成功")
+                raise PlatformSendError("平台未确认主动消息发送成功")
         except Exception as exc:
-            send_failure = exc
-            raise
+            if isinstance(exc, PlatformSendError):
+                send_failure = exc
+                raise
+            send_failure = PlatformSendError(f"平台发送异常：{str(exc)[:160]}")
+            raise send_failure from exc
         if not sent:
             runtime.confirm_delivery(umo)
         sent += 1

@@ -1974,16 +1974,15 @@ class VirtualLifeBase:
         if not plan.has_schedule:
             yield event.plain_result("今日没有日程，无法发送测试主动消息。")
             return
-        sent = await self._deliver(
+        sent, reason = await self._attempt_unsolicited(
             event.unified_msg_origin,
             persona,
             plan,
             "管理员要求立即测试主动消息",
-            0,
-            self._conversation_generation(event.unified_msg_origin),
+            "manual",
         )
         yield event.plain_result(
-            "测试主动消息已发送。" if sent else "会话状态已变化，测试主动消息未发送。"
+            "测试主动消息已发送。" if sent else f"本次未发送：{reason}"
         )
 
     async def proactive_execution_times(self, event: AstrMessageEvent):

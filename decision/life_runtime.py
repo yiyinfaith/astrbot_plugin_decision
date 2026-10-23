@@ -11,7 +11,7 @@ from datetime import timedelta
 
 from astrbot import logger
 
-from .life_agent import dispatch_life_agent
+from .life_agent import PlatformSendError, PlatformUnavailableError, dispatch_life_agent
 from .tokens import estimate_request_tokens
 from .virtual_life.core.models import SessionState
 from .virtual_life.core.persona import PersonaContext
@@ -138,10 +138,14 @@ class LifeRuntime(VirtualLifeBase):
         self.action_lock = asyncio.Lock()
         self.closed = False
         self._loaded = False
-        # Sessions currently in a manual (administrator-triggered) delivery.
-        self._manual_umos: set[str] = set()
         # Sessions currently delivering an opt-in sleep wake-up.
         self._sleep_umos: set[str] = set()
+        # One cancellable schedule-generation task per newly discovered session.
+        self._schedule_tasks: dict[str, asyncio.Task] = {}
+        # Successful automatic candidates are remembered briefly so duplicate
+        # scheduler callbacks cannot send the same window twice. Manual commands
+        # remain explicit one-off requests and are intentionally excluded.
+        self._completed_delivery_keys: dict[tuple[str, str, str, str], float] = {}
 
     def spawn(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -220,8 +224,13 @@ class LifeRuntime(VirtualLifeBase):
         self.deadlines.clear()
         self.delivery_locks.clear()
         self.observed.clear()
-        self._manual_umos.clear()
         self._sleep_umos.clear()
+        for task in tuple(self._schedule_tasks.values()):
+            task.cancel()
+        if self._schedule_tasks:
+            await asyncio.gather(*tuple(self._schedule_tasks.values()), return_exceptions=True)
+        self._schedule_tasks.clear()
+        self._completed_delivery_keys.clear()
         self.audit.clear()
         if self._loaded:
             await super().terminate()
@@ -364,9 +373,31 @@ class LifeRuntime(VirtualLifeBase):
         else:
             # A whitelist enumerates its sessions, but a blacklist has no list
             # to enumerate: the first inbound message is what discovers the
-            # conversation. Schedule it here so an empty blacklist still works.
-            await self._ensure_scheduled(umo)
+            # conversation. Queue it so a slow schedule model never blocks the
+            # normal message hook.
+            self._queue_ensure_scheduled(umo)
         await self.storage.save_sessions()
+
+    def _queue_ensure_scheduled(self, umo: str) -> None:
+        """Queue one merged, cancellable schedule task for a session."""
+
+        current = self._schedule_tasks.get(umo)
+        if current is not None and not current.done():
+            return
+
+        async def run() -> None:
+            try:
+                await self._ensure_scheduled(umo)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pragma: no cover - task boundary
+                self.record_audit(umo, False, f"日程准备失败：{str(exc)[:120]}")
+            finally:
+                task = asyncio.current_task()
+                if task is not None and self._schedule_tasks.get(umo) is task:
+                    self._schedule_tasks.pop(umo, None)
+
+        self._schedule_tasks[umo] = self.spawn(run())
 
     async def _ensure_scheduled(self, umo: str) -> None:
         """Give a newly discovered conversation its plan and schedule jobs."""
@@ -410,35 +441,25 @@ class LifeRuntime(VirtualLifeBase):
         now = self._now().strftime("%H:%M")
         return start != end and (start <= now < end if start < end else now >= start or now < end)
 
-    def _manual_sessions(self) -> set[str]:
-        return getattr(self, "_manual_umos", set())
-
-    def _is_manual(self, umo) -> bool:
-        return str(umo) in self._manual_sessions()
-
     def _sleep_sessions(self) -> set[str]:
         return getattr(self, "_sleep_umos", set())
 
     def _quiet_exempt(self, umo) -> bool:
         """True when this delivery may ignore quiet hours.
 
-        Manual triggers and the opt-in sleep wake-up both need this, and both
-        the entry guard and the pre-send commit check must agree on it.
+        The opt-in sleep wake-up and pre-send commit check must agree.
         """
 
-        if self._is_manual(umo):
-            return True
         if str(umo) not in self._sleep_sessions():
             return False
-        return bool(self.config["delivery_settings"].get("sleep_skips_quiet", True))
+        return bool(self.config["delivery_settings"].get("sleep_skips_quiet", False))
 
     def can_commit(self, umo, generation):
-        # A manual request bypasses the scope list; a sleep wake-up keeps the
-        # scope check but may bypass quiet hours when that switch is on.
-        manual = self._is_manual(umo)
+        # Every trigger uses the same scope policy; only an explicit sleep
+        # exception may bypass quiet hours.
         return (
             self.enabled
-            and (manual or self.policy.is_enabled(umo))
+            and self.policy.is_enabled(umo)
             and (self._quiet_exempt(umo) or not self._quiet())
             and self._conversation_generation(umo) == generation
             and time.monotonic() <= self.deadlines.get(umo, 0)
@@ -456,17 +477,13 @@ class LifeRuntime(VirtualLifeBase):
     async def _attempt_unsolicited(self, umo, persona, plan, intent, trigger, *, attempt_key=""):
         if not self.enabled:
             return False, "disabled"
-        # A manual request from the WebUI or an administrator is an explicit
-        # instruction: skip the scope list, quiet hours and the budget/cooldown
-        # guardrails, while still requiring a schedule and a usable platform.
-        manual = trigger == "manual"
-        # A sleep wake-up schedule always lands inside quiet hours, so the
-        # dedicated switch is the only way that feature can ever fire.
+        # Manual, scheduled and window triggers use the same policy. A sleep
+        # schedule always lands in quiet hours, so its explicit opt-in is needed.
         if trigger == "sleep" and bool(
-            self.config["delivery_settings"].get("sleep_skips_quiet", True)
+            self.config["delivery_settings"].get("sleep_skips_quiet", False)
         ):
             self._sleep_sessions().add(umo)
-        skip_quiet = manual or self._quiet_exempt(umo)
+        skip_quiet = self._quiet_exempt(umo)
         if not skip_quiet and self._quiet():
             self._schedule_idle(umo, run_at=self._now() + timedelta(minutes=30))
             return False, "quiet hours"
@@ -480,28 +497,36 @@ class LifeRuntime(VirtualLifeBase):
                     not plan.has_schedule
                     or not self.config["schedule_settings"]["daily_schedule_generation_enable"]
                 ):
+                    self._sleep_sessions().discard(umo)
                     return False, "schedule unavailable"
                 if self._agent_is_active(umo):
+                    self._sleep_sessions().discard(umo)
                     return False, "agent task active"
                 now = self._now()
                 if trigger == "window" and not self._window_is_idle_enough(umo, now):
+                    self._sleep_sessions().discard(umo)
                     return False, "conversation is not idle enough"
                 state = self.policy.ensure_state(umo, persona.id, plan, now)
-                if manual:
-                    decision = None
-                else:
-                    decision = self.policy.evaluate(
-                        umo=umo,
-                        state=state,
-                        current_item=timeline_item_at(plan, now),
-                        now=now,
-                        trigger=trigger,
-                        attempt_key=attempt_key,
-                    )
-                if decision is not None and not decision.allowed:
+                delivery_key = (
+                    umo,
+                    trigger,
+                    str(plan.revision),
+                    str(attempt_key or state.last_proactive_at or "initial"),
+                )
+                if trigger != "manual" and delivery_key in self._completed_delivery_keys:
+                    self._sleep_sessions().discard(umo)
+                    return False, "duplicate trigger"
+                decision = self.policy.evaluate(
+                    umo=umo,
+                    state=state,
+                    current_item=timeline_item_at(plan, now),
+                    now=now,
+                    trigger=trigger,
+                    attempt_key=attempt_key,
+                )
+                if not decision.allowed:
+                    self._sleep_sessions().discard(umo)
                     return False, decision.reason
-                if manual:
-                    self._manual_sessions().add(umo)
                 try:
                     delivered = await self._deliver(
                         umo,
@@ -511,15 +536,32 @@ class LifeRuntime(VirtualLifeBase):
                         state.unanswered_count,
                         self._conversation_generation(umo),
                     )
+                    if delivered and trigger != "manual":
+                        self._completed_delivery_keys[delivery_key] = time.monotonic()
+                        if len(self._completed_delivery_keys) > 1000:
+                            oldest = sorted(
+                                self._completed_delivery_keys.items(), key=lambda item: item[1]
+                            )[:200]
+                            for key, _ in oldest:
+                                self._completed_delivery_keys.pop(key, None)
                 finally:
-                    self._manual_sessions().discard(umo)
                     self._sleep_sessions().discard(umo)
                 return delivered, "sent" if delivered else "Jev 未通过或候选已失效"
-        except Exception as exc:
+        except PlatformUnavailableError as exc:
             failures += 1
             pause = self.config["integration_settings"]["offline_retry_minutes"] * 60
             self.offline[platform_id] = (failures, time.monotonic() + pause if failures >= 3 else 0)
-            self.record_audit(umo, False, f"请求或发送失败：{str(exc)[:160]}")
+            self.record_audit(umo, False, f"平台发送失败：{str(exc)[:160]}")
+            return False, "request failed"
+        except PlatformSendError as exc:
+            # A send rejection is scoped to this candidate. It is not enough
+            # evidence that the whole platform is offline, so do not back off
+            # every conversation on the same adapter.
+            self.record_audit(umo, False, f"平台发送失败：{str(exc)[:160]}")
+            return False, "platform send failed"
+        except Exception as exc:
+            # Failures scoped to one candidate do not alter platform state.
+            self.record_audit(umo, False, f"请求或生成失败：{str(exc)[:160]}")
             return False, "request failed"
 
     def record_audit(self, umo, sent, reason):
@@ -577,9 +619,7 @@ class LifeRuntime(VirtualLifeBase):
             return False
         scores = [result.answers.get(q, {}).get("noul", 0) for q in questions]
         threshold = settings["jev_threshold"]
-        # Jev still runs for a manual request because it shapes the message, but
-        # it no longer vetoes: the administrator already said "send now".
-        if not self._is_manual(umo) and not all(
+        if not all(
             isinstance(score, (int, float))
             and not isinstance(score, bool)
             and 0 <= score <= 1

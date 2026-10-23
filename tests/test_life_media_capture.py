@@ -129,6 +129,10 @@ def media_settings(**overrides):
         "audio_count_max": 3,
         "audio_mode": "朗读",
         "audio_voice": "",
+        # Proactive paid media must use an operator-selected account.
+        "proactive_billing_mode": "fixed",
+        "proactive_billing_platform": "aiocqhttp",
+        "proactive_billing_user_id": "1",
         "photo_prompt": "照片 {subject_desc} 数量{count} 穿搭：{outfit}",
         "video_prompt": "视频 {subject_desc} 数量{count} 穿搭：{outfit}",
         "audio_prompt": "音频 {style} {text} 数量{count}",

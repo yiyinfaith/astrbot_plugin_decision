@@ -248,7 +248,11 @@ class MultimodalRuntime:
         signature = self._route_signature(kind)
         key = (
             self.cache_identity(
-                ref, choice.provider_id, instruction, detail, signature
+                ref,
+                f"{choice.provider_id}:{choice.model}",
+                instruction,
+                detail,
+                signature,
             )
             if choice is not None
             else self.cache_identity(ref, error, instruction, detail, signature)
@@ -265,6 +269,11 @@ class MultimodalRuntime:
         if inflight is not None:
             return await asyncio.shield(inflight)
         flight: asyncio.Future = asyncio.get_running_loop().create_future()
+        # A producer can fail before any waiter joins. Consume that exception
+        # here while retaining it for tasks awaiting the shared Future.
+        flight.add_done_callback(
+            lambda done: done.exception() if not done.cancelled() else None
+        )
         self._inflight[key] = flight
         try:
             item = await self._understand_uncached(
@@ -374,7 +383,13 @@ class MultimodalRuntime:
 
         settings = self._settings
         if kind == "video":
-            return f"video:{settings.text('mm_video_strategy') or 'auto'}"
+            return (
+                f"video:{settings.text('mm_video_strategy') or 'auto'}:"
+                f"short={settings.int('mm_video_short_seconds')}:"
+                f"max={settings.int('mm_video_max_seconds')}:"
+                f"rounds={settings.int('mm_video_agentic_rounds')}:"
+                f"segments={settings.int('mm_video_agentic_segments')}"
+            )
         if kind == "file":
             return "file:{ocr}:{engine}:{pages}".format(
                 ocr=settings.text("mm_ocr_strategy") or "auto",
@@ -460,8 +475,27 @@ class MultimodalRuntime:
     ) -> tuple[str, dict[str, Any]]:
         settings = self._settings
         strategy = (settings.text("mm_video_strategy") or "auto").lower()
+        # Probe before selecting a native route so the hard duration limit also
+        # applies to Gemini uploads, and long Gemini videos use the official
+        # Interactions API instead of silently falling back to a frame mock.
+        info: dict[str, Any] = {}
+        try:
+            info = await preprocess.probe_video(path)
+        except Exception as exc:
+            logger.info("Decision Engine 视频元数据读取失败，将按未知时长处理：%s", str(exc)[:120])
         if strategy in {"auto", "native"}:
-            native = await self._native_video(ref, choice, prompt, path, workdir)
+            duration = float(info.get("duration") or 0)
+            limit = float(settings.int("mm_video_max_seconds"))
+            if limit and duration > limit:
+                raise ValueError(f"视频时长 {duration:.0f}s 超过上限 {limit:.0f}s")
+            native = await self._native_video(
+                ref,
+                choice,
+                prompt,
+                path,
+                workdir,
+                agentic=bool(duration > float(settings.int("mm_video_short_seconds"))),
+            )
             if native is not None:
                 return native
             if strategy == "native":
@@ -469,7 +503,8 @@ class MultimodalRuntime:
                     "当前模型/Provider 不支持原生视频理解（需要 Gemini 且可复用其 API Key）；"
                     "请改用“自动选择”或“强制通用处理”"
                 )
-        info = await preprocess.probe_video(path)
+        if not info:
+            info = await preprocess.probe_video(path)
         duration = float(info.get("duration") or 0)
         limit = float(settings.int("mm_video_max_seconds"))
         if limit and duration > limit:
@@ -482,9 +517,18 @@ class MultimodalRuntime:
             frames = await preprocess.extract_frames(path, workdir, stamps)
             if not frames:
                 raise ValueError("无法从视频中提取画面")
+            transcript = (
+                await self._video_transcript(choice, path, workdir, timeout)
+                if info.get("has_audio")
+                else ""
+            )
             answer = await adapters.call_provider(
                 choice.provider,
-                prompt=self._compose(prompt, self._stamp_notes(stamps), ""),
+                prompt=self._compose(
+                    prompt,
+                    self._stamp_notes(stamps),
+                    f"视频音轨转录与声音描述：\n{transcript}" if transcript else "",
+                ),
                 images=frames,
                 model=choice.model or None,
                 timeout=timeout,
@@ -512,9 +556,13 @@ class MultimodalRuntime:
         )
         details: list[str] = []
         seen: set[tuple[float, float]] = set()
-        transcript = ""
-        if info.get("has_audio"):
-            transcript = await self._video_transcript(choice, path, workdir, timeout)
+        transcript = (
+            await self._video_transcript(choice, path, workdir, timeout)
+            if info.get("has_audio")
+            else ""
+        )
+        if transcript:
+            overview = f"{overview}\n\n视频音轨转录与声音描述：\n{transcript}"
         for round_index in range(rounds):
             planned = self._parse_windows(
                 overview if round_index == 0 else "\n".join(details) or overview,
@@ -587,13 +635,24 @@ class MultimodalRuntime:
                 index, target, limit_chars=self._settings.int("mm_file_max_chars")
             )
             outline = index.outline()
+            visual_paths: list[str] = []
+            if adapters.supports_modality(choice.provider, "image"):
+                visual_paths = await asyncio.to_thread(
+                    self._materialize_office_visuals, index, workdir, target
+                )
+            visual_note = (
+                f"\n已提取 {len(visual_paths)} 个嵌入图片/图表视觉材料，请结合图像判断。"
+                if visual_paths
+                else ""
+            )
             answer = await adapters.call_provider(
                 choice.provider,
                 prompt=self._compose(
                     prompt,
                     [f"文档结构：\n{outline}"] if outline else [],
-                    body,
+                    body + visual_note,
                 ),
+                images=visual_paths or None,
                 model=choice.model or None,
                 timeout=timeout,
             )
@@ -602,19 +661,44 @@ class MultimodalRuntime:
                 "blocks": len(index.blocks),
                 "target": target,
                 "format": index.kind,
+                "visuals": len(visual_paths),
             }
 
         try:
             prepared = await asyncio.to_thread(
                 preprocess.extract_file_text, path, self._settings
             )
+            if path.suffix.lower() == ".pdf":
+                target_pages = self._target_pdf_pages(target)
+                if target_pages:
+                    prepared.text = await asyncio.to_thread(
+                        preprocess.pdf_text_pages,
+                        path,
+                        self._settings.int("mm_file_max_chars"),
+                        target_pages,
+                    )
         except ValueError as exc:
             if "扫描件" not in str(exc) or not self._settings.bool("mm_file_ocr"):
                 raise
             return await self._ocr_document(choice, prompt, workdir, path, target=target)
-        if len(prepared.text) < 80 and self._settings.bool("mm_file_ocr"):
+        # A mixed PDF can have plenty of extractable text overall while still
+        # containing scanned pages.  Inspect page-level text and OCR sparse
+        # pages instead of using one document-wide length threshold.
+        sparse_pages: list[int] = []
+        if path.suffix.lower() == ".pdf" and self._settings.bool("mm_file_ocr"):
+            sparse_pages = await asyncio.to_thread(self._pdf_sparse_pages, path)
+            if target_pages:
+                selected_pages = set(target_pages)
+                sparse_pages = [page for page in sparse_pages if page in selected_pages]
+        if (len(prepared.text) < 80 or sparse_pages) and self._settings.bool("mm_file_ocr"):
             scanned = await self._ocr_document(
-                choice, prompt, workdir, path, fallback=prepared, target=target
+                choice,
+                prompt,
+                workdir,
+                path,
+                fallback=prepared,
+                target=target,
+                pages=sparse_pages or None,
             )
             if scanned is not None:
                 return scanned
@@ -626,6 +710,68 @@ class MultimodalRuntime:
         )
         return answer, {"chars": len(prepared.text), "notes": prepared.notes}
 
+    @staticmethod
+    def _materialize_office_visuals(index: Any, workdir: Path, target: str = "") -> list[str]:
+        """Write embedded Office image bytes to request-scoped files."""
+
+        # Images are currently associated with the document/slide as a whole;
+        # for a targeted slide, use its ordinal to keep the request bounded.
+        selected_number = None
+        if target:
+            import re
+
+            match = re.search(r"(?:幻灯片|slide|第)\s*(\d+)", target, re.I)
+            if not match and re.fullmatch(r"\d+", target.strip()):
+                match = re.match(r"(\d+)", target.strip())
+            if match:
+                selected_number = int(match.group(1))
+        paths: list[str] = []
+        for index_number, visual in enumerate((index.meta or {}).get("images", [])[:40]):
+            if not isinstance(visual, dict) or not visual.get("data"):
+                continue
+            name = Path(str(visual.get("name") or f"office-{index_number}.bin")).name
+            suffix = Path(name).suffix.lower()
+            if suffix not in {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}:
+                suffix = ".png"
+            if selected_number is not None and index.kind == "pptx":
+                # PPTX extraction order follows slide order; retain only the
+                # image(s) belonging to the selected slide when possible.
+                slide_numbers = visual.get("slide_number")
+                if slide_numbers is not None and int(slide_numbers) != selected_number:
+                    continue
+            target_path = workdir / f"office-{index_number}{suffix}"
+            target_path.write_bytes(bytes(visual["data"]))
+            paths.append(str(target_path))
+        return paths
+
+    @staticmethod
+    def _pdf_sparse_pages(path: Path) -> list[int]:
+        """Return zero-based pages with little/no text for hybrid-PDF OCR."""
+
+        try:
+            from pypdf import PdfReader
+
+            reader = PdfReader(str(path))
+            return [
+                number
+                for number, page in enumerate(reader.pages)
+                if len((page.extract_text() or "").strip()) < 40
+            ]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _target_pdf_pages(target: str) -> list[int]:
+        import re
+
+        value = str(target or "").strip().lower().replace("页", "")
+        if not value or not re.fullmatch(r"\d+(?:\s*[-~到]\s*\d+)?", value):
+            return []
+        parts = re.split(r"\s*[-~到]\s*", value)
+        start = max(1, int(parts[0]))
+        end = max(start, int(parts[-1]))
+        return list(range(start - 1, end))
+
     async def _ocr_document(
         self,
         choice: adapters.ProviderChoice,
@@ -633,6 +779,9 @@ class MultimodalRuntime:
         workdir: Path,
         path: Path,
         fallback: Any = None,
+        *,
+        target: str = "",
+        pages: list[int] | None = None,
     ) -> tuple[str, dict[str, Any]] | None:
         """Read a scanned document by rendering pages for the vision model."""
 
@@ -641,22 +790,24 @@ class MultimodalRuntime:
                 return None
             raise ValueError("该文件没有可提取文本，且只有 PDF 支持页面渲染 OCR")
         strategy = (self._settings.text("mm_ocr_strategy") or "auto").lower()
+        selected_pages = pages or self._target_pdf_pages(target) or None
         images = await asyncio.to_thread(
-            preprocess.pdf_page_images, path, self._settings, workdir
+            preprocess.pdf_page_images, path, self._settings, workdir, selected_pages
         )
-        local_text, engine_note = await self._local_ocr_pages(images, strategy)
-        if local_text:
-            if strategy == "local_only" or strategy == "local_first":
-                combined = local_text
-                if strategy == "local_first" and adapters.supports_modality(
-                    choice.provider, "image"
-                ):
-                    combined = local_text
-                return combined, {
-                    "mode": "local_ocr",
-                    "engine": engine_note or self._settings.text("mm_ocr_engine"),
-                    "pages": len(images),
-                }
+        page_numbers = self._pdf_image_page_numbers(images)
+        local_text, engine_note = await self._local_ocr_pages(
+            images, strategy, page_numbers=page_numbers
+        )
+        if local_text and strategy == "local_only":
+            combined_local = local_text
+            if fallback is not None and getattr(fallback, "text", ""):
+                combined_local = f"已有文本层：\n{fallback.text}\n\n扫描页本地 OCR：\n{local_text}"
+            return combined_local, {
+                "mode": "local_ocr",
+                "engine": engine_note or self._settings.text("mm_ocr_engine"),
+                "pages": len(images),
+                "page_numbers": page_numbers,
+            }
         if strategy == "local_only":
             raise ValueError(
                 (engine_note or "本地 OCR 不可用") + "；当前策略为“仅本地 OCR”，未调用视觉模型"
@@ -673,17 +824,44 @@ class MultimodalRuntime:
         answer = await adapters.call_provider(
             choice.provider,
             prompt=(
-                f"{prompt}\n\n这是扫描版文档的页面图片，共 {len(images)} 页。"
-                "请逐页转写可见文字并保留章节与表格结构；无法辨认处标注“不清”。"
+                f"{prompt}\n\n这是扫描版文档的页面图片，PDF 页码为：{page_numbers}。"
+                "请按对应页码逐页转写可见文字并保留章节与表格结构；无法辨认处标注“不清”。"
+                + (f"\n本地 OCR 初稿如下，请校对并补充视觉中遗漏的内容：\n{local_text}" if local_text else "")
             ),
             images=images,
             model=choice.model or None,
             timeout=float(self._settings.int("mm_timeout_seconds")),
         )
-        return answer, {"pages": len(images), "mode": "ocr"}
+        combined = answer.strip()
+        if local_text:
+            combined = f"本地 OCR：\n{local_text}\n\n视觉模型校对：\n{combined}"
+        if fallback is not None and getattr(fallback, "text", ""):
+            combined = f"已有文本层：\n{fallback.text}\n\n{combined}"
+        return combined, {
+            "pages": len(images),
+            "page_numbers": page_numbers,
+            "mode": "ocr",
+            "local_ocr": bool(local_text),
+        }
+
+    @staticmethod
+    def _pdf_image_page_numbers(images: list[str]) -> list[int]:
+        """Recover one-based source page numbers from rendered page names."""
+
+        import re
+
+        numbers = []
+        for order, image in enumerate(images, 1):
+            match = re.search(r"page-(\d+)", Path(image).stem, re.I)
+            numbers.append(int(match.group(1)) if match else order)
+        return numbers
 
     async def _local_ocr_pages(
-        self, images: list[str], strategy: str
+        self,
+        images: list[str],
+        strategy: str,
+        *,
+        page_numbers: list[int] | None = None,
     ) -> tuple[str, str]:
         """Run the optional local OCR backend over rendered pages."""
 
@@ -697,7 +875,11 @@ class MultimodalRuntime:
         chunks: list[str] = []
         used = ""
         notes: list[str] = []
-        for number, image in enumerate(images[: self._settings.int("mm_file_ocr_max_pages")], 1):
+        selected_numbers = (page_numbers or list(range(1, len(images) + 1)))[
+            : len(images)
+        ]
+        for order, image in enumerate(images[: self._settings.int("mm_file_ocr_max_pages")]):
+            number = selected_numbers[order] if order < len(selected_numbers) else order + 1
             result = await ocr.ocr_image(
                 Path(image), engine=engine, lang=lang, timeout=timeout
             )
@@ -746,6 +928,8 @@ class MultimodalRuntime:
         prompt: str,
         path: Path,
         workdir: Path,
+        *,
+        agentic: bool = False,
     ) -> tuple[str, dict[str, Any]] | None:
         """Native upload path; returns None when it is unavailable or fails."""
 
@@ -762,11 +946,15 @@ class MultimodalRuntime:
             model=choice.model or "",
             timeout=float(self._settings.int("mm_timeout_seconds")) * 2,
             workdir=workdir,
+            agentic=agentic,
         )
         if result.route != "native" or not result.text:
             logger.info("Decision Engine 原生视频失败，回退抽帧：%s", result.error)
             return None
-        return result.text, {"mode": "native", "provider": choice.provider_id}
+        return result.text, {
+            "mode": "agentic_native" if result.agentic else "native",
+            "provider": choice.provider_id,
+        }
 
     @staticmethod
     def _stamp_notes(stamps: list[float]) -> list[str]:
@@ -896,12 +1084,12 @@ class MultimodalRuntime:
 
     # ---------------------------------------------------- provider safety
     async def sanitize_request_images(self, req: Any) -> int:
-        """Replace animated GIFs in ``image_urls`` with static frames.
+        """Replace animated images in ``image_urls`` with provider-safe sheets.
 
-        AstrBot hands ``image_urls`` to the provider untouched. Animated GIFs are
-        rejected by many OpenAI-compatible endpoints and only render their first
-        frame on the rest, so they are decoded here and swapped for the first frame
-        while the animation digest is attached as text.
+        GIF, APNG and animated WebP are rejected by many OpenAI-compatible
+        endpoints and only render their first frame on the rest. A tiled sheet
+        preserves motion cues while sending one ordinary PNG. Static images and
+        content AstrBot already normalized are left untouched.
         """
 
         if not self._settings.bool("mm_enabled"):
@@ -916,24 +1104,92 @@ class MultimodalRuntime:
         digest: list[str] = []
         workdir: Path | None = None
         for reference in images:
-            suffix = Path(str(reference).split("?", 1)[0]).suffix.lower()
-            if suffix not in {".gif", ".apng"}:
+            from urllib.parse import urlsplit
+
+            reference_text = str(reference)
+            suffix = Path(urlsplit(reference_text).path).suffix.lower()
+            if reference_text.startswith("data:"):
                 new_images.append(reference)
                 continue
+            # AstrBot may already have rewritten an APNG/WebP/GIF to a local
+            # file with a generic suffix.  Inspect local content before deciding
+            # that no conversion is needed; static PNG/JPEG still take the fast
+            # path and are never re-encoded.
+            local_candidate = Path(reference_text) if is_local_file(reference_text) else None
+            if local_candidate is not None and local_candidate.is_file():
+                try:
+                    from PIL import Image
+
+                    with Image.open(local_candidate) as probe:
+                        animated_content = bool(getattr(probe, "is_animated", False)) and int(
+                            getattr(probe, "n_frames", 1) or 1
+                        ) > 1
+                    if not animated_content:
+                        new_images.append(reference)
+                        continue
+                except Exception:
+                    # Let the normal suffix check below decide for unreadable
+                    # files, preserving the existing provider error behaviour.
+                    animated_content = False
+            elif suffix not in {".gif", ".apng", ".webp"}:
+                new_images.append(reference)
+                continue
+            source: Path | None = None
+            downloaded = False
             try:
                 if workdir is None:
                     self._sweep_gif_dirs()
                     workdir = preprocess.new_workdir("mm-gif-")
                     self._gif_dirs.append((time.time(), workdir))
-                prepared = await asyncio.to_thread(
-                    preprocess.animated_montage, Path(reference), self._settings, workdir
-                )
+                if is_local_file(reference_text):
+                    source = Path(reference_text)
+                else:
+                    from .media import ensure_local
+
+                    source = Path(await ensure_local(reference_text))
+                    downloaded = True
+
+                def is_animated(target: Path) -> bool:
+                    from PIL import Image
+
+                    with Image.open(target) as image:
+                        return bool(getattr(image, "is_animated", False)) and int(
+                            getattr(image, "n_frames", 1) or 1
+                        ) > 1
+
+                animated = await asyncio.to_thread(is_animated, source)
+                if not animated and suffix == ".webp":
+                    new_images.append(reference)
+                    continue
+                if animated:
+                    prepared = await asyncio.to_thread(
+                        preprocess.animated_montage, source, self._settings, workdir
+                    )
+                else:
+                    prepared = await asyncio.to_thread(
+                        preprocess.prepare_image, source, self._settings, workdir
+                    )
+                    if suffix == ".apng" and prepared.images == [str(source)]:
+                        from PIL import Image
+
+                        target = workdir / f"{source.stem}-static.png"
+                        with Image.open(source) as image:
+                            image.seek(0)
+                            image.convert("RGBA").save(target, "PNG")
+                        prepared.images = [str(target)]
+                        prepared.temp_paths.append(str(target))
             except Exception as exc:
                 logger.warning(
                     "Decision Engine 无法转换动图，将从请求中移除：%s", str(exc)[:140]
                 )
                 replaced += 1
                 continue
+            finally:
+                if downloaded and source is not None:
+                    try:
+                        source.unlink()
+                    except OSError:
+                        pass
             if prepared.images:
                 # Prefer every produced frame when the montage failed, otherwise the
                 # montage is a single image that still contains all frames.

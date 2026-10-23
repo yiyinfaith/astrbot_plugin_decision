@@ -24,11 +24,9 @@ def in_quiet(settings, clock):
 def quiet_exempt(*, manual=False, sleeping=False, settings=None):
     """Mirror of ``LifeRuntime._quiet_exempt``."""
 
-    if manual:
-        return True
     if not sleeping:
         return False
-    return bool(settings["delivery_settings"].get("sleep_skips_quiet", True))
+    return bool(settings["delivery_settings"].get("sleep_skips_quiet", False))
 
 
 def runtime_settings(*, quiet=("00:00", "23:59"), sleep_skips=True):
@@ -52,9 +50,9 @@ def test_sleep_bypasses_quiet_only_when_the_switch_is_on():
     assert quiet_exempt(sleeping=True, settings=off) is False
 
 
-def test_manual_always_bypasses():
+def test_manual_trigger_does_not_bypass_quiet_hours():
     off = runtime_settings(sleep_skips=False)
-    assert quiet_exempt(manual=True, settings=off) is True
+    assert quiet_exempt(manual=True, settings=off) is False
 
 
 def test_ordinary_runs_never_bypass():
@@ -71,7 +69,7 @@ def test_exemption_must_be_scoped_to_one_session():
     assert "aiocqhttp:FriendMessage:2" not in exempt
 
 
-def test_default_is_on_and_documented():
+def test_default_is_off_and_sleep_exception_probability_is_configurable():
     settings = life_defaults()
-    assert settings["delivery_settings"]["sleep_skips_quiet"] is True
+    assert settings["delivery_settings"]["sleep_skips_quiet"] is False
     assert settings["delivery_settings"]["sleep_exception_probability"] > 0

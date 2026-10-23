@@ -182,8 +182,8 @@ def normalize_life(value: Any) -> dict[str, Any]:
     billing_user = media["proactive_billing_user_id"].strip()
     billing_platform = media["proactive_billing_platform"].strip()
     if media["proactive_billing_mode"] == "fixed" and billing_user and not billing_platform:
-        # An empty platform means "keep the current platform", which is fine, but
-        # a whitespace-only user id must not silently bill the wrong account.
+        # Keep the configuration editable while the runtime safely refuses a
+        # paid task until both parts of the explicit identity are present.
         raise ValueError("固定计费账户的用户 ID 不能只包含空白字符")
     if len(billing_user) > 200 or len(billing_platform) > 100:
         raise ValueError("固定计费账户字段过长")

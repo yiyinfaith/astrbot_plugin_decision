@@ -136,7 +136,10 @@ def _docx(path: Path, limit_chars: int) -> DocumentIndex:
         if target and str(target).lower().endswith(
             (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")
         ):
-            images.append(str(target))
+            # Keep the actual relationship bytes in memory.  A target_ref is
+            # only a package-internal name and cannot be handed to a provider.
+            blob = getattr(getattr(relation, "target_part", None), "blob", None)
+            images.append({"name": Path(str(target)).name, "data": bytes(blob or b"")})
     index.meta["images"] = images[:20]
     index.meta["sections"] = section
     return index
@@ -157,6 +160,17 @@ def _pptx(path: Path, limit_chars: int) -> DocumentIndex:
             name = type(shape).__name__
             if name == "Picture":
                 pictures += 1
+                image = getattr(shape, "image", None)
+                blob = getattr(image, "blob", None)
+                filename = getattr(image, "filename", f"slide-{number}-image-{pictures}.bin")
+                if blob:
+                    index.meta.setdefault("images", []).append(
+                        {
+                            "name": str(filename),
+                            "data": bytes(blob),
+                            "slide_number": number,
+                        }
+                    )
                 continue
             if getattr(shape, "has_table", False):
                 tables += 1
@@ -167,6 +181,17 @@ def _pptx(path: Path, limit_chars: int) -> DocumentIndex:
                 continue
             if getattr(shape, "has_chart", False):
                 charts += 1
+                chart = getattr(shape, "chart", None)
+                # Chart XML is not a visual raster, but exposing its series and
+                # categories prevents a chart-only slide from becoming empty
+                # when no Office renderer is installed on the host.
+                try:
+                    for series in chart.series:
+                        title = str(getattr(series, "name", "") or "")
+                        values = ", ".join(str(value) for value in series.values)
+                        texts.append(f"[图表] {title}: {values}".strip())
+                except Exception:  # pragma: no cover - chart variants differ
+                    pass
                 continue
             if getattr(shape, "has_text_frame", False):
                 text = (shape.text_frame.text or "").strip()
@@ -195,6 +220,7 @@ def _pptx(path: Path, limit_chars: int) -> DocumentIndex:
                 "charts": charts,
             }
         )
+    index.meta["images"] = index.meta.get("images", [])[:40]
     index.meta["slides"] = len(index.blocks)
     return index
 
@@ -205,7 +231,7 @@ def _cell_text(value: Any) -> str:
     return str(value).strip()
 
 
-def _xlsx(path: Path, limit_chars: int, *, max_rows: int = 400) -> DocumentIndex:
+def _xlsx(path: Path, limit_chars: int, *, max_rows: int | None = None) -> DocumentIndex:
     from openpyxl import load_workbook
     from openpyxl.utils import get_column_letter
 
@@ -223,8 +249,9 @@ def _xlsx(path: Path, limit_chars: int, *, max_rows: int = 400) -> DocumentIndex
             header: list[str] = []
             merged = [str(rng) for rng in sheet.merged_cells.ranges][:40]
             formula_cells = []
+            row_limit = sheet.max_row if max_rows is None else min(sheet.max_row, max_rows)
             for row_number, row in enumerate(
-                sheet.iter_rows(min_row=1, max_row=min(sheet.max_row, max_rows)), 1
+                sheet.iter_rows(min_row=1, max_row=row_limit), 1
             ):
                 cells = [_cell_text(cell.value) for cell in row]
                 if not any(cells):
@@ -259,6 +286,7 @@ def _xlsx(path: Path, limit_chars: int, *, max_rows: int = 400) -> DocumentIndex
                     "rows": sheet.max_row,
                     "columns": sheet.max_column,
                     "header": header,
+                    "rows_data": rows,
                 }
             )
     finally:
@@ -290,6 +318,57 @@ def read_target(index: DocumentIndex, target: str, *, limit_chars: int = 12_000)
     """Render only the requested part of the document."""
 
     blocks = index.select(target) if target else index.blocks
+    # Spreadsheet precision reads: ``Sheet!A401:C450``, ``Sheet 401-450`` or
+    # ``第 401-450 行`` select a bounded row window without reparsing the file.
+    if target and index.kind == "xlsx":
+        import re
+
+        match = re.search(
+            r"(?:!|\s|第\s*)([A-Za-z]*)(\d+)\s*(?:[:\-~到]\s*([A-Za-z]*)(\d+))?\s*行?$",
+            target,
+        )
+        if match:
+            from openpyxl.utils.cell import column_index_from_string
+
+            start_col = column_index_from_string(match.group(1)) if match.group(1) else 1
+            start = int(match.group(2))
+            end_col = (
+                column_index_from_string(match.group(3))
+                if match.group(3)
+                else start_col
+            )
+            end = int(match.group(4) or start)
+            end = max(start, end)
+            end_col = max(start_col, end_col)
+            sheet_name = target.split("!", 1)[0].strip() if "!" in target else ""
+            candidates = [
+                block
+                for block in index.blocks
+                if not sheet_name or str(block.get("name", "")) == sheet_name
+            ]
+            if candidates:
+                blocks = []
+                for block in candidates:
+                    rows = list(block.get("rows_data", []))[max(0, start - 1) : end]
+                    if start_col > 1 or end_col > 1:
+                        import re as _re
+
+                        sliced = []
+                        for row in rows:
+                            match_row = _re.match(r"第\s*\d+\s*行:\s*(.*)$", row)
+                            if not match_row:
+                                sliced.append(row)
+                                continue
+                            cells = match_row.group(1).split(" | ")
+                            sliced.append(
+                                row.split(":", 1)[0]
+                                + ": "
+                                + " | ".join(cells[start_col - 1 : end_col])
+                            )
+                        rows = sliced
+                    copy_block = dict(block)
+                    copy_block["text"] = "\n".join(rows)
+                    blocks.append(copy_block)
     if not blocks:
         available = ", ".join(
             str(block.get("label") or block.get("name")) for block in index.blocks[:20]

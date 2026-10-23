@@ -43,7 +43,7 @@ from astrbot.core.provider.entities import LLMResponse, ProviderMeta
 from astrbot.core.provider.provider import Provider
 from astrbot.core.star.context import Context
 
-from decision.life_agent import dispatch_life_agent
+from decision.life_agent import PlatformUnavailableError, dispatch_life_agent
 from decision.life_config import life_defaults
 from decision.life_media import AppearanceStore, LifeMedia, ReferenceEvent
 from decision.life_runtime import CurrentPersonaResolver, LifeRuntime, fit_life_state
@@ -237,6 +237,94 @@ async def test_jev_rejection_error_and_stale_never_dispatch(native, monkeypatch)
     native.owner._evaluate.side_effect = stale
     assert not await native.runtime._deliver(UMO, native.persona, native.plan, "hello", 0, 0)
     dispatch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_record_incoming_does_not_wait_for_schedule_generation(native):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_schedule(_umo):
+        started.set()
+        await release.wait()
+
+    native.runtime._schedule_available_umos.clear()
+    native.runtime._ensure_scheduled = slow_schedule
+    started_at = time.monotonic()
+    await native.runtime.record_incoming(native.event)
+    elapsed = time.monotonic() - started_at
+    await asyncio.wait_for(started.wait(), timeout=1)
+    assert elapsed < 0.5
+    release.set()
+    await asyncio.gather(*tuple(native.runtime._schedule_tasks.values()))
+
+
+@pytest.mark.asyncio
+async def test_manual_attempt_obeys_scope_and_does_not_dispatch(native, monkeypatch):
+    runtime = native.runtime
+    runtime.config["friend_settings"].update(enable=True, session_blacklist=False, session_list=[])
+    dispatch = AsyncMock(return_value=True)
+    monkeypatch.setattr("decision.life_runtime.dispatch_life_agent", dispatch)
+
+    sent, reason = await runtime._attempt_unsolicited(
+        UMO, native.persona, native.plan, "manual test", "manual"
+    )
+    assert sent is False
+    assert reason == "session disabled or not whitelisted"
+    dispatch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_jev_and_platform_failures_have_distinct_runtime_state(native, monkeypatch):
+    runtime = native.runtime
+    native.owner._evaluate.side_effect = RuntimeError("jev unavailable")
+    sent, reason = await runtime._attempt_unsolicited(
+        UMO, native.persona, native.plan, "jev failure", "window", attempt_key="w1"
+    )
+    assert sent is False and "Jev" in reason
+    assert not runtime.offline
+
+    native.owner._evaluate.side_effect = None
+    native.owner._evaluate.return_value = SimpleNamespace(
+        answers={q: {"noul": 1.0} for q in ("initiate", "relevant", "timing")}
+    )
+
+    async def disconnected(*args, **kwargs):
+        raise PlatformUnavailableError("平台断开")
+
+    monkeypatch.setattr("decision.life_runtime.dispatch_life_agent", disconnected)
+    sent, reason = await runtime._attempt_unsolicited(
+        UMO, native.persona, native.plan, "platform failure", "window", attempt_key="w2"
+    )
+    assert sent is False and reason == "request failed"
+    assert UMO.split(":", 1)[0] in runtime.offline
+
+
+@pytest.mark.asyncio
+async def test_duplicate_automatic_trigger_only_delivers_once(native, monkeypatch):
+    runtime = native.runtime
+    native.owner._evaluate.return_value = SimpleNamespace(
+        answers={q: {"noul": 1.0} for q in ("initiate", "relevant", "timing")}
+    )
+    calls = 0
+
+    async def deliver(*args):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0)
+        return True
+
+    monkeypatch.setattr(runtime, "_deliver", deliver)
+    results = await asyncio.gather(
+        runtime._attempt_unsolicited(
+            UMO, native.persona, native.plan, "same window", "window", attempt_key="same"
+        ),
+        runtime._attempt_unsolicited(
+            UMO, native.persona, native.plan, "same window", "window", attempt_key="same"
+        ),
+    )
+    assert calls == 1
+    assert sum(1 for sent, _ in results if sent) == 1
 
 
 @pytest.mark.asyncio
@@ -772,8 +860,8 @@ def test_proactive_runtime_follows_per_kind_switches(native):
     assert runtime.enabled is True
 
 
-def test_manual_trigger_bypasses_whitelist_and_quiet_hours(native):
-    """The administrator button must send even outside the scope list."""
+def test_manual_trigger_obeys_whitelist_and_quiet_hours(native):
+    """An immediate request remains subject to the ordinary delivery gates."""
 
     runtime = native.runtime
     runtime.closed = False
@@ -786,15 +874,7 @@ def test_manual_trigger_bypasses_whitelist_and_quiet_hours(native):
     runtime.deadlines[UMO] = time.monotonic() + 600
     assert runtime.can_commit(UMO, 0) is False, "scheduled runs stay blocked"
 
-    runtime._manual_umos.add(UMO)
-    try:
-        assert runtime.can_commit(UMO, 0) is True, "manual trigger must pass"
-        # The bypass is scoped to that one session.
-        other = "aiocqhttp:FriendMessage:424242"
-        runtime.deadlines[other] = time.monotonic() + 600
-        assert runtime.can_commit(other, 0) is False
-    finally:
-        runtime._manual_umos.discard(UMO)
+    assert runtime.can_commit(UMO, 0) is False, "empty whitelist and quiet hours must block"
 
 
 def test_sleep_wakeup_can_skip_quiet_hours(native):
@@ -881,7 +961,6 @@ async def test_terminate_clears_the_session_caches(native):
     runtime._active_agent_counts["u1"] = 1
     runtime._window_retry_counts[("u1", "rev", "w")] = 2
     runtime._schedule_available_umos.add("u1")
-    runtime._manual_umos.add("u1")
     runtime._sleep_umos.add("u1")
     runtime.audit.append({"umo": "u1"})
 
@@ -896,7 +975,6 @@ async def test_terminate_clears_the_session_caches(native):
         runtime.delivery_locks,
         runtime.observed,
         runtime.audit,
-        runtime._manual_umos,
         runtime._sleep_umos,
         runtime._schedule_available_umos,
     ):

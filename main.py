@@ -1971,9 +1971,10 @@ class DecisionPlugin(Star):
             # this on; understanding itself is controlled separately.
             if not self._bool("non_text_proactive_enabled", False) or not media_refs:
                 return
-            text = await self._media_placeholder(media_refs, session)
+            text = await self._media_placeholder(media_refs, session, event)
         elif media_refs and self._bool("non_text_proactive_enabled", False):
-            text = f"{text}\n（本条消息还附带：{self._media_kind_summary(media_refs)}）"
+            attachment_context = await self._media_placeholder(media_refs, session, event)
+            text = f"{text}\n{attachment_context}"
         sender_id = str(event.get_sender_id() or "")
         sender_name = str(event.get_sender_name() or sender_id or "user")
         at_self, reply_self, at_all, parse_failed = self._message_address_flags(event)
@@ -2423,24 +2424,32 @@ class DecisionPlugin(Star):
             counts[ref.kind] = counts.get(ref.kind, 0) + 1
         return "、".join(f"{labels.get(kind, kind)}×{count}" for kind, count in counts.items())
 
-    async def _media_placeholder(self, refs: Any, umo: str) -> str:
-        """Compact media semantics for Jev, read through the public cache API."""
+    async def _media_placeholder(self, refs: Any, umo: str, event=None) -> str:
+        """Give Jev attachment semantics when this turn's auto task is ready."""
 
         summary = self._media_kind_summary(refs)
         cached: list[str] = []
         runtime = self._multimodal
         if runtime is not None:
-            for ref in refs[:4]:
-                item = await runtime.cache.get_for_media(umo, ref.content_key)
-                if item is not None and getattr(item, "ok", False):
-                    cached.append(item.summary)
+            if event is not None:
+                items = await runtime.collect_for_event(
+                    event,
+                    list(refs[:4]),
+                    wait=float(runtime.settings.int("mm_auto_wait_seconds")),
+                )
+                cached.extend(item.summary for item in items if getattr(item, "ok", False))
+            else:
+                for ref in refs[:4]:
+                    item = await runtime.cache.get_for_media(umo, ref.content_key)
+                    if item is not None and getattr(item, "ok", False):
+                        cached.append(item.summary)
             if not cached:
                 for item in await runtime.cache.recent_understandings(umo, 2):
                     cached.append(item.summary)
         detail = ""
         if cached:
             detail = "\n已有理解结果：" + "\n".join(cached)[:800]
-        return f"[非文字消息] 对方发送了{summary}，没有文字正文。{detail}"
+        return f"[附件资料] 对方发送了{summary}。{detail}"
 
     async def _media_refs_for(self, event: AstrMessageEvent) -> list[Any]:
         """Media on this message, independent of the understanding engine.

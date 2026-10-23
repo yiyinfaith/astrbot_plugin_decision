@@ -345,6 +345,45 @@ async def test_host_resolving_to_a_private_ip_is_rejected(monkeypatch):
         await media.assert_public_url("https://evil.example.com/a.gif")
 
 
+@pytest.mark.asyncio
+async def test_ffmpeg_cancellation_terminates_child_process(monkeypatch):
+    """A cancelled media request must not leave an encoder behind."""
+
+    class FakeProcess:
+        returncode = None
+        killed = False
+
+        async def communicate(self):
+            await asyncio.sleep(30)
+            return b"", b""
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        async def wait(self):
+            return self.returncode
+
+    process = FakeProcess()
+
+    async def fake_exec(*args, **kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    task = asyncio.create_task(media_runtime_command())
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert process.killed is True
+
+
+async def media_runtime_command():
+    from decision.multimodal.preprocess import run_command
+
+    return await run_command(["fake"], timeout=60)
+
+
 # --------------------------------------------------- wiring invariants
 def test_multimodal_is_a_detail_section():
     main = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")

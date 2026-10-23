@@ -8,6 +8,7 @@ provider keeps the frame-extraction path, so this module never affects them.
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ class NativeResult:
     route: str
     file_name: str = ""
     error: str = ""
+    agentic: bool = False
 
 
 def gemini_credentials(provider: Any) -> tuple[str, str]:
@@ -86,7 +88,9 @@ async def upload_file(
     import aiohttp
 
     size = path.stat().st_size
-    mime = "video/mp4" if path.suffix.lower() in {".mp4", ".m4v"} else "video/*"
+    mime = mimetypes.guess_type(path.name)[0] or "video/mp4"
+    if not mime.startswith("video/"):
+        mime = "video/mp4"
     headers = {
         "X-Goog-Upload-Protocol": "resumable",
         "X-Goog-Upload-Command": "start",
@@ -165,9 +169,10 @@ async def generate(
     model: str,
     file_uri: str,
     prompt: str,
+    mime_type: str = "video/mp4",
     timeout: float = 300.0,
 ) -> str:
-    """Ask the model about the uploaded video."""
+    """Ask the Gemini GenerateContent endpoint about the uploaded video."""
 
     import aiohttp
 
@@ -176,7 +181,7 @@ async def generate(
             {
                 "role": "user",
                 "parts": [
-                    {"file_data": {"mime_type": "video/*", "file_uri": file_uri}},
+                    {"file_data": {"mime_type": mime_type, "file_uri": file_uri}},
                     {"text": prompt},
                 ],
             }
@@ -200,6 +205,76 @@ async def generate(
     if not text:
         raise RuntimeError("原生视频理解返回空结果")
     return text
+
+
+async def agentic_generate(
+    *,
+    api_key: str,
+    base: str,
+    model: str,
+    file_uri: str,
+    prompt: str,
+    mime_type: str = "video/mp4",
+    timeout: float = 900.0,
+) -> str:
+    """Use the official Interactions API for server-side agentic video analysis."""
+
+    import aiohttp
+
+    headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+    body = {
+        "model": model,
+        "input": [
+            {
+                "type": "video",
+                "uri": file_uri,
+                "mime_type": mime_type,
+                "processing": "agentic",
+            },
+            {"type": "text", "text": prompt},
+        ],
+        "background": True,
+    }
+    deadline = asyncio.get_running_loop().time() + timeout
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{base}/v1beta/interactions", headers=headers, json=body,
+            timeout=aiohttp.ClientTimeout(total=min(timeout, 120.0)),
+        ) as response:
+            if response.status >= 400:
+                detail = (await response.text())[:200]
+                raise RuntimeError(f"Gemini Agentic Video 启动失败：HTTP {response.status} {detail}")
+            payload = await response.json(content_type=None)
+        interaction_id = str((payload or {}).get("id") or "")
+        if not interaction_id:
+            raise RuntimeError("Gemini Agentic Video 未返回 interaction id")
+        while asyncio.get_running_loop().time() < deadline:
+            status = str((payload or {}).get("status") or "")
+            if status in {"completed", "succeeded", "success"}:
+                break
+            if status in {"failed", "cancelled", "expired"}:
+                raise RuntimeError(f"Gemini Agentic Video 失败：{status}")
+            await asyncio.sleep(min(2.0, max(0.0, deadline - asyncio.get_running_loop().time())))
+            async with session.get(
+                f"{base}/v1beta/interactions/{interaction_id}", headers=headers,
+                timeout=aiohttp.ClientTimeout(total=min(timeout, 60.0)),
+            ) as response:
+                if response.status >= 400:
+                    detail = (await response.text())[:200]
+                    raise RuntimeError(f"Gemini Agentic Video 状态查询失败：HTTP {response.status} {detail}")
+                payload = await response.json(content_type=None)
+        else:
+            raise RuntimeError("Gemini Agentic Video 等待超时")
+    output = str((payload or {}).get("output_text") or "").strip()
+    if not output:
+        for step in (payload or {}).get("steps", []) or []:
+            content = step.get("content") or []
+            for part in content:
+                output += str(part.get("text") or "")
+        output = output.strip()
+    if not output:
+        raise RuntimeError("Gemini Agentic Video 返回空结果")
+    return output
 
 
 async def delete_file(name: str, *, api_key: str, base: str = DEFAULT_BASE) -> None:
@@ -231,6 +306,7 @@ async def analyze(
     model: str,
     timeout: float = 300.0,
     workdir: Path | None = None,
+    agentic: bool = False,
 ) -> NativeResult:
     """Full native video flow with upload, polling, analysis and cleanup."""
 
@@ -241,15 +317,31 @@ async def analyze(
     try:
         name, uri = await upload_file(path, api_key=key, base=base, timeout=timeout)
         await wait_active(name, api_key=key, base=base, timeout=timeout)
-        text = await generate(
-            api_key=key,
-            base=base,
-            model=model or "gemini-2.5-flash",
-            file_uri=uri,
-            prompt=prompt,
-            timeout=timeout,
+        audio_note = (
+            "请同时分析视频画面和原始音轨。结合听到的语音、音乐与环境声音"
+            "解释画面中人物、事件和时间关系；若没有音轨或听不清，请明确说明。\n\n"
         )
-        return NativeResult(text=text, route="native", file_name=name)
+        if agentic:
+            text = await agentic_generate(
+                api_key=key,
+                base=base,
+                model=model or "gemini-2.5-flash",
+                file_uri=uri,
+                prompt=audio_note + prompt,
+                mime_type=mimetypes.guess_type(path.name)[0] or "video/mp4",
+                timeout=timeout,
+            )
+        else:
+            text = await generate(
+                api_key=key,
+                base=base,
+                model=model or "gemini-2.5-flash",
+                file_uri=uri,
+                prompt=audio_note + prompt,
+                mime_type=mimetypes.guess_type(path.name)[0] or "video/mp4",
+                timeout=timeout,
+            )
+        return NativeResult(text=text, route="native", file_name=name, agentic=agentic)
     except asyncio.CancelledError:
         raise
     except Exception as exc:

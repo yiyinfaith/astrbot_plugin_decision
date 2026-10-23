@@ -85,7 +85,7 @@ def media_settings(**overrides):
         "video_prompt": "视频 {subject_desc} 数量{count} 穿搭：{outfit}",
         "audio_prompt": "音频 {style} {text} 数量{count}",
         "proactive_billing_mode": "fixed",
-        "proactive_billing_platform": "",
+        "proactive_billing_platform": "aiocqhttp",
         "proactive_billing_user_id": "2980555633",
     }
     base.update(overrides)
@@ -149,10 +149,13 @@ async def test_proactive_bills_the_configured_account(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_proactive_platform_defaults_to_the_current_one(tmp_path):
-    media, aigen = await make_media(tmp_path)
-    await media.capture(proactive_event(), kind="photo", count=1)
-    assert aigen.image_calls[0]["event"].get_platform_name() == "aiocqhttp"
+async def test_proactive_requires_explicit_platform_and_user(tmp_path):
+    media, aigen = await make_media(
+        tmp_path, settings=media_settings(proactive_billing_platform="")
+    )
+    result = await media.capture(proactive_event(), kind="photo", count=1)
+    assert "明确填写" in result
+    assert aigen.image_calls == []
 
 
 @pytest.mark.asyncio
@@ -179,23 +182,21 @@ async def test_ordinary_chat_is_unaffected(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_session_mode_keeps_aigen_default(tmp_path):
+async def test_session_mode_rejects_proactive_paid_media(tmp_path):
     settings = media_settings(proactive_billing_mode="session")
     media, aigen = await make_media(tmp_path, settings=settings)
     await media.capture(proactive_event(), kind="photo", count=1)
 
-    billed = aigen.image_calls[0]["event"]
-    assert not isinstance(billed, BillingEvent)
-    # aigen would charge the group number in this case.
-    assert billed.get_sender_id() == "1046209937"
+    assert aigen.image_calls == []
 
 
 @pytest.mark.asyncio
-async def test_blank_user_id_keeps_aigen_default(tmp_path):
+async def test_blank_user_id_rejects_proactive_paid_media(tmp_path):
     settings = media_settings(proactive_billing_user_id="")
     media, aigen = await make_media(tmp_path, settings=settings)
-    await media.capture(proactive_event(), kind="photo", count=1)
-    assert not isinstance(aigen.image_calls[0]["event"], BillingEvent)
+    result = await media.capture(proactive_event(), kind="photo", count=1)
+    assert "明确填写" in result
+    assert aigen.image_calls == []
 
 
 def test_billing_event_proxies_everything_else():

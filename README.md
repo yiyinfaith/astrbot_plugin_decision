@@ -350,6 +350,8 @@ flowchart TD
 
 群聊名单与私聊名单是主动发送的明确对象清单。只填写用户 ID 或群号是不够的，因为无人发言时插件无法可靠推断平台与目标类型。消息接话的黑白名单继续支持简写 ID。
 
+WebUI 的“请求立即发起”和 `/生活 立即` 使用与自动任务相同的会话类型开关、名单、免打扰、冷却、日额度、连续未回应上限和 Jev 阈值；被策略拒绝时不会发送。管理员操作不会绕过这些限制。
+
 ### 私聊 / 群聊名单模式
 
 `私聊主动` 与 `群聊主动` 各自有一个 **名单模式** 开关（`friend_settings.session_blacklist` / `group_settings.session_blacklist`），它决定下方名单（`session_list`）的含义。默认是白名单：
@@ -504,11 +506,11 @@ aigen 按「平台名 + 发送者 ID」记账（`["aiocqhttp","123456"]` 这样�
 
 | 设置项 | 说明 |
 | --- | --- |
-| `proactive_billing_mode` | `fixed`（默认）＝主动发起统一记到固定账户；`session`＝沿用 aigen 原始行为 |
-| `proactive_billing_platform` | 固定账户的平台名，留空表示沿用当前平台（一般是 `aiocqhttp`） |
-| `proactive_billing_user_id` | 固定账户的用户 ID，通常填机器人主人；**留空则保持 aigen 默认行为** |
+| `proactive_billing_mode` | 必须设为 `fixed`；主动付费媒体不允许沿用会话身份 |
+| `proactive_billing_platform` | 管理员明确指定的 aigen 账本平台名，例如 `aiocqhttp` |
+| `proactive_billing_user_id` | 管理员明确授权用于付费生成的 aigen 账户 ID；任一字段缺失时安全拒绝主动媒体任务 |
 
-只有「主动发起」的多媒体会被改记账，普通聊天始终扣说话人自己的余额。改动只影响 aigen 看到的平台名与发送者 ID，媒体读取、发送和平台元数据仍然走原始事件。
+只有「主动发起」的多媒体会使用这个明确指定的账户，普通聊天仍按原有 aigen 规则计费。插件不会按余额自动挑选账户，也不会改变普通聊天计费。
 
 ### 人际网络（已并入本插件）
 

@@ -137,6 +137,44 @@ def test_xlsx_sheet_target_read(xlsx_file):
     assert "小明" not in sheet
 
 
+def test_xlsx_indexes_rows_beyond_400_and_supports_range_reads(tmp_path):
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "大表"
+    for row in range(1, 451):
+        sheet.cell(row, 1).value = f"row-{row}"
+    path = tmp_path / "large.xlsx"
+    workbook.save(path)
+
+    index = office.parse_document(path)
+    assert index.blocks[0]["rows"] == 450
+    assert "第 401 行" in index.blocks[0]["text"]
+    window = office.read_target(index, "大表!A401:C405")
+    assert "row-401" in window and "row-405" in window
+    assert "row-400" not in window and "row-406" not in window
+
+
+def test_office_indexes_embedded_docx_image_bytes(tmp_path):
+    import io
+
+    import docx
+    from PIL import Image
+
+    image = io.BytesIO()
+    Image.new("RGB", (12, 8), "red").save(image, format="PNG")
+    document = docx.Document()
+    document.add_paragraph("图文混排")
+    document.add_picture(io.BytesIO(image.getvalue()))
+    path = tmp_path / "visual.docx"
+    document.save(path)
+
+    index = office.parse_document(path)
+    visuals = index.meta.get("images")
+    assert visuals and visuals[0]["data"].startswith(b"\x89PNG")
+
+
 def test_office_rejects_other_formats(tmp_path):
     path = tmp_path / "a.txt"
     path.write_text("x", encoding="utf-8")
@@ -251,6 +289,27 @@ def test_missing_key_disables_native_video():
     assert ok is False
 
 
+@pytest.mark.asyncio
+async def test_ocr_fallback_note_does_not_discard_recognized_text(monkeypatch, tmp_path):
+    from PIL import Image
+
+    image = tmp_path / "ocr.png"
+    Image.new("RGB", (16, 16), "white").save(image)
+    monkeypatch.setattr(
+        ocr,
+        "resolve_engine",
+        lambda requested: ("tesseract", "已从 PaddleOCR 降级"),
+    )
+    monkeypatch.setattr(
+        ocr, "_ocr_tesseract", lambda path, lang: "降级后仍识别到的文字"
+    )
+
+    result = await ocr.ocr_image(image, engine="paddleocr")
+    assert result.ok is True
+    assert result.text == "降级后仍识别到的文字"
+    assert result.error == "已从 PaddleOCR 降级"
+
+
 def test_capability_label_requires_a_real_native_route():
     from decision.multimodal import adapters
 
@@ -342,3 +401,39 @@ async def test_native_cancellation_still_cleans_up(monkeypatch, tmp_path):
     with pytest.raises(asyncio.CancelledError):
         await task
     assert deleted == ["files/x"]
+
+
+@pytest.mark.asyncio
+async def test_native_agentic_video_uses_interactions_endpoint(monkeypatch, tmp_path):
+    calls = {}
+
+    async def fake_upload(path, **kwargs):
+        return "files/agentic", "https://files/agentic"
+
+    async def fake_wait(name, **kwargs):
+        return None
+
+    async def fake_agentic(**kwargs):
+        calls.update(kwargs)
+        return "长视频 Agentic 结果"
+
+    async def fake_delete(name, **kwargs):
+        calls["deleted"] = name
+
+    monkeypatch.setattr(native_video, "upload_file", fake_upload)
+    monkeypatch.setattr(native_video, "wait_active", fake_wait)
+    monkeypatch.setattr(native_video, "agentic_generate", fake_agentic)
+    monkeypatch.setattr(native_video, "delete_file", fake_delete)
+    path = tmp_path / "long.mp4"
+    path.write_bytes(b"x")
+
+    result = await native_video.analyze(
+        path,
+        "精读",
+        provider=GeminiProvider(),
+        model="gemini-2.5-flash",
+        agentic=True,
+    )
+    assert result.route == "native" and result.agentic is True
+    assert calls["file_uri"] == "https://files/agentic"
+    assert calls["deleted"] == "files/agentic"
