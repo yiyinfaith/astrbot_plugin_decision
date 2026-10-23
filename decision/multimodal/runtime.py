@@ -16,6 +16,13 @@ from typing import Any
 
 from astrbot import logger
 
+try:  # pragma: no cover - AstrBot always provides this
+    from astrbot.core.agent.message import TextPart
+except ImportError:  # pragma: no cover
+    class TextPart:  # type: ignore[no-redef]
+        def __init__(self, text: str = "") -> None:
+            self.text = text
+
 from . import adapters, preprocess
 from .cache import MultimodalCache
 from .config import MultimodalSettings, normalize_settings
@@ -72,6 +79,11 @@ class MultimodalRuntime:
         self._semaphore = asyncio.Semaphore(max(1, self._settings.int("mm_concurrency")))
         self._tasks: set[asyncio.Task] = set()
         self._by_urn: dict[str, MediaRef] = {}
+        # In-flight understanding per cache key, so N concurrent misses cost one call.
+        self._inflight: dict[str, asyncio.Future] = {}
+        # Directories kept alive only while a provider call still references
+        # their frames; swept on every new GIF and on terminate().
+        self._gif_dirs: list[tuple[float, Path]] = []
         self._rate: dict[str, list[float]] = {}
         self._closed = False
 
@@ -107,6 +119,10 @@ class MultimodalRuntime:
         self._tasks.clear()
         self._by_urn.clear()
         self._rate.clear()
+        self._inflight.clear()
+        for _, directory in self._gif_dirs:
+            preprocess.cleanup_dir(directory)
+        self._gif_dirs.clear()
         try:
             await self.cache.save()
         except Exception as exc:  # pragma: no cover - best effort on shutdown
@@ -201,6 +217,7 @@ class MultimodalRuntime:
 
         material = "|".join(
             [
+                ref.umo,
                 ref.content_key,
                 provider_id,
                 "detail" if detail else "normal",
@@ -226,10 +243,44 @@ class MultimodalRuntime:
             if choice is not None
             else self.cache_identity(ref, error, instruction, detail)
         )
-        if not force:
-            cached = await self.cache.get(key)
-            if cached is not None:
-                return cached
+        if force:
+            return await self._understand_uncached(
+                ref, key, choice, error, instruction, detail
+            )
+        cached = await self.cache.get(key)
+        if cached is not None and cached.umo == ref.umo:
+            return cached
+        # SingleFlight: concurrent misses for the same media share one paid call.
+        inflight = self._inflight.get(key)
+        if inflight is not None:
+            return await asyncio.shield(inflight)
+        flight: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._inflight[key] = flight
+        try:
+            item = await self._understand_uncached(
+                ref, key, choice, error, instruction, detail
+            )
+        except BaseException as exc:
+            if not flight.done():
+                flight.set_exception(exc)
+            raise
+        else:
+            if not flight.done():
+                flight.set_result(item)
+            return item
+        finally:
+            self._inflight.pop(key, None)
+
+    async def _understand_uncached(
+        self,
+        ref: MediaRef,
+        key: str,
+        choice: Any,
+        error: str,
+        instruction: str,
+        detail: bool,
+    ) -> Understanding:
+        kind = ref.kind
         if choice is None:
             item = self._failure(ref, error)
             item.key = key
@@ -283,6 +334,18 @@ class MultimodalRuntime:
         item.media_key = ref.content_key
         await self.cache.put(item)
         return item
+
+    def _sweep_gif_dirs(self, max_age: float = 900.0) -> None:
+        """Delete frame directories that no in-flight request can still reference."""
+
+        now = time.time()
+        kept: list[tuple[float, Path]] = []
+        for created, directory in self._gif_dirs:
+            if now - created < max_age:
+                kept.append((created, directory))
+                continue
+            preprocess.cleanup_dir(directory)
+        self._gif_dirs = kept
 
     def _failure(self, ref: MediaRef, error: str) -> Understanding:
         return Understanding(
@@ -453,12 +516,18 @@ class MultimodalRuntime:
                 focus = await preprocess.extract_frames(path, workdir, focus_stamps)
                 if not focus:
                     continue
-                extra = f"这是第 {round_index + 2} 轮重点分析。" if round_index else ""
+                seen_text = "\n".join(details[-4:]) or "（暂无）"
+                pending_text = (
+                    "、".join(f"{w[0]:.0f}-{w[1]:.0f}s" for w in planned if w not in seen)
+                    or "无"
+                )
                 part = await adapters.call_provider(
                     choice.provider,
                     prompt=(
-                        f"{extra}请聚焦视频在 {window[0]:.1f}s 到 {window[1]:.1f}s 之间的内容，"
-                        "说明具体发生了什么，尽量给出时间点。"
+                        f"这是第 {round_index + 2} 轮。已有发现：\n{seen_text}\n"
+                        f"尚未细看的区间：{pending_text}\n"
+                        f"现在只聚焦 {window[0]:.1f}s 到 {window[1]:.1f}s，"
+                        "说明具体发生了什么，并指出仍需确认的问题。"
                     ),
                     images=focus,
                     model=choice.model or None,
@@ -475,6 +544,7 @@ class MultimodalRuntime:
             "frames": len(frames),
             "windows": len(details),
             "rounds": rounds,
+            "rounds_used": len(details),
             "mode": "agentic",
             "has_audio": bool(info.get("has_audio")),
         }
@@ -656,10 +726,14 @@ class MultimodalRuntime:
     @staticmethod
     def _append_text(req: Any, text: str) -> None:
         try:
-            from astrbot.core.agent.message import TextPart
-
             parts = list(getattr(req, "extra_user_content_parts", None) or [])
-            parts.append(TextPart(text=text))
+            part = TextPart(text=text)
+            # Dynamic context, not conversation history: AstrBot drops temp
+            # parts when the turn is persisted.
+            marker = getattr(part, "mark_as_temp", None)
+            if callable(marker):
+                part = marker() or part
+            parts.append(part)
             req.extra_user_content_parts = parts
             return
         except Exception:  # pragma: no cover - fall back to the prompt
@@ -695,7 +769,9 @@ class MultimodalRuntime:
                 continue
             try:
                 if workdir is None:
+                    self._sweep_gif_dirs()
                     workdir = preprocess.new_workdir("mm-gif-")
+                    self._gif_dirs.append((time.time(), workdir))
                 prepared = await asyncio.to_thread(
                     preprocess.animated_montage, Path(reference), self._settings, workdir
                 )

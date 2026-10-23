@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 
@@ -87,15 +86,28 @@ def test_model_dropdowns_are_populated_from_the_provider_catalog():
 def test_non_text_switch_defaults_to_off_and_gates_the_judgement():
     main = MAIN.read_text(encoding="utf-8")
     assert '"non_text_proactive_enabled": False' in main
-    # The pure-text early return must consult the switch and the media refs.
-    gate = re.search(
-        r"media_refs = event\.get_extra\(\"decision_mm_refs\"\) or \[\]\n"
-        r"\s+if not text:.*?"
-        r'if not self\._bool\("non_text_proactive_enabled", False\)',
-        main,
-        re.S,
-    )
-    assert gate, "pure media messages must be gated by the new switch"
+    # Inside the pure-media branch the switch is still the gate.
+    block = main[main.index("        if not text:") : main.index("        if not text:") + 700]
+    assert 'self._bool("non_text_proactive_enabled", False)' in block
+    assert "_media_placeholder" in block
+
+
+def test_media_detection_does_not_depend_on_multimodal_understanding():
+    """The switch must work with mm_enabled off, so detection cannot rely on refs."""
+
+    main = MAIN.read_text(encoding="utf-8")
+    assert "async def _media_refs_for" in main
+    body = main[main.index("async def _media_refs_for") :][:900]
+    assert "extract_media(event)" in body, "must fall back to direct extraction"
+    assert "decision_mm_refs" in body, "reuse the refs when understanding already ran"
+
+
+def test_placeholder_reads_the_cache_through_the_public_api():
+    main = MAIN.read_text(encoding="utf-8")
+    body = main[main.index("async def _media_placeholder") :][:1600]
+    assert "cache._entries" not in body, "must not poke the private cache dict"
+    assert "get_for_media" in body
+    assert "recent_understandings" in body
 
 
 def test_multimodal_does_not_run_inside_on_llm_request_only():

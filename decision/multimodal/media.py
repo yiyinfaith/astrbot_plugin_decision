@@ -240,6 +240,26 @@ async def assert_public_url(url: str) -> None:
         raise ValueError("拒绝访问内网地址")
 
 
+def _peername(response: Any) -> str:
+    """IP the response is actually connected to, when aiohttp exposes it."""
+
+    try:
+        connection = getattr(response, "connection", None)
+        transport = getattr(connection, "transport", None)
+        if transport is None:
+            return ""
+        peername = transport.get_extra_info("peername")
+        if not peername:
+            return ""
+        host = str(peername[0])
+        # Strip IPv6 scope/mapped prefixes so the address parses.
+        if host.startswith("::ffff:"):
+            host = host[len("::ffff:") :]
+        return host
+    except Exception:  # pragma: no cover - defensive
+        return ""
+
+
 async def _download(url: str) -> str:
     import aiohttp
 
@@ -258,6 +278,11 @@ async def _download(url: str) -> str:
             async with session.get(url, allow_redirects=False) as response:
                 if response.status != 200:
                     raise ValueError(f"下载失败：HTTP {response.status}")
+                # The DNS answer checked above could have changed between the
+                # lookup and the connection, so verify the real peer too.
+                peer = _peername(response)
+                if peer and not _is_public_ip(peer):
+                    raise ValueError("拒绝访问内网地址（连接期校验失败）")
                 total = 0
                 async for chunk in response.content.iter_chunked(65536):
                     total += len(chunk)

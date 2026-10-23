@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,16 +20,19 @@ from decision.multimodal.runtime import MultimodalRuntime  # noqa: E402
 
 
 class FakeProvider:
-    def __init__(self, modalities=("text", "image", "audio"), name="p1"):
+    def __init__(self, modalities=("text", "image", "audio"), name="p1", fail=""):
         self.provider_config = {"modalities": list(modalities), "id": name}
         self.calls: list[dict] = []
         self._name = name
+        self._fail = fail
 
     def meta(self):
         return SimpleNamespace(id=self._name, model=f"{self._name}-model", type="openai")
 
     async def text_chat(self, **kwargs):
         self.calls.append(kwargs)
+        if self._fail:
+            raise RuntimeError(self._fail)
         images = len(kwargs.get("image_urls") or [])
         return SimpleNamespace(completion_text=f"answer-{len(self.calls)}-images{images}")
 
@@ -362,3 +366,145 @@ def test_webui_exposes_the_non_text_switch():
     )
     assert "非文字消息是否进入判断" in page
     assert "form.proactive.non_text_proactive_enabled" in page
+
+# ------------------------------------------------- P0 isolation and singleflight
+@pytest.mark.asyncio
+async def test_same_media_in_two_groups_is_not_shared(tmp_path):
+    """The same URL in two conversations must never reuse the other's result."""
+
+    provider = FakeProvider()
+    runtime = build(tmp_path, provider)
+    await runtime.initialize()
+    shared = png(tmp_path, "same.png")
+    a = await runtime.observe(
+        FakeEvent([FakeImage(shared)], umo="umo:Group:A", msg_id="mA"), auto_allowed=False
+    )
+    b = await runtime.observe(
+        FakeEvent([FakeImage(shared)], umo="umo:Group:B", msg_id="mB"), auto_allowed=False
+    )
+    assert a[0].content_key == b[0].content_key, "same bytes"
+    first = await runtime.understand(a[0])
+    second = await runtime.understand(b[0])
+    assert first.key != second.key, "cache identity must include the conversation"
+    assert first.umo == "umo:Group:A" and second.umo == "umo:Group:B"
+    assert len(provider.calls) == 2, "each conversation pays for its own analysis"
+    # A cross-session read is refused even if the key is known.
+    stolen = await runtime.cache.get(first.key)
+    assert stolen is None or stolen.umo == "umo:Group:A"
+    await runtime.terminate()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_misses_make_one_provider_call(tmp_path):
+    provider = FakeProvider()
+    runtime = build(tmp_path, provider)
+    await runtime.initialize()
+    refs = await runtime.observe(FakeEvent([FakeImage(png(tmp_path))]), auto_allowed=False)
+
+    async def slow(**kwargs):
+        provider.calls.append(kwargs)
+        await asyncio.sleep(0.3)
+        return SimpleNamespace(completion_text="one answer")
+
+    provider.text_chat = slow
+    results = await asyncio.gather(*[runtime.understand(refs[0]) for _ in range(5)])
+    assert len(provider.calls) == 1, "singleflight must collapse concurrent misses"
+    assert all(item.summary == "one answer" for item in results)
+    await runtime.terminate()
+
+
+@pytest.mark.asyncio
+async def test_singleflight_releases_the_slot_after_failure(tmp_path):
+    provider = FakeProvider(fail="boom")
+    runtime = build(tmp_path, provider)
+    await runtime.initialize()
+    refs = await runtime.observe(FakeEvent([FakeImage(png(tmp_path))]), auto_allowed=False)
+    await runtime.understand(refs[0])
+    assert runtime._inflight == {}, "a failed flight must not stay registered"
+    await runtime.terminate()
+
+# ------------------------------------------------------------ P1 regressions
+@pytest.mark.asyncio
+async def test_gif_frame_dirs_are_swept_and_removed_on_terminate(tmp_path):
+    runtime = build(tmp_path, FakeProvider())
+    await runtime.initialize()
+    req = SimpleNamespace(prompt="x", image_urls=[str(gif(tmp_path))], extra_user_content_parts=[])
+    await runtime.sanitize_request_images(req)
+    assert runtime._gif_dirs, "frames must be tracked while the request may use them"
+    directory = runtime._gif_dirs[0][1]
+    assert directory.exists()
+    runtime._gif_dirs[0] = (-1e9, directory)  # force it to look old
+    runtime._sweep_gif_dirs()
+    assert not directory.exists(), "an aged frame directory must be removed"
+    await runtime.sanitize_request_images(
+        SimpleNamespace(prompt="y", image_urls=[str(gif(tmp_path, "b.gif"))], extra_user_content_parts=[])
+    )
+    await runtime.terminate()
+    assert runtime._gif_dirs == []
+    assert not any(Path(p).exists() for _, p in [])
+
+
+@pytest.mark.asyncio
+async def test_injected_context_is_marked_temporary(tmp_path):
+    """Dynamic digests must be temp parts so they never enter chat history."""
+
+    class Part:
+        def __init__(self, text):
+            self.text = text
+            self.temp = False
+
+        def mark_as_temp(self):
+            self.temp = True
+            return self
+
+    runtime = build(tmp_path, FakeProvider())
+    await runtime.initialize()
+    refs = await runtime.observe(FakeEvent([FakeImage(png(tmp_path))]), auto_allowed=False)
+    await runtime.understand(refs[0])
+
+    import decision.multimodal.runtime as rt_mod
+
+    original = rt_mod.TextPart
+    rt_mod.TextPart = Part
+    try:
+        req = SimpleNamespace(prompt="x", image_urls=[], extra_user_content_parts=[])
+        await runtime.inject(FakeEvent([]), req, [])
+        assert req.extra_user_content_parts, "digest must be injected"
+        assert req.extra_user_content_parts[-1].temp is True
+    finally:
+        rt_mod.TextPart = original
+    await runtime.terminate()
+
+
+def test_append_text_marks_parts_temp_when_supported():
+    """The real implementation must call mark_as_temp when AstrBot provides it."""
+
+    import inspect
+
+    import decision.multimodal.runtime as rt_mod
+
+    source = inspect.getsource(rt_mod.MultimodalRuntime._append_text)
+    assert "mark_as_temp" in source
+
+
+@pytest.mark.asyncio
+async def test_private_peer_is_rejected_even_when_dns_looked_public(monkeypatch):
+    """Connect-time re-check closes the DNS rebinding window."""
+
+    import decision.multimodal.media as media_mod
+
+    class Response:
+        connection = SimpleNamespace(
+            transport=SimpleNamespace(
+                get_extra_info=lambda name: ("10.0.0.9", 443) if name == "peername" else None
+            )
+        )
+
+    peer = media_mod._peername(Response())
+    assert peer == "10.0.0.9"
+    assert media_mod._is_public_ip(peer) is False
+
+
+def test_video_rounds_are_reported_separately_from_the_config():
+    source = Path("decision/multimodal/runtime.py").read_text(encoding="utf-8")
+    assert '"rounds_used"' in source

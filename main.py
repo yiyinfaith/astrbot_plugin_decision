@@ -1965,13 +1965,13 @@ class DecisionPlugin(Star):
 
         session = str(event.unified_msg_origin)
         text = str(event.get_message_str() or "").strip()
-        media_refs = event.get_extra("decision_mm_refs") or []
+        media_refs = await self._media_refs_for(event)
         if not text:
             # Pure media messages only become candidates when the operator turns
             # this on; understanding itself is controlled separately.
             if not self._bool("non_text_proactive_enabled", False) or not media_refs:
                 return
-            text = self._media_placeholder(media_refs)
+            text = await self._media_placeholder(media_refs, session)
         elif media_refs and self._bool("non_text_proactive_enabled", False):
             text = f"{text}\n（本条消息还附带：{self._media_kind_summary(media_refs)}）"
         sender_id = str(event.get_sender_id() or "")
@@ -2392,6 +2392,7 @@ class DecisionPlugin(Star):
         runtime = self._get_multimodal()
         await runtime.initialize()
         self._sync_multimodal_tools(runtime)
+        await self._apply_multimodal_tool_state(self._multimodal_settings())
         return runtime
 
     def _sync_multimodal_tools(self, runtime) -> None:
@@ -2422,19 +2423,42 @@ class DecisionPlugin(Star):
             counts[ref.kind] = counts.get(ref.kind, 0) + 1
         return "、".join(f"{labels.get(kind, kind)}×{count}" for kind, count in counts.items())
 
-    def _media_placeholder(self, refs: Any) -> str:
+    async def _media_placeholder(self, refs: Any, umo: str) -> str:
+        """Compact media semantics for Jev, read through the public cache API."""
+
         summary = self._media_kind_summary(refs)
-        cached = []
+        cached: list[str] = []
         runtime = self._multimodal
         if runtime is not None:
-            for ref in refs:
-                item = runtime.cache._entries.get(ref.content_key)
+            for ref in refs[:4]:
+                item = await runtime.cache.get_for_media(umo, ref.content_key)
                 if item is not None and getattr(item, "ok", False):
+                    cached.append(item.summary)
+            if not cached:
+                for item in await runtime.cache.recent_understandings(umo, 2):
                     cached.append(item.summary)
         detail = ""
         if cached:
             detail = "\n已有理解结果：" + "\n".join(cached)[:800]
         return f"[非文字消息] 对方发送了{summary}，没有文字正文。{detail}"
+
+    async def _media_refs_for(self, event: AstrMessageEvent) -> list[Any]:
+        """Media on this message, independent of the understanding engine.
+
+        The 非文字消息 switch must work even when multi-modal understanding is
+        disabled, so detection never depends on decision_mm_refs being produced.
+        """
+
+        refs = event.get_extra("decision_mm_refs")
+        if refs:
+            return list(refs)
+        from .decision.multimodal.media import extract_media
+
+        try:
+            return await extract_media(event)
+        except Exception as exc:
+            logger.debug("Decision Engine 媒体探测失败：%s", _safe_error(exc))
+            return []
 
     async def _get_life_runtime(self):
         async with self._life_lock:
@@ -2573,31 +2597,32 @@ class DecisionPlugin(Star):
             if settings.get(f"mm_tool_{kind}")
         }
 
-    def _disable_multimodal_tools(
-        self, req: ProviderRequest, settings: dict[str, Any]
-    ) -> None:
-        """Strip disabled understanding tools from this request.
+    async def _apply_multimodal_tool_state(self, settings: dict[str, Any]) -> None:
+        """Activate or deactivate the understanding tools inside AstrBot itself.
 
-        ``Context.add_llm_tools`` has no counterpart, so a tool that must not run
-        is removed from the per-request toolset, exactly like the personal network
-        tools are hidden.
+        ``Context.activate_llm_tool`` / ``deactivate_llm_tool`` flip the global
+        active flag used by JEV routing, the tool list and the actual call path, so
+        a disabled tool is really unavailable instead of just hidden.
         """
 
         from .decision.multimodal.config import MEDIA_KINDS
 
         allowed = self._mm_allowed_tool_names(settings)
-        tool_set = getattr(req, "func_tool", None)
-        remover = getattr(tool_set, "remove_tool", None)
-        if not callable(remover):
-            return
         for kind in MEDIA_KINDS:
             name = f"understand_{kind}"
-            if name in allowed:
-                continue
             try:
-                remover(name)
-            except Exception:  # pragma: no cover - toolset specifics
-                continue
+                if name in allowed:
+                    activate = getattr(self.context, "activate_llm_tool_async", None)
+                    if callable(activate):
+                        await activate(name)
+                else:
+                    deactivate = getattr(self.context, "deactivate_llm_tool_async", None)
+                    if callable(deactivate):
+                        await deactivate(name)
+            except Exception as exc:  # pragma: no cover - host API differences
+                logger.debug(
+                    "Decision Engine 切换多模态工具 %s 失败：%s", name, _safe_error(exc)
+                )
 
     def _mm_scope_allows(self, event: AstrMessageEvent, settings: dict[str, Any]) -> bool:
         """Apply the multi-modal auto-understanding black/white list."""
@@ -2616,7 +2641,6 @@ class DecisionPlugin(Star):
         """Make GIFs provider-safe and inject the media digest."""
 
         settings = self._multimodal_settings()
-        self._disable_multimodal_tools(req, settings)
         if not settings.get("mm_enabled"):
             return
         runtime = self._get_multimodal()
@@ -2625,9 +2649,9 @@ class DecisionPlugin(Star):
         except Exception as exc:
             logger.warning("Decision Engine 动图兼容处理失败：%s", _safe_error(exc))
         refs = event.get_extra("decision_mm_refs") or []
-        if not refs:
-            return
         try:
+            # Always call in: a later text-only question must still recall the
+            # media understood earlier in this same conversation.
             await runtime.inject(event, req, refs)
         except Exception as exc:
             logger.warning("Decision Engine 注入多模态结果失败：%s", _safe_error(exc))
@@ -3458,6 +3482,7 @@ class DecisionPlugin(Star):
         ):
             if key in dialogue_payload:
                 proactive_payload[key] = dialogue_payload[key]
+        pending_multimodal: dict[str, Any] | None = None
         multimodal_payload = dialogue_payload.get("multimodal")
         if multimodal_payload is not None:
             if not isinstance(multimodal_payload, Mapping):
@@ -3468,14 +3493,8 @@ class DecisionPlugin(Star):
             if mm_error:
                 return error_response(mm_error, status_code=400)
             if cleaned_mm:
-                self._detail_settings["multimodal"] = {
-                    **self._multimodal_settings(),
-                    **cleaned_mm,
-                }
-                self._save_detail_settings(self._detail_settings)
-                if self._multimodal is not None:
-                    self._multimodal.refresh(self._multimodal_settings())
-                    self._sync_multimodal_tools(self._multimodal)
+                # Staged; the whole config is written once validation succeeds.
+                pending_multimodal = {**self._multimodal_settings(), **cleaned_mm}
         output_enabled = dialogue_payload.get("output_enhancement_enabled")
         output_scope = dialogue_payload.get("output_scope")
         output_scope_blacklist = dialogue_payload.get("output_scope_blacklist")
@@ -3678,6 +3697,8 @@ class DecisionPlugin(Star):
             normalized_output["pipeline"] = output_pipeline_node
         output_pipeline_node["lock_order"] = True
         detail_values["output_pipeline"] = normalized_output
+        if pending_multimodal is not None:
+            detail_values["multimodal"] = pending_multimodal
         # Commit first: a failed disk write must not change the running policy
         # or prune proactive history while reporting a failed save to the UI.
         try:
@@ -3689,6 +3710,15 @@ class DecisionPlugin(Star):
             self._int("proactive_history_max_messages", 12),
             self._int("proactive_max_sessions", 500),
         )
+        if pending_multimodal is not None and self._multimodal is not None:
+            self._multimodal.refresh(self._multimodal_settings())
+            self._sync_multimodal_tools(self._multimodal)
+            try:
+                await self._apply_multimodal_tool_state(self._multimodal_settings())
+            except Exception as exc:  # pragma: no cover - host API differences
+                logger.warning(
+                    "Decision Engine 多模态工具状态刷新失败：%s", _safe_error(exc)
+                )
         await self._configure_output_runtime()
         if life_values is not None:
             try:
