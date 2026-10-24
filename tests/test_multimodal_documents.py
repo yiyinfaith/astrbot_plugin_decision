@@ -269,7 +269,8 @@ def test_xlsx_target_column_beyond_used_range_is_not_clamped(tmp_path):
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Sheet1"
-    sheet.append(["A5", "B5", "C5", "D5"])
+    for column in "ABCD":
+        sheet[f"{column}5"] = f"{column}5"
     path = tmp_path / "column-boundary.xlsx"
     workbook.save(path)
 
@@ -294,6 +295,149 @@ def test_xlsx_empty_rows_hidden_merge_and_formula_stay_precise(tmp_path):
     assert "第 7 行 [隐藏]: A7=A-7 | B7=B-7" in hidden
     assert "A20=merged-a20" in merged and "B20=（合并单元格 A20:B20）" in merged
     assert "C10==A10+B10" in formula and "缓存值" in formula
+
+
+@pytest.fixture()
+def far_xlsx(tmp_path):
+    """Sparse physical coordinates beyond the former 100,000-row ceiling."""
+    from openpyxl import Workbook
+
+    path = tmp_path / "far.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sheet1"
+    sheet["A1"] = "header"
+    sheet["A100001"] = "unique-far-a"
+    sheet["B100001"] = "must-not-leak-b"
+    sheet["C100003"] = "=A100001"
+    sheet["D100003"] = "must-not-leak-d"
+    sheet.row_dimensions[100001].hidden = True
+    sheet.merge_cells("A100005:B100005")
+    sheet["A100005"] = "far-merged-anchor"
+    sheet["A1048576"] = "last-physical-row"
+    workbook.save(path)
+    # Add an actual cached formula result without executing Excel/formulas.
+    from zipfile import ZIP_DEFLATED, ZipFile
+
+    with ZipFile(path) as archive:
+        entries = {entry.filename: archive.read(entry.filename) for entry in archive.infolist()}
+    entries["xl/worksheets/sheet1.xml"] = entries["xl/worksheets/sheet1.xml"].replace(
+        b"<f>A100001</f><v></v>", b"<f>A100001</f><v>37</v>"
+    )
+    with ZipFile(path, "w", ZIP_DEFLATED) as archive:
+        for name, data in entries.items():
+            archive.writestr(name, data)
+    return path
+
+
+def test_xlsx_far_targets_stream_real_coordinates_and_metadata(far_xlsx):
+    index = office.parse_document(far_xlsx)
+    assert index.blocks[0]["rows"] == 1_048_576
+    assert index.blocks[0]["indexed_end_row"] < 100_000
+    assert index.blocks[0]["truncated"] is True
+    assert len(index.blocks[0]["rows_data"]) < 12_000
+    target = office.read_target(index, "Sheet1!A100001:A100006")
+    assert "第 100001 行 [隐藏]: A100001=unique-far-a" in target
+    assert "A100002=（空）" in target
+    assert "A100005=far-merged-anchor" in target
+    assert "must-not-leak-b" not in target and "must-not-leak-d" not in target
+    formula = office.read_target(index, "Sheet1!C100003")
+    assert "C100003==A100001 [缓存值: 37]" in formula
+    merged = office.read_target(index, "Sheet1!B100005")
+    assert "B100005=（合并单元格 A100005:B100005）" in merged
+    assert "far-merged-anchor" not in merged
+    assert "A1048576=last-physical-row" in office.read_target(index, "Sheet1!A1048576")
+    assert "A100001=unique-far-a" in office.read_target(index, "Sheet1!100001:100001")
+    assert len(index.blocks[0]["rows_data"]) < 12_000, "target reads must not grow the overview"
+
+
+def test_xlsx_on_demand_uses_read_only_and_closes_workbooks(far_xlsx, monkeypatch):
+    import openpyxl
+
+    original = openpyxl.load_workbook
+    opened, closed = [], []
+
+    def load(*args, **kwargs):
+        assert kwargs["read_only"] is True and kwargs["keep_links"] is False
+        book = original(*args, **kwargs)
+        close = book.close
+
+        def counted_close():
+            closed.append(book)
+            close()
+
+        book.close = counted_close
+        opened.append(book)
+        return book
+
+    monkeypatch.setattr(openpyxl, "load_workbook", load)
+    index = office.parse_document(far_xlsx)
+    assert len(opened) == len(closed) == 2
+    assert "unique-far-a" in office.read_target(index, "Sheet1!A100001")
+    assert len(opened) == len(closed) == 4
+
+
+def test_xlsx_dense_workbook_after_row_100000_has_bounded_index(tmp_path):
+    from openpyxl import Workbook
+
+    path = tmp_path / "dense.xlsx"
+    workbook = Workbook(write_only=True)
+    sheet = workbook.create_sheet("Dense")
+    for number in range(1, 100_006):
+        sheet.append([f"left-{number}", f"right-{number}"])
+    workbook.save(path)
+    index = office.parse_document(path)
+    assert len(index.blocks[0]["cells_data"]) < 1_000
+    assert "left-1" in index.render(), "budget truncation must retain the overview"
+    result = office.read_target(index, "Dense!B100001:B100005")
+    assert "B100001=right-100001" in result
+    assert "B100005=right-100005" in result
+    assert "left-100001" not in result
+    assert "right-100000" not in result
+
+
+def test_xlsx_missing_source_is_not_reported_as_empty(far_xlsx):
+    index = office.parse_document(far_xlsx)
+    far_xlsx.unlink()
+    with pytest.raises(ValueError, match="源文件不可用"):
+        office.read_target(index, "Sheet1!A100001")
+
+
+def test_xlsx_changed_source_does_not_mix_versions(far_xlsx):
+    index = office.parse_document(far_xlsx)
+    far_xlsx.write_bytes(far_xlsx.read_bytes() + b"version-changed")
+    with pytest.raises(ValueError, match="源文件已变化"):
+        office.read_target(index, "Sheet1!A100001")
+
+
+def test_xlsx_unindexed_region_without_source_is_not_empty(far_xlsx):
+    index = office.parse_document(far_xlsx)
+    index.meta.clear()
+    with pytest.raises(ValueError, match="尚未索引"):
+        office.read_target(index, "Sheet1!A100001")
+
+
+def test_xlsx_large_target_retains_content_and_explicit_budget_notice(far_xlsx):
+    result = office.read_target(office.parse_document(far_xlsx), "Sheet1!A100001:D1048576", limit_chars=500)
+    assert "unique-far-a" in result
+    assert "上限" in result or "处理预算" in result
+    assert len(result) <= 500
+
+
+def test_xlsx_processing_deadline_and_cancellation(far_xlsx):
+    import time
+
+    index = office.parse_document(far_xlsx)
+    with pytest.raises(TimeoutError, match="超时"):
+        office.read_target(index, "Sheet1!A100001", deadline=time.monotonic() - 1)
+    with pytest.raises(RuntimeError, match="取消"):
+        office.read_target(index, "Sheet1!A100001", cancelled=lambda: True)
+
+
+@pytest.mark.parametrize("target", ["Sheet1!A0", "Sheet1!A1048577", "Sheet1!XFE1", "Sheet1!0:2"])
+def test_xlsx_rejects_coordinates_outside_excel_limits(far_xlsx, target):
+    with pytest.raises(ValueError, match="Excel"):
+        office.read_target(office.parse_document(far_xlsx), target)
 
 
 def test_office_indexes_embedded_docx_image_bytes(tmp_path):

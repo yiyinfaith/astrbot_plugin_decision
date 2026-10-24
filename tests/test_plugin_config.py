@@ -263,6 +263,37 @@ async def test_save_reload_keeps_native_config_clean_and_webui_settings_intact(h
 
 
 @pytest.mark.asyncio
+async def test_removed_auto_switch_is_dropped_on_load_save_and_reload(host):
+    stored = {
+        "jev_pre_prompt": "keep my policy",
+        "proactive_whitelist": ["keep-session"],
+        "multimodal": {
+            "mm_enabled": True, "mm_auto_enabled": False,
+            "mm_auto_image": True, "mm_auto_scope": ["keep-session"],
+            "mm_default_model": "keep-model",
+        },
+    }
+    host.path.parent.mkdir(parents=True)
+    host.path.write_text(json.dumps(stored), encoding="utf-8")
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    assert "mm_auto_enabled" not in plugin._detail_settings["multimodal"]
+    assert "mm_auto_enabled" not in plugin._multimodal_page_settings()
+    # A stale client cannot write the removed switch back into the settings.
+    host.body.update(always_keep_tools=[], dialogue_enhancement={"multimodal": {"mm_auto_enabled": True}})
+    result = await plugin.page_save_settings()
+    assert result.get("saved") is True, result
+    saved = json.loads(host.path.read_text(encoding="utf-8"))
+    assert "mm_auto_enabled" not in saved["multimodal"]
+    assert saved["jev_pre_prompt"] == stored["jev_pre_prompt"]
+    assert saved["proactive_whitelist"] == stored["proactive_whitelist"]
+    for key, value in stored["multimodal"].items():
+        if key != "mm_auto_enabled":
+            assert saved["multimodal"][key] == value
+    reloaded = host.module.DecisionPlugin(host.context, host.config)
+    assert "mm_auto_enabled" not in reloaded._multimodal_settings()
+
+
+@pytest.mark.asyncio
 async def test_failed_write_does_not_change_live_policy_history_or_previous_file(host, monkeypatch):
     plugin = host.module.DecisionPlugin(host.context, host.config)
     host.body.update(always_keep_tools=["jev_decide"], tool_filter_enabled=False)

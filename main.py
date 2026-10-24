@@ -523,11 +523,16 @@ class DecisionPlugin(Star):
                 return {}
             with self._settings_path.open(encoding="utf-8-sig") as file:
                 value = json.load(file)
-            return (
+            payload = (
                 {key: value[key] for key in DETAIL_DEFAULTS if key in value}
                 if isinstance(value, Mapping)
                 else {}
             )
+            if "multimodal" in payload:
+                from .decision.multimodal import normalize_settings
+
+                payload["multimodal"] = normalize_settings(payload["multimodal"])
+            return payload
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             logger.warning(
                 "Decision Engine could not read WebUI settings; defaults will be used: %s",
@@ -537,6 +542,10 @@ class DecisionPlugin(Star):
 
     def _save_detail_settings(self, values: Mapping[str, Any]) -> None:
         payload = {key: values[key] for key in DETAIL_DEFAULTS if key in values}
+        if "multimodal" in payload:
+            from .decision.multimodal import normalize_settings
+
+            payload["multimodal"] = normalize_settings(payload["multimodal"])
         self._settings_path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(
             dir=str(self._settings_path.parent),

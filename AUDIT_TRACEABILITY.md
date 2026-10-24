@@ -11,7 +11,7 @@
 | Gemini 原生视频与官方 Agentic 路线 | `decision/multimodal/native_video.py` Files API、`generateContent`、`/v1beta/interactions` | `tests/test_multimodal_documents.py` 原生上传清理、Interactions 路由、能力标注 | 代码使用官方接口；本环境无 Gemini 密钥，未作付费/网络实测 |
 | PDF 按页/混合扫描 OCR，Tesseract/PaddleOCR 互补 | `preprocess.py` PDF 渲染；`runtime.py` `_pdf_sparse_pages`/`_pdf_image_regions`/`_ocr_document`；`ocr.py` | `tests/test_multimodal_documents.py` 混合页图片区域、OCR 后端选择与降级；集成测试覆盖取消清理 | 混合页即使原生文本超过 200 字也会检查嵌入图片区域；融合结果按行去重；实际 OCR 准确率依赖主机安装与字体 |
 | DOCX/PPTX 结构、整页渲染、嵌入图片和复杂页面视觉材料 | `decision/multimodal/office.py` `render_pages`；`runtime.py` `_materialize_office_visuals` | `tests/test_multimodal_documents.py` 文档/幻灯片/嵌图/整页渲染 | 本地渲染函数会把完整 PDF 页面转为 PNG；真实 Provider 未调用，缺少 LibreOffice 时明确安全回退 |
-| XLSX 超 400 行、空行/隐藏行、区域精读 | `office.py` `_xlsx`/`read_target` | `test_xlsx_indexes_rows_beyond_400_and_supports_range_reads`、`test_xlsx_ranges_use_physical_rows_when_blank_rows_are_present` | 本地稀疏 450 行工作簿通过；行索引有 100,000 行上限并保留物理坐标 |
+| XLSX 物理坐标精读、10 万行以后的按需读取 | `office.py` `_xlsx_sheet_window`/`_xlsx_target_window`/`read_target` | `test_xlsx_far_targets_stream_real_coordinates_and_metadata`、`test_xlsx_dense_workbook_after_row_100000_has_bounded_index`，原有单列/单行/空行回归 | 真实生成 100,005 行密集表和含第 1,048,576 行的稀疏表；概览与精读均流式读取，范围外列不混入；隐藏行、合并区域、公式及缓存值保留；源文件变化/失效、取消/超时/输出截断明确提示，未读取不冒充空值 |
 | Provider 从 AstrBot 列表选择，UI 能力与真实路线一致 | `adapters.py` `provider_catalog`/`classify_kind`；`main.py` WebUI API | `tests/test_multimodal_core.py`、`test_multimodal_ui.py` | 本地 Provider double 通过；VPS 使用实际 `https://api.yiyinfaith.com/v1/chat/completions` + `gemini-3.8-flash` 纯文本探针返回 `DECISION_REAL_API_OK`；宿主版本测试因未配置 `DECISION_REAL_ASTRBOT_SOURCE` 跳过 |
 | 自动理解异步、默认空白名单、不唤醒不回复 | `main.py` `multimodal_observe_message`；`config.py` 默认值；`runtime.py` `observe` | `tests/test_multimodal_integration.py`、`test_multimodal_core.py` | 本地事件链通过；无真实平台外发 |
 | 工具独立开关、定位当前/历史附件、自定义指令/精读 | `decision/multimodal/tools.py`、`runtime.py`、`cache.py` | `tests/test_multimodal_core.py` 工具/缓存/会话隔离 | 本地调用链通过 |
@@ -30,6 +30,8 @@
 | GitHub/VPS 同提交、备份、健康与回滚 | Git、部署脚本/命令与本清单 | 发布后补充 Commit、远端路径、备份路径、热重载和健康结果 | Decision `ba856c3` 已合并并推送 GitHub `main`，AIGen 协作提交 `c90707e` 已推送其 `main`；Decision `/root/yiyin/AstrBot/data/plugins/astrbot_plugin_decision/main.py` SHA-256 `8f579b68a2f68de71600b51da84867da74f74c6fdcb97b00a2de77df4553f1a7`，AIGen `/root/yiyin/AstrBot/data/plugins/astrbot_plugin_aigen/main.py` SHA-256 `3dfa506c9adc9520e72373060d492967dd7abe37be6f1541158b53030e35bfd2`，与本地 `main` 一致；写入前备份为 `/root/astrbot_backups/decision_final_20261024T165000Z/`，包含两个插件代码和各自 `plugin_data`。两个插件均通过 AstrBot `/api/plugin/reload` 单插件接口返回 HTTP 200；screen PID `568866`、AstrBot Python PID `568938`、端口 6185/8088 均保持正常，插件列表确认 Decision 与 AIGen 均 activated。 |
 
 ## 外部依赖边界
+
+2026-10-24 追加验证：删除重复的自动理解后端总开关，配置默认值、校验、归一化、读取/保存及运行状态均不再保留该设置；自动理解使用 `mm_enabled`、媒体类型开关和会话名单，主动工具继续独立。旧客户端提交的已删除字段会被忽略。更新后的本地全量回归为 **647 passed, 2 skipped, 12 subtests passed**，ruff 与 `git diff --check` 通过。新增测试检查实际 Provider 替身调用次数、指定 XLSX 区域传入模型的内容、重复区域缓存命中和取消信号；不代表真实模型理解质量。对比修复前后的代码，旧 `read_target` 对同一真实文件的有界概览会把 A100001 误报为空，新实现从源文件读到独有文字；旧自动理解依赖隐藏开关，新实现只需现有总开关和媒体类型开关。
 
 本次真实 Provider 仅执行了一次低成本纯文本探针：VPS 已配置的 `gemini-3.8-flash` 返回 `DECISION_REAL_API_OK`。没有执行真实图片/视频/音频多模态请求、真实媒体扣费或真实群聊/私聊发送；因此多模态模型理解质量、Office 视觉效果和 AIGen 生产账单仍以本地行为测试与生产运行边界为准。部署保持现有自动发送配置，不主动触发测试消息；若宿主未提供兼容 AstrBot 源，宿主原生测试继续明确标为 skipped。
 

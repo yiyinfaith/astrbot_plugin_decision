@@ -71,7 +71,6 @@ class FakeImage:
 def build(tmp_path, provider, **over):
     base = {
         "mm_enabled": True,
-        "mm_auto_enabled": True,
         "mm_auto_image": True,
         "mm_auto_scope": ["umo:Group:1"],
         "mm_auto_scope_blacklist": False,

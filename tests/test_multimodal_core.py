@@ -27,7 +27,7 @@ from decision.multimodal.models import MediaIndexEntry, MediaRef, Understanding 
 def test_defaults_are_conservative():
     settings = config.MultimodalSettings()
     assert settings.bool("mm_enabled") is False
-    assert settings.bool("mm_auto_enabled") is False
+    assert "mm_auto_enabled" not in settings.values
     assert settings.bool("mm_tools_enabled") is False
     assert settings.auto_kinds == ()
     assert settings.tool_kinds == ()
@@ -54,19 +54,31 @@ def test_whitelist_match_allows_that_session_only():
     assert settings.scope_allows("umo-b") is False
 
 
-def test_auto_kinds_require_both_masters():
-    raw = {"mm_enabled": True, "mm_auto_enabled": True, "mm_auto_image": True}
+def test_auto_kinds_require_master_and_per_kind_switch_only():
+    raw = {"mm_enabled": True, "mm_auto_image": True}
     settings = config.MultimodalSettings(config.normalize_settings(raw))
     assert settings.auto_kinds == ("image",)
-    raw["mm_auto_enabled"] = False
+    raw["mm_enabled"] = False
     settings = config.MultimodalSettings(config.normalize_settings(raw))
     assert settings.auto_kinds == ()
+
+
+@pytest.mark.parametrize("legacy_value", [False, True])
+def test_removed_auto_switch_is_neither_loaded_nor_saved(legacy_value):
+    raw = {"mm_enabled": True, "mm_auto_enabled": legacy_value, "mm_auto_image": True}
+    normalized = config.normalize_settings(raw)
+    assert "mm_auto_enabled" not in normalized
+    cleaned, error = config.validate_page_payload(raw)
+    assert error == "" and "mm_auto_enabled" not in cleaned
+    settings = config.MultimodalSettings(normalized)
+    assert settings.auto_kinds == ("image",)
+    assert "mm_auto_enabled" not in config.page_settings(settings)
 
 
 def test_tool_kinds_are_independent_of_auto():
     raw = {
         "mm_enabled": True,
-        "mm_auto_enabled": False,
+        "mm_auto_image": False,
         "mm_tools_enabled": True,
         "mm_tool_image": True,
         "mm_tool_video": False,

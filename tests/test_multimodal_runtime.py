@@ -69,7 +69,6 @@ class FakeImage:
 def build(tmp_path, provider, **settings):
     base = {
         "mm_enabled": True,
-        "mm_auto_enabled": True,
         "mm_auto_image": True,
         "mm_auto_scope": ["aiocqhttp:GroupMessage:1"],
         "mm_auto_scope_blacklist": False,
@@ -112,7 +111,8 @@ async def test_auto_understanding_runs_and_caches(tmp_path):
     item = await runtime.cache.get_for_media(refs[0].umo, refs[0].content_key)
     assert item is not None and item.ok
     assert item.summary == "描述1"
-    assert provider.calls, "provider must have been called"
+    assert len(provider.calls) == 1, "no extra auto master switch is required"
+    assert (await runtime.stats())["auto"] is True
     await runtime.terminate()
 
 
@@ -133,15 +133,32 @@ async def test_auto_understanding_skipped_when_scope_disallows(tmp_path):
 @pytest.mark.asyncio
 async def test_auto_off_still_indexes_media_for_tool_call(tmp_path):
     provider = FakeProvider()
-    runtime = build(tmp_path, provider, mm_auto_enabled=False)
+    runtime = build(tmp_path, provider, mm_auto_image=False)
     await runtime.initialize()
-    refs = await runtime.observe(FakeEvent([FakeImage(png(tmp_path))]), auto_allowed=False)
+    refs = await runtime.observe(FakeEvent([FakeImage(png(tmp_path))]), auto_allowed=True)
     assert refs and provider.calls == []
+    assert (await runtime.stats())["auto"] is False
     item, error = await runtime.understand_by_selector(
         refs[0].umo, kind="image", selector="latest", instruction="请描述画面"
     )
-    assert error == "" and item is not None and provider.calls
+    assert error == "" and item is not None and len(provider.calls) == 1
     await runtime.terminate()
+
+
+@pytest.mark.asyncio
+async def test_legacy_auto_false_no_longer_blocks_automatic_understanding(tmp_path):
+    provider = FakeProvider()
+    runtime = build(tmp_path, provider, mm_auto_enabled=False)
+    try:
+        await runtime.initialize()
+        refs = await runtime.observe(FakeEvent([FakeImage(png(tmp_path))]), auto_allowed=True)
+        await asyncio.gather(*list(runtime._tasks))
+        assert len(provider.calls) == 1
+        item = await runtime.cache.get_for_media(refs[0].umo, refs[0].content_key)
+        assert item is not None and item.ok
+        assert "mm_auto_enabled" not in runtime.settings.values
+    finally:
+        await runtime.terminate()
 
 
 @pytest.mark.asyncio
@@ -250,6 +267,76 @@ async def test_understand_file_xlsx_target_passes_only_requested_cells(tmp_path)
     assert "A-401" in prompt and "A-450" in prompt
     assert "B-401" not in prompt and "C-401" not in prompt
     await runtime.terminate()
+
+
+@pytest.mark.asyncio
+async def test_understand_file_reads_xlsx_target_after_row_100000(tmp_path):
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sheet1"
+    sheet["A1"] = "overview only"
+    sheet["A100001"] = "precise far row"
+    sheet["B100001"] = "wrong column secret"
+    sheet["A1048576"] = "Excel final row"
+    path = tmp_path / "far-target.xlsx"
+    workbook.save(path)
+    provider = FakeProvider()
+    runtime = build(tmp_path, provider)
+    try:
+        await runtime.initialize()
+        refs = await runtime.observe(FakeEvent([SimpleNamespace(type="file", file_=str(path), name=path.name)]), auto_allowed=False)
+        assert refs and provider.calls == []
+        for target, expected in [("Sheet1!A100001", "precise far row"), ("Sheet1!A1048576", "Excel final row")]:
+            item, error = await runtime.understand_by_selector(
+                refs[0].umo, kind="file", selector="latest", target=target,
+            )
+            assert error == "" and item is not None and item.ok
+            assert expected in provider.calls[-1]["prompt"]
+            assert "wrong column secret" not in provider.calls[-1]["prompt"]
+            assert "overview only" not in provider.calls[-1]["prompt"]
+        assert len(provider.calls) == 2, "distinct file regions must have separate results"
+        await runtime.understand_by_selector(refs[0].umo, kind="file", target="Sheet1!A1048576")
+        assert len(provider.calls) == 2, "the same region must reuse its cached analysis"
+    finally:
+        await runtime.terminate()
+
+
+@pytest.mark.asyncio
+async def test_office_worker_receives_cancellation_without_provider_call(tmp_path, monkeypatch):
+    import threading
+
+    from decision.multimodal import office
+
+    started, stopped = threading.Event(), threading.Event()
+
+    def slow_parse(path, *, cancelled, **options):
+        started.set()
+        try:
+            while not cancelled():
+                stopped.wait(0.01)
+            raise RuntimeError("cancelled")
+        finally:
+            stopped.set()
+
+    monkeypatch.setattr(office, "parse_document", slow_parse)
+    provider = FakeProvider()
+    runtime = build(tmp_path, provider)
+    path = tmp_path / "cancel.xlsx"
+    ref = MediaRef(kind="file", reference=str(path), urn="u::cancel", umo="u")
+    task = asyncio.create_task(runtime._run_file(
+        ref, SimpleNamespace(provider=provider, model=""), "read", tmp_path, path,
+    ))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert await asyncio.to_thread(stopped.wait, 2)
+        assert provider.calls == []
+    finally:
+        await runtime.terminate()
 
 
 @pytest.mark.asyncio

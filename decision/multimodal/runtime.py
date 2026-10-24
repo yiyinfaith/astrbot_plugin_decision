@@ -10,6 +10,7 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -546,7 +547,7 @@ class MultimodalRuntime:
                 "file:enabled={enabled}:ocr={ocr}:{engine}:lang={lang}:"
                 "ocr_timeout={ocr_timeout}:pages={pages}:max_chars={max_chars}:"
                 "chunk={chunk}:office={office}:office_pages={office_pages}:"
-                "office_timeout={office_timeout}"
+                "office_timeout={office_timeout}:xlsx=stream-v1"
             ).format(
                 enabled=settings.bool("mm_file_ocr"),
                 ocr=settings.text("mm_ocr_strategy") or "auto",
@@ -790,14 +791,22 @@ class MultimodalRuntime:
         timeout = float(self._settings.int("mm_timeout_seconds"))
         target = str((ref.extra or {}).get("target") or "")
         if office.is_office(path):
-            index = await asyncio.to_thread(
-                office.parse_document,
-                path,
-                limit_chars=self._settings.int("mm_file_max_chars"),
-            )
-            body = office.read_target(
-                index, target, limit_chars=self._settings.int("mm_file_max_chars")
-            )
+            cancelled = threading.Event()
+            deadline = time.monotonic() + timeout
+            limit_chars = self._settings.int("mm_file_max_chars")
+
+            def read_office():
+                # Streaming a high Excel row also belongs in the worker, with
+                # cooperative cancellation so a timed-out request releases its
+                # ZIP/workbook handles instead of continuing in the background.
+                options = dict(limit_chars=limit_chars, deadline=deadline, cancelled=cancelled.is_set)
+                document = office.parse_document(path, **options)
+                return document, office.read_target(document, target, **options)
+
+            try:
+                index, body = await asyncio.to_thread(read_office)
+            finally:
+                cancelled.set()
             outline = index.outline()
             visual_paths: list[str] = []
             visual_notes: list[str] = []
@@ -1573,7 +1582,7 @@ class MultimodalRuntime:
         payload.update(
             {
                 "enabled": self._settings.bool("mm_enabled"),
-                "auto": self._settings.bool("mm_auto_enabled"),
+                "auto": bool(self._settings.auto_kinds),
                 "tools": self._settings.bool("mm_tools_enabled"),
                 "running": len([task for task in self._tasks if not task.done()]),
             }

@@ -79,8 +79,8 @@ def test_multimodal_section_is_under_input_enhancement():
         "mm_auto_scope",
     ):
         assert key in html, key
-    # Automatic understanding remains a backend setting for compatibility,
-    # but its duplicate visible switch was removed from this card.
+    # There is one multimodal master; automatic understanding uses the media
+    # type switches and session scope without a second hidden master.
     assert 'v-model="mm.multimodal.mm_auto_enabled"' not in html
     assert '<strong>启用多模态理解</strong>' in html
 

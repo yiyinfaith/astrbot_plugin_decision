@@ -11,6 +11,9 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
+from collections.abc import Callable
+from contextlib import ExitStack, closing
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -235,107 +238,219 @@ def _cell_text(value: Any) -> str:
     return str(value).strip()
 
 
-_MAX_INDEX_ROWS = 100_000
+_XLSX_MAX_ROWS = 1_048_576
+_XLSX_MAX_COLUMNS = 16_384
+_XLSX_WINDOW_CELLS = 100_000
 
 
-def _xlsx(path: Path, limit_chars: int, *, max_rows: int | None = None) -> DocumentIndex:
-    from openpyxl import load_workbook
+def _check_xlsx_budget(deadline: float, cancelled: Callable[[], bool] | None) -> None:
+    if cancelled is not None and cancelled():
+        raise RuntimeError("XLSX 读取已取消")
+    if time.monotonic() >= deadline:
+        raise TimeoutError("XLSX 读取超时，请缩小目标区域或提高理解超时")
+
+
+def _xlsx_sheet_details(
+    path: Path,
+    sheet: Any,
+    bounds: tuple[int, int, int, int],
+    deadline: float,
+    cancelled: Callable[[], bool] | None,
+) -> tuple[list[int], list[str], int, int]:
+    """Read metadata absent from openpyxl's read-only worksheet API.
+
+    Only the internal package member name comes from openpyxl. XML elements
+    are discarded as they are consumed; no complete sheet tree is retained.
+    """
+
+    from xml.etree.ElementTree import iterparse
+    from zipfile import ZipFile
+
+    from openpyxl.utils.cell import coordinate_to_tuple, range_boundaries
+
+    start_col, start_row, end_col, end_row = bounds
+    hidden = []
+    merged = []
+    stack = []
+    rows = max(1, sheet.max_row or 1)
+    columns = max(1, sheet.max_column or 1)
+    with ZipFile(path) as archive, archive.open(sheet._worksheet_path.lstrip("/")) as stream:
+        for step, (event, element) in enumerate(iterparse(stream, events=("start", "end"))):
+            if step % 512 == 0:
+                _check_xlsx_budget(deadline, cancelled)
+            if event == "start":
+                stack.append(element)
+                continue
+            tag = element.tag.rsplit("}", 1)[-1]
+            if tag == "row":
+                _check_xlsx_budget(deadline, cancelled)
+                number = int(element.get("r", "0"))
+                rows = max(rows, number)
+                if start_row <= number <= end_row and element.get("hidden") in {"1", "true"}:
+                    hidden.append(number)
+            elif tag == "c" and not sheet.max_column:
+                # Write-only producers may omit <dimension>. Recover physical
+                # dimensions during the metadata pass we already perform.
+                coordinate = element.get("r")
+                if coordinate:
+                    row, column = coordinate_to_tuple(coordinate)
+                    rows, columns = max(rows, row), max(columns, column)
+            elif tag == "mergeCell":
+                _check_xlsx_budget(deadline, cancelled)
+                value = element.get("ref", "")
+                min_col, min_row, max_col, max_row = range_boundaries(value)
+                rows, columns = max(rows, max_row), max(columns, max_col)
+                if min_row <= end_row and max_row >= start_row and min_col <= end_col and max_col >= start_col:
+                    merged.append(value)
+            stack.pop()
+            element.clear()
+            if stack:
+                stack[-1].remove(element)
+    _check_xlsx_budget(deadline, cancelled)
+    return hidden, merged, rows, columns
+
+
+def _xlsx_sheet_window(
+    path: Path,
+    sheet: Any,
+    formula_sheet: Any,
+    *,
+    start_col: int,
+    start_row: int,
+    end_col: int,
+    end_row: int,
+    limit_chars: int,
+    deadline: float,
+    cancelled: Callable[[], bool] | None,
+) -> dict[str, Any]:
+    """Collect a bounded window using physical coordinates and streaming IO."""
+
     from openpyxl.utils import get_column_letter
+    from openpyxl.utils.cell import range_boundaries
 
-    # data_only=True yields cached formula results without evaluating anything.
-    workbook = load_workbook(str(path), read_only=False, data_only=True)
-    formula_book = None
+    _check_xlsx_budget(deadline, cancelled)
+    start_col = start_col or 1
+    # This limits the amount of data materialized for one response, not the
+    # coordinate that can be addressed. A tiny target on row 1,048,576 works.
+    cell_budget = max(1, min(_XLSX_WINDOW_CELLS, limit_chars // 8))
+    hidden, merged, total_rows, columns = _xlsx_sheet_details(
+        path, sheet,
+        (start_col, start_row, end_col or _XLSX_MAX_COLUMNS, min(end_row, start_row + cell_budget - 1)),
+        deadline, cancelled,
+    )
+    end_col = end_col or columns
+    end_col = min(end_col, start_col + cell_budget - 1)
+    end_row = min(end_row, start_row + max(1, cell_budget // (end_col - start_col + 1)) - 1)
+    kwargs = dict(min_row=start_row, max_row=end_row, min_col=start_col, max_col=end_col)
+    rows = []
+    cells_data: dict[str, dict[str, dict[str, str]]] = {}
+    formula_cells = []
+    header = []
+    used = 0
+    last_row = start_row - 1
+    cached_rows = sheet.iter_rows(**kwargs)
+    formula_rows = formula_sheet.iter_rows(**kwargs)
     try:
-        formula_book = load_workbook(str(path), read_only=False, data_only=False)
-    except Exception:  # pragma: no cover - formulas are optional
-        formula_book = None
-    index = DocumentIndex(kind="xlsx")
-    try:
-        for sheet in workbook.worksheets:
-            rows: list[str] = []
-            header: list[str] = []
-            merged = [str(rng) for rng in sheet.merged_cells.ranges]
-            formula_cells = []
-            # Keep a sparse physical-coordinate index for exact target reads.
-            # ``rows_data`` remains the human-readable overview, while this
-            # map avoids reconstructing a target from compressed list indexes.
-            cells_data: dict[str, dict[str, dict[str, str]]] = {}
-            hidden_rows: list[int] = []
-            row_limit = min(
-                sheet.max_row,
-                max_rows if max_rows is not None else _MAX_INDEX_ROWS,
-            )
-            for row_number, row in enumerate(
-                sheet.iter_rows(min_row=1, max_row=row_limit), 1
-            ):
-                cells = [_cell_text(cell.value) for cell in row]
-                if not header:
-                    header = list(cells)
-                coordinate = f"第 {row_number} 行"
-                hidden_flag = bool(sheet.row_dimensions[row_number].hidden)
-                hidden = " [隐藏]" if hidden_flag else ""
-                if hidden_flag:
-                    hidden_rows.append(row_number)
-                # Keep one record per physical Excel row, including blank rows.
-                # The coordinate is part of the record so every targeted read
-                # remains correct even with sparse sheets.
-                rows.append(f"{coordinate}{hidden}: " + " | ".join(cells))
-                source_row = None
-                if formula_book is not None:
-                    try:
-                        source_row = formula_book[sheet.title][row_number]
-                        for cell in source_row:
-                            if isinstance(cell.value, str) and cell.value.startswith("="):
-                                formula_cells.append(
-                                    f"{cell.coordinate}={cell.value}"
-                                )
-                    except Exception:  # pragma: no cover
-                        pass
-                for cell in row:
-                    formula = ""
-                    if source_row is not None and cell.column <= len(source_row):
-                        source_value = source_row[cell.column - 1].value
-                        if isinstance(source_value, str) and source_value.startswith("="):
-                            formula = source_value
-                    cached = _cell_text(cell.value)
-                    if cached or formula:
-                        cells_data.setdefault(str(row_number), {})[str(cell.column)] = {
-                            "coordinate": cell.coordinate,
-                            "value": cached,
-                            "formula": formula,
-                        }
-            text = "\n".join(rows)
-            if formula_cells:
-                text += "\n[公式]\n" + "\n".join(formula_cells[:40])
-            if merged:
-                text += "\n[合并单元格] " + ", ".join(merged)
-            index.blocks.append(
-                {
-                    "label": f"工作表 {sheet.title}",
-                    "name": sheet.title,
-                    "title": sheet.title,
-                    "text": text,
-                    "kind": "sheet",
-                    "dims": f"A1:{get_column_letter(max(1, sheet.max_column))}{max(1, sheet.max_row)}",
-                    "rows": sheet.max_row,
-                    "columns": sheet.max_column,
-                    "header": header,
-                    "rows_data": rows,
-                    "cells_data": cells_data,
-                    "hidden_rows": hidden_rows,
-                    "merged_ranges": merged,
-                    "truncated": row_limit < sheet.max_row,
-                }
-            )
+        for number, (cached, formulas) in enumerate(zip(cached_rows, formula_rows, strict=True), start_row):
+            _check_xlsx_budget(deadline, cancelled)
+            values = []
+            for column, (cell, source) in enumerate(zip(cached, formulas, strict=True), start_col):
+                value = _cell_text(cell.value)
+                formula = source.value if source.data_type == "f" else ""
+                if value or formula:
+                    coordinate = f"{get_column_letter(column)}{number}"
+                    # A cell may be longer than the whole output budget.
+                    # Preserve the fact that its content is incomplete.
+                    if len(value) > limit_chars:
+                        value = value[:limit_chars] + "…（单元格内容已截断）"
+                    if formula and len(formula) > limit_chars:
+                        formula = formula[:limit_chars] + "…（公式已截断）"
+                    cells_data.setdefault(str(number), {})[str(column)] = {
+                        "coordinate": coordinate, "value": value, "formula": formula,
+                    }
+                    if formula and len(formula_cells) < 40:
+                        formula_cells.append(f"{coordinate}={formula}")
+                values.append(value)
+            if not header:
+                header = list(values)
+            rows.append(f"第 {number} 行: " + " | ".join(values))
+            used += len(rows[-1]) + 1
+            last_row = number
+            if used >= limit_chars:
+                break
+        else:
+            # An exhausted stream also proves that any trailing requested
+            # coordinates are empty (read-only worksheets may omit them).
+            last_row = end_row
     finally:
-        workbook.close()
-        if formula_book is not None:
-            formula_book.close()
+        cached_rows.close()
+        formula_rows.close()
+    hidden = [number for number in hidden if number <= last_row]
+    merged = [
+        value for value in merged
+        if range_boundaries(value)[0] <= end_col and range_boundaries(value)[1] <= last_row
+    ]
+    hidden_set = set(hidden)
+    for offset, number in enumerate(range(start_row, start_row + len(rows))):
+        if number in hidden_set:
+            rows[offset] = rows[offset].replace(f"第 {number} 行:", f"第 {number} 行 [隐藏]:", 1)
+    text = "\n".join(rows)
+    if formula_cells:
+        text += "\n[公式]\n" + "\n".join(formula_cells)
+    if merged:
+        text += "\n[合并单元格] " + ", ".join(merged)
+    truncated = last_row < total_rows or end_col < columns
+    if truncated:
+        text += f"\n[概览未覆盖全部单元格；已索引至第 {last_row} 行，可指定区域按需读取]"
+    preview_budget = max(0, limit_chars - len(f"[工作表 {sheet.title}]\n"))
+    if len(text) > preview_budget:
+        note = "\n…（概览已截断，可指定单元格或区域按需读取）"
+        text = text[:max(0, preview_budget - len(note))] + note[:preview_budget]
+    return {
+        "label": f"工作表 {sheet.title}", "name": sheet.title,
+        "title": sheet.title, "kind": "sheet", "text": text,
+        "dims": f"A1:{get_column_letter(columns)}{total_rows}",
+        "rows": total_rows, "columns": columns, "header": header,
+        "rows_data": rows, "cells_data": cells_data,
+        "hidden_rows": hidden, "merged_ranges": merged, "truncated": truncated,
+        "indexed_start_row": start_row, "indexed_end_row": last_row,
+        "indexed_start_col": start_col, "indexed_end_col": end_col,
+    }
+
+
+def _xlsx(
+    path: Path, limit_chars: int, *, max_rows: int | None = None,
+    deadline: float | None = None, cancelled: Callable[[], bool] | None = None,
+) -> DocumentIndex:
+    from openpyxl import load_workbook
+
+    deadline = deadline if deadline is not None else time.monotonic() + 90
+    _check_xlsx_budget(deadline, cancelled)
+    index = DocumentIndex(kind="xlsx")
+    with ExitStack() as resources:
+        workbook = resources.enter_context(closing(load_workbook(
+            str(path), read_only=True, data_only=True, keep_links=False,
+        )))
+        formula_book = resources.enter_context(closing(load_workbook(
+            str(path), read_only=True, data_only=False, keep_links=False,
+        )))
+        for sheet in workbook.worksheets:
+            index.blocks.append(_xlsx_sheet_window(
+                path, sheet, formula_book[sheet.title],
+                start_col=1, start_row=1, end_col=0,
+                end_row=min(sheet.max_row or _XLSX_MAX_ROWS, max_rows or _XLSX_MAX_ROWS),
+                limit_chars=limit_chars, deadline=deadline, cancelled=cancelled,
+            ))
+    stat = path.stat()
+    index.meta.update(source_path=str(path.resolve()), source_version=(stat.st_size, stat.st_mtime_ns))
     index.meta["sheets"] = [block["name"] for block in index.blocks]
     return index
 
 
-def parse_document(path: Path, *, limit_chars: int = 12_000) -> DocumentIndex:
+def parse_document(
+    path: Path, *, limit_chars: int = 12_000,
+    deadline: float | None = None, cancelled: Callable[[], bool] | None = None,
+) -> DocumentIndex:
     """Parse a supported Office document into an index of readable blocks."""
 
     suffix = path.suffix.lower()
@@ -344,7 +459,7 @@ def parse_document(path: Path, *, limit_chars: int = 12_000) -> DocumentIndex:
     if suffix == ".pptx":
         return _pptx(path, limit_chars)
     if suffix in {".xlsx", ".xlsm"}:
-        return _xlsx(path, limit_chars)
+        return _xlsx(path, limit_chars, deadline=deadline, cancelled=cancelled)
     raise ValueError(f"不支持的 Office 格式：{suffix or '未知'}")
 
 
@@ -382,7 +497,7 @@ def _parse_xlsx_target(target: str) -> tuple[str, int, int, int, int] | None:
         )
         if not match:
             return None
-        return sheet_name, 0, int(match.group(1)), 0, int(match.group(2))
+        return _parse_xlsx_target(f"{sheet_name}!{match.group(1)}:{match.group(2)}")
     start_col_text, start_row_text, end_col_text, end_row_text = match.groups()
     start_row = int(start_row_text)
     end_row = int(end_row_text or start_row_text)
@@ -403,7 +518,55 @@ def _parse_xlsx_target(target: str) -> tuple[str, int, int, int, int] | None:
         return None
     if start_col and end_col < start_col:
         start_col, end_col = end_col, start_col
+    if not (1 <= start_row <= end_row <= _XLSX_MAX_ROWS):
+        raise ValueError(f"Excel 行号必须在 1–{_XLSX_MAX_ROWS:,} 内")
+    if max(start_col, end_col) > _XLSX_MAX_COLUMNS:
+        raise ValueError("Excel 列号必须在 A–XFD 内")
     return sheet_name, start_col, start_row, end_col, end_row
+
+
+def _xlsx_target_window(
+    index: DocumentIndex, block: dict[str, Any],
+    bounds: tuple[int, int, int, int], limit_chars: int,
+    deadline: float, cancelled: Callable[[], bool] | None,
+) -> dict[str, Any]:
+    """Reuse an indexed window or stream the requested coordinates from source."""
+
+    from openpyxl import load_workbook
+
+    start_col, start_row, end_col, end_row = bounds
+    path_text = index.meta.get("source_path")
+    if path_text:
+        path = Path(path_text)
+        try:
+            stat = path.stat()
+        except OSError as exc:
+            raise ValueError("XLSX 源文件不可用，无法读取未索引区域，请重新提供文件") from exc
+        if (stat.st_size, stat.st_mtime_ns) != tuple(index.meta.get("source_version", ())):
+            raise ValueError("XLSX 源文件已变化，请重新解析后读取，不能复用旧索引")
+    if (
+        start_row >= block.get("indexed_start_row", 1)
+        and end_row <= block.get("indexed_end_row", block.get("rows", 0))
+        and (start_col or 1) >= block.get("indexed_start_col", 1)
+        and (end_col or block.get("columns", 1)) <= block.get("indexed_end_col", block.get("columns", 1))
+    ):
+        return block
+    if not path_text:
+        raise ValueError("指定区域尚未索引，且没有可按需读取的 XLSX 源文件；请重新提供文件")
+    _check_xlsx_budget(deadline, cancelled)
+    with ExitStack() as resources:
+        cached = resources.enter_context(closing(load_workbook(
+            str(path), read_only=True, data_only=True, keep_links=False,
+        )))
+        formulas = resources.enter_context(closing(load_workbook(
+            str(path), read_only=True, data_only=False, keep_links=False,
+        )))
+        name = block["name"]
+        return _xlsx_sheet_window(
+            path, cached[name], formulas[name],
+            start_col=start_col, start_row=start_row, end_col=end_col, end_row=end_row,
+            limit_chars=limit_chars, deadline=deadline, cancelled=cancelled,
+        )
 
 
 def _xlsx_merged_range(
@@ -451,9 +614,12 @@ def _render_xlsx_region(
     merged_ranges = [str(value) for value in (block.get("merged_ranges") or [])]
     lines: list[str] = []
     used = 0
+    notice = f"…（已达到 {limit_chars} 字上限，未显示的单元格请缩小范围读取）"
+    budget = max(0, limit_chars - len(notice) - 1)
     for row_number in range(max(1, start_row), max(start_row, end_row) + 1):
         row_data = cells_data.get(str(row_number), {})
-        values: list[str] = []
+        marker = " [隐藏]" if row_number in hidden else ""
+        line = f"第 {row_number} 行{marker}: "
         for column_number in range(start_col, end_col + 1):
             coordinate = f"{get_column_letter(column_number)}{row_number}"
             cell = row_data.get(str(column_number)) or {}
@@ -463,6 +629,9 @@ def _render_xlsx_region(
                 column_number > indexed_columns
                 and (explicit_start_col or explicit_end_col)
             )
+            if row_number > block.get("indexed_end_row", block.get("rows", 0)) or column_number > block.get("indexed_end_col", indexed_columns):
+                unread = f"…（{coordinate} 及后续区域尚未读取，达到本次处理预算，请缩小范围精读）"
+                return ("\n".join(lines) + "\n" + unread)[:limit_chars].strip()
             if outside_index:
                 rendered = (
                     f"{coordinate}=（超出工作表索引范围 "
@@ -480,14 +649,15 @@ def _render_xlsx_region(
                     if merged
                     else f"{coordinate}=（空）"
                 )
-            values.append(rendered)
-        marker = " [隐藏]" if row_number in hidden else ""
-        line = f"第 {row_number} 行{marker}: " + " | ".join(values)
-        if used + len(line) > limit_chars:
-            lines.append(f"…（已达到 {limit_chars} 字上限）")
-            break
+            piece = (" | " if column_number > start_col else "") + rendered
+            if used + len(line) + len(piece) + 1 > budget:
+                remaining = max(0, budget - used - len(line))
+                lines.append((line + piece[:remaining])[: max(0, budget - used)])
+                lines.append(notice)
+                return "\n".join(lines)
+            line += piece
         lines.append(line)
-        used += len(line)
+        used += len(line) + 1
     return "\n".join(lines)
 
 
@@ -603,13 +773,17 @@ def render_pages(
         shutil.rmtree(job, ignore_errors=True)
 
 
-def read_target(index: DocumentIndex, target: str, *, limit_chars: int = 12_000) -> str:
+def read_target(
+    index: DocumentIndex, target: str, *, limit_chars: int = 12_000,
+    deadline: float | None = None, cancelled: Callable[[], bool] | None = None,
+) -> str:
     """Render only the requested part of the document."""
 
     blocks = index.select(target) if target else index.blocks
     # Spreadsheet precision reads: ``Sheet!A401:C450``, ``Sheet 401-450`` or
-    # ``第 401-450 行`` select a bounded row window without reparsing the file.
+    # ``第 401-450 行`` reuse the index or stream an unindexed physical window.
     if target and index.kind == "xlsx":
+        deadline = deadline if deadline is not None else time.monotonic() + 90
         parsed = _parse_xlsx_target(target)
         if parsed is not None:
             sheet_name, start_col, start, end_col, end = parsed
@@ -619,19 +793,23 @@ def read_target(index: DocumentIndex, target: str, *, limit_chars: int = 12_000)
                 if not sheet_name
                 or str(block.get("name", "")).casefold() == sheet_name.casefold()
             ]
+            blocks = []
             if candidates:
-                blocks = []
                 for block in candidates:
                     # Exact physical-coordinate rendering: no compressed row
                     # or column list is used for a target request.
-                    copy_block = dict(block)
+                    _check_xlsx_budget(deadline, cancelled)
+                    copy_block = dict(_xlsx_target_window(
+                        index, block, (start_col, start, end_col, end), limit_chars,
+                        deadline, cancelled,
+                    ))
                     copy_block["text"] = _render_xlsx_region(
-                        block,
+                        copy_block,
                         start_col=start_col,
                         start_row=start,
                         end_col=end_col,
                         end_row=end,
-                        limit_chars=limit_chars,
+                        limit_chars=max(0, limit_chars - len(f"[{copy_block['label']}]\n")),
                     )
                     blocks.append(copy_block)
     if not blocks:

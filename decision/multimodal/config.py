@@ -24,7 +24,6 @@ KIND_LABELS = {
 MULTIMODAL_DEFAULTS: dict[str, Any] = {
     # --- master switches ---------------------------------------------------
     "mm_enabled": False,
-    "mm_auto_enabled": False,
     "mm_tools_enabled": False,
     # --- per-kind switches -------------------------------------------------
     "mm_auto_image": False,
@@ -162,7 +161,7 @@ class MultimodalSettings:
     # --- derived helpers ---------------------------------------------------
     @property
     def auto_kinds(self) -> tuple[str, ...]:
-        if not self.bool("mm_enabled") or not self.bool("mm_auto_enabled"):
+        if not self.bool("mm_enabled"):
             return ()
         return tuple(kind for kind in MEDIA_KINDS if self.bool(f"mm_auto_{kind}"))
 
