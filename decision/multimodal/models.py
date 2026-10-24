@@ -31,11 +31,23 @@ class MediaRef:
     def content_key(self) -> str:
         """Stable cache key.
 
-        HTTP references are hashed whole; local files are hashed by their path,
-        which is enough because the platform writes a fresh file per message.
+        HTTP references are hashed whole.  Local files include a bounded version
+        fingerprint so a path reused after an edit cannot reuse an old analysis.
         """
 
-        digest = hashlib.sha256(f"{self.kind}|{self.reference}".encode()).hexdigest()[:32]
+        version = ""
+        try:
+            from pathlib import Path
+
+            path = Path(self.reference)
+            if path.is_file():
+                stat = path.stat()
+                version = f"|{stat.st_size}|{stat.st_mtime_ns}"
+        except OSError:
+            version = ""
+        digest = hashlib.sha256(
+            f"{self.kind}|{self.reference}{version}".encode()
+        ).hexdigest()[:32]
         return digest
 
 

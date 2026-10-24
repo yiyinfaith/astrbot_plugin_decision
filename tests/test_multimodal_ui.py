@@ -48,6 +48,15 @@ def test_original_input_and_output_settings_are_preserved():
         assert key in html, key
 
 
+def test_flow_cards_keep_top_tabs_and_name_left_card_correctly():
+    html = page_text()
+    assert "<h2>对话流分析</h2>" in html
+    assert "<h2>多模态理解</h2>" in html
+    # The two top-level mode tabs retain their original labels.
+    assert "对话流分析与多模态理解" in html
+    assert "OutputPro 输出管道与阶梯" in html
+
+
 def test_multimodal_section_is_under_input_enhancement():
     html = page_text()
     assert "多模态理解" in html

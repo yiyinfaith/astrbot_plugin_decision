@@ -760,7 +760,7 @@
         <div class="life-subnav" role="tablist" aria-label="对话流增强模式"><button type="button" :class="{selected: flowTab === 'input'}" @click="flowTab = 'input'">输入增强<span>对话流分析与多模态理解</span></button><button type="button" :class="{selected: flowTab === 'output'}" @click="flowTab = 'output'">输出增强<span>OutputPro 输出管道与阶梯</span></button></div>
           <div class="section-grid">
             <div v-show="flowTab === 'input'" class="glass-card">
-              <div class="card-heading"><div><div class="section-kicker">Input Enhancement</div><h2>输入增强</h2><p>输入增强总开关在 AstrBot 原生配置页；这里配置对话流分析这一项子功能。</p></div></div>
+              <div class="card-heading"><div><div class="section-kicker">Input Enhancement</div><h2>对话流分析</h2><p>输入增强总开关在 AstrBot 原生配置页；这里配置对话流分析这一项子功能。</p></div></div>
               <div class="switch-row"><div class="switch-copy"><strong>对话流分析</strong><small>根据 @、引用回复、机器人最近回复和发送者 ID 推断对话对象。</small></div><label class="switch"><input v-model="form.dialogue_enhancement.conversation_flow_analysis_enabled" type="checkbox"><span class="switch-track"></span></label></div>
               <div class="field"><label>对话流窗口 <span>参与“谁在和谁说话”推断的最近消息条数</span></label><input v-model.number="form.dialogue_enhancement.conversation_flow_window" type="number" min="2" max="30" step="1"></div>
               <div class="scope-mode"><div><strong>{{ form.dialogue_enhancement.conversation_flow_scope_blacklist ? '输入增强黑名单' : '输入增强白名单' }}</strong><small>{{ form.dialogue_enhancement.conversation_flow_scope_blacklist ? '名单内不进行对话流增强；名单为空时全部应用。' : '只对名单内会话进行对话流增强；名单为空时全部不应用。' }}</small></div><button class="scope-toggle" type="button" @click="form.dialogue_enhancement.conversation_flow_scope_blacklist = !form.dialogue_enhancement.conversation_flow_scope_blacklist">{{ form.dialogue_enhancement.conversation_flow_scope_blacklist ? '黑名单' : '白名单' }}</button></div>
@@ -791,6 +791,8 @@
                 <div class="field"><label>本地 OCR 引擎</label><select v-model="mm.multimodal.mm_ocr_engine"><option value="auto">自动（默认）</option><option value="tesseract">Tesseract</option><option value="paddleocr">PaddleOCR</option></select></div>
                 <div class="field"><label>OCR 语言 <span>Tesseract 语言包</span></label><input v-model="mm.multimodal.mm_ocr_lang" type="text" placeholder="chi_sim+eng"></div>
                 <div class="field"><label>OCR 超时 <span>秒</span></label><input v-model.number="mm.multimodal.mm_ocr_timeout_seconds" type="number" min="10" max="600" step="10"></div>
+                <div class="field"><label>Office 整页视觉渲染</label><select v-model="mm.multimodal.mm_office_render"><option value="auto">自动：PPTX 整页，DOCX 按需</option><option value="always">始终渲染 DOCX/PPTX 整页</option><option value="never">关闭整页渲染</option></select></div>
+                <div class="field"><label>Office 渲染页数上限</label><input v-model.number="mm.multimodal.mm_office_render_max_pages" type="number" min="1" max="30" step="1"></div>
               </div>
               <p class="hint">{{ mmOcrHint }}</p>
               <div class="field"><label>默认理解模型 <span>来自 AstrBot 已配置的模型</span></label><select v-model="mm.multimodal.mm_default_model"><option value="">（未选择）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }} · {{ row.modalities_label }}</option></select></div>

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import mimetypes
 import os
+import socket
 import time
 from pathlib import Path
 from typing import Any
@@ -193,14 +194,72 @@ def _is_public_ip(ip: str) -> bool:
         address = ipaddress.ip_address(ip)
     except ValueError:
         return False
-    return not (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_multicast
-        or address.is_reserved
-        or address.is_unspecified
-    )
+    # ``is_global`` is deliberately stricter than just ``not private``.  It
+    # rejects documentation/test ranges, benchmarking ranges and other
+    # special-use networks which must never be reachable from a media fetcher.
+    return bool(address.is_global)
+
+
+def _public_resolution(url: str) -> tuple[str, int, list[dict[str, Any]]]:
+    """Resolve *url* once and return a connector-pinned address list.
+
+    The returned addresses are the exact socket endpoints that the HTTP
+    connector will use.  Keeping this list separate from the URL hostname
+    preserves HTTPS Host/SNI/certificate validation while removing the DNS
+    rebinding window between validation and connect.
+    """
+
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    if parts.scheme not in {"http", "https"}:
+        raise ValueError("只允许 http/https 媒体链接")
+    if parts.username or parts.password:
+        raise ValueError("媒体链接不允许携带用户凭据")
+    host = (parts.hostname or "").strip().lower()
+    if not host:
+        raise ValueError("媒体链接缺少主机名")
+    if host in _PRIVATE_HOSTS or host.endswith(_PRIVATE_SUFFIXES):
+        raise ValueError("拒绝访问内网或元数据地址")
+    try:
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+    except ValueError as exc:
+        raise ValueError("媒体链接端口无效") from exc
+    try:
+        literal = __import__("ipaddress").ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None and not _is_public_ip(str(literal)):
+        raise ValueError("拒绝访问内网地址")
+    try:
+        infos = socket.getaddrinfo(
+            host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
+        )
+    except OSError as exc:
+        raise ValueError(f"无法解析媒体主机：{exc}") from exc
+    pinned: list[dict[str, Any]] = []
+    seen: set[tuple[int, str, int]] = set()
+    for family, _socktype, proto, _, sockaddr in infos:
+        address = str(sockaddr[0])
+        if not _is_public_ip(address):
+            raise ValueError("拒绝访问内网地址")
+        key = (family, address, int(sockaddr[1]))
+        if key in seen:
+            continue
+        seen.add(key)
+        pinned.append(
+            {
+                "hostname": host,
+                "host": address,
+                "port": int(sockaddr[1]),
+                "family": family,
+                "proto": proto or socket.IPPROTO_TCP,
+                "flags": 0,
+            }
+        )
+    if not pinned:
+        raise ValueError("媒体主机没有可用公网地址")
+    return host, port, pinned
 
 
 async def assert_public_url(url: str) -> None:
@@ -211,33 +270,7 @@ async def assert_public_url(url: str) -> None:
     layer, so a public URL cannot bounce to an internal one.
     """
 
-    import ipaddress
-    import socket
-    from urllib.parse import urlsplit
-
-    parts = urlsplit(url)
-    if parts.scheme not in {"http", "https"}:
-        raise ValueError("只允许 http/https 媒体链接")
-    host = (parts.hostname or "").strip().lower()
-    if not host:
-        raise ValueError("媒体链接缺少主机名")
-    if host in _PRIVATE_HOSTS or host.endswith(_PRIVATE_SUFFIXES):
-        raise ValueError("拒绝访问内网或元数据地址")
-    try:
-        literal = ipaddress.ip_address(host)
-    except ValueError:
-        literal = None
-    if literal is not None and not _is_public_ip(str(literal)):
-        raise ValueError("拒绝访问内网地址")
-    try:
-        infos = await asyncio.to_thread(socket.getaddrinfo, host, None)
-    except OSError as exc:
-        raise ValueError(f"无法解析媒体主机：{exc}") from exc
-    addresses = {info[4][0] for info in infos if info[4]}
-    if not addresses:
-        raise ValueError("媒体主机没有可用地址")
-    if any(not _is_public_ip(address) for address in addresses):
-        raise ValueError("拒绝访问内网地址")
+    await asyncio.to_thread(_public_resolution, url)
 
 
 def _peername(response: Any) -> str:
@@ -260,29 +293,54 @@ def _peername(response: Any) -> str:
         return ""
 
 
+class _PinnedResolver:
+    """Small aiohttp resolver adapter backed by one validated DNS answer."""
+
+    def __init__(self, host: str, pinned: list[dict[str, Any]]) -> None:
+        self.host = host.rstrip(".").lower()
+        self.pinned = list(pinned)
+
+    async def resolve(
+        self, requested_host: str, requested_port: int = 0, family: int = 0
+    ) -> list[dict[str, Any]]:
+        if requested_host.rstrip(".").lower() != self.host:
+            raise OSError("请求主机与已校验主机不一致")
+        matches = [item for item in self.pinned if not family or item["family"] == family]
+        if not matches:
+            raise OSError("已校验主机没有匹配的地址族")
+        return matches
+
+    async def close(self) -> None:
+        return None
+
+
 async def _download(url: str) -> str:
     import aiohttp
-
-    await assert_public_url(url)
+    host, port, pinned = await asyncio.to_thread(_public_resolution, url)
     suffix = Path(url.split("?", 1)[0]).suffix[:8] or ".bin"
     handle = None
+
     try:
         import tempfile
 
         handle = tempfile.NamedTemporaryFile(
             "wb", prefix="mm-dl-", suffix=suffix, delete=False
         )
+        connector = aiohttp.TCPConnector(
+            resolver=_PinnedResolver(host, pinned),
+            use_dns_cache=False,
+            # trust_env=False prevents an unvalidated HTTP proxy from changing
+            # the destination after our pinned resolution.
+            ssl=None,
+        )
         async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=60)
+            timeout=aiohttp.ClientTimeout(total=60),
+            connector=connector,
+            trust_env=False,
         ) as session:
-            async with session.get(url, allow_redirects=False) as response:
+            async with session.get(url, allow_redirects=False, proxy=None) as response:
                 if response.status != 200:
                     raise ValueError(f"下载失败：HTTP {response.status}")
-                # The DNS answer checked above could have changed between the
-                # lookup and the connection, so verify the real peer too.
-                peer = _peername(response)
-                if peer and not _is_public_ip(peer):
-                    raise ValueError("拒绝访问内网地址（连接期校验失败）")
                 total = 0
                 async for chunk in response.content.iter_chunked(65536):
                     total += len(chunk)

@@ -19,6 +19,43 @@ DEFAULT_BASE = "https://generativelanguage.googleapis.com"
 KIND_LABELS = {"native": "原生视频", "frames": "抽帧精读"}
 
 
+def _safe_error(exc: BaseException, secret: str = "") -> str:
+    """Return a bounded error without credentials or request URLs."""
+
+    text = str(exc)[:240]
+    if secret:
+        text = text.replace(secret, "<redacted>")
+    return text
+
+
+def _model_output_text(payload: Any) -> str:
+    """Extract only the final ``model_output`` step from an Interaction.
+
+    Interactions ``steps`` is a heterogeneous timeline containing user_input,
+    thought, tool calls/results and model_output.  Concatenating all text-bearing
+    steps leaks that timeline to the caller.  The REST schema puts answer text
+    under ``model_output.content``; choose the last non-empty such step because
+    it is the final answer in a multi-step interaction.
+    """
+
+    candidates: list[str] = []
+    for step in (payload or {}).get("steps", []) or []:
+        if not isinstance(step, dict) or step.get("type") != "model_output":
+            continue
+        content = step.get("content") or []
+        if isinstance(content, dict):
+            content = [content]
+        parts = [
+            str(part.get("text") or "").strip()
+            for part in content
+            if isinstance(part, dict) and part.get("type", "text") == "text"
+        ]
+        text = "\n".join(part for part in parts if part).strip()
+        if text:
+            candidates.append(text)
+    return candidates[-1] if candidates else ""
+
+
 @dataclass(slots=True)
 class NativeResult:
     text: str
@@ -236,45 +273,73 @@ async def agentic_generate(
         "background": True,
     }
     deadline = asyncio.get_running_loop().time() + timeout
+    interaction_id = ""
     async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{base}/v1beta/interactions", headers=headers, json=body,
-            timeout=aiohttp.ClientTimeout(total=min(timeout, 120.0)),
-        ) as response:
-            if response.status >= 400:
-                detail = (await response.text())[:200]
-                raise RuntimeError(f"Gemini Agentic Video 启动失败：HTTP {response.status} {detail}")
-            payload = await response.json(content_type=None)
-        interaction_id = str((payload or {}).get("id") or "")
-        if not interaction_id:
-            raise RuntimeError("Gemini Agentic Video 未返回 interaction id")
-        while asyncio.get_running_loop().time() < deadline:
-            status = str((payload or {}).get("status") or "")
-            if status in {"completed", "succeeded", "success"}:
-                break
-            if status in {"failed", "cancelled", "expired"}:
-                raise RuntimeError(f"Gemini Agentic Video 失败：{status}")
-            await asyncio.sleep(min(2.0, max(0.0, deadline - asyncio.get_running_loop().time())))
-            async with session.get(
-                f"{base}/v1beta/interactions/{interaction_id}", headers=headers,
-                timeout=aiohttp.ClientTimeout(total=min(timeout, 60.0)),
+        try:
+            async with session.post(
+                f"{base}/v1beta/interactions", headers=headers, json=body,
+                timeout=aiohttp.ClientTimeout(total=min(timeout, 120.0)),
             ) as response:
                 if response.status >= 400:
-                    detail = (await response.text())[:200]
-                    raise RuntimeError(f"Gemini Agentic Video 状态查询失败：HTTP {response.status} {detail}")
+                    raise RuntimeError(f"Gemini Agentic Video 启动失败：HTTP {response.status}")
                 payload = await response.json(content_type=None)
-        else:
-            raise RuntimeError("Gemini Agentic Video 等待超时")
-    output = str((payload or {}).get("output_text") or "").strip()
-    if not output:
-        for step in (payload or {}).get("steps", []) or []:
-            content = step.get("content") or []
-            for part in content:
-                output += str(part.get("text") or "")
-        output = output.strip()
-    if not output:
-        raise RuntimeError("Gemini Agentic Video 返回空结果")
-    return output
+            interaction_id = str((payload or {}).get("id") or "")
+            if not interaction_id:
+                raise RuntimeError("Gemini Agentic Video 未返回 interaction id")
+            while asyncio.get_running_loop().time() < deadline:
+                status = str((payload or {}).get("status") or "")
+                if status in {"completed", "succeeded", "success", "incomplete"}:
+                    break
+                if status in {"failed", "cancelled", "expired"}:
+                    raise RuntimeError(f"Gemini Agentic Video 失败：{status}")
+                await asyncio.sleep(min(2.0, max(0.0, deadline - asyncio.get_running_loop().time())))
+                async with session.get(
+                    f"{base}/v1beta/interactions/{interaction_id}", headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=min(timeout, 60.0)),
+                ) as response:
+                    if response.status >= 400:
+                        raise RuntimeError(f"Gemini Agentic Video 状态查询失败：HTTP {response.status}")
+                    payload = await response.json(content_type=None)
+            else:
+                raise RuntimeError("Gemini Agentic Video 等待超时")
+            output = _model_output_text(payload)
+            if not output:
+                raise RuntimeError("Gemini Agentic Video 返回空的 model_output")
+            return output
+        except asyncio.CancelledError:
+            if interaction_id:
+                await cancel_interaction(interaction_id, api_key=api_key, base=base)
+            raise
+        except Exception:
+            # Failure/timeout paths also cancel the background interaction so a
+            # remote job cannot continue after the local request has ended.
+            if interaction_id:
+                await cancel_interaction(interaction_id, api_key=api_key, base=base)
+            raise
+
+
+async def cancel_interaction(
+    interaction_id: str, *, api_key: str, base: str = DEFAULT_BASE
+) -> None:
+    """Best-effort cancellation for an abandoned background interaction."""
+
+    if not interaction_id:
+        return
+    try:
+        import aiohttp
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{base}/v1beta/interactions/{interaction_id}/cancel",
+                headers={"x-goog-api-key": api_key},
+                timeout=aiohttp.ClientTimeout(total=20),
+            ) as response:
+                if response.status >= 400:
+                    logger.debug(
+                        "Decision Engine 取消 Gemini Interaction 失败：HTTP %s", response.status
+                    )
+    except Exception as exc:  # pragma: no cover - cleanup must never raise
+        logger.debug("Decision Engine 取消 Gemini Interaction 异常：%s", _safe_error(exc, api_key))
 
 
 async def delete_file(name: str, *, api_key: str, base: str = DEFAULT_BASE) -> None:
@@ -345,8 +410,9 @@ async def analyze(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.info("Decision Engine 原生视频理解失败，将回退抽帧：%s", str(exc)[:160])
-        return NativeResult(text="", route="frames", error=str(exc)[:200])
+        detail = _safe_error(exc, key)
+        logger.info("Decision Engine 原生视频理解失败，将回退抽帧：%s", detail)
+        return NativeResult(text="", route="frames", error=detail)
     finally:
         if name:
             await delete_file(name, api_key=key, base=base)

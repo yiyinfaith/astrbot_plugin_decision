@@ -16,6 +16,7 @@ from tests.personal_network._astrbot_stub import install  # noqa: E402
 
 install()
 
+from decision.multimodal.models import MediaRef  # noqa: E402
 from decision.multimodal.runtime import MultimodalRuntime  # noqa: E402
 
 
@@ -127,6 +128,101 @@ async def test_auto_understanding_skipped_when_scope_disallows(tmp_path):
     assert provider.calls == []
     assert await runtime.cache.get(refs[0].content_key) is None
     await runtime.terminate()
+
+
+@pytest.mark.asyncio
+async def test_auto_off_still_indexes_media_for_tool_call(tmp_path):
+    provider = FakeProvider()
+    runtime = build(tmp_path, provider, mm_auto_enabled=False)
+    await runtime.initialize()
+    refs = await runtime.observe(FakeEvent([FakeImage(png(tmp_path))]), auto_allowed=False)
+    assert refs and provider.calls == []
+    item, error = await runtime.understand_by_selector(
+        refs[0].umo, kind="image", selector="latest", instruction="请描述画面"
+    )
+    assert error == "" and item is not None and provider.calls
+    await runtime.terminate()
+
+
+@pytest.mark.asyncio
+async def test_generic_tool_instruction_reuses_auto_result(tmp_path):
+    provider = FakeProvider()
+    runtime = build(tmp_path, provider)
+    await runtime.initialize()
+    refs = await runtime.observe(FakeEvent([FakeImage(png(tmp_path))]), auto_allowed=True)
+    await asyncio.sleep(0.3)
+    assert len(provider.calls) == 1
+    item = await runtime.understand(refs[0], instruction="请描述这张图片的内容")
+    assert item.ok and len(provider.calls) == 1
+    await runtime.terminate()
+
+
+@pytest.mark.asyncio
+async def test_specific_followup_triggers_incremental_analysis(tmp_path):
+    provider = FakeProvider()
+    runtime = build(tmp_path, provider)
+    await runtime.initialize()
+    refs = await runtime.observe(FakeEvent([FakeImage(png(tmp_path))]), auto_allowed=True)
+    await asyncio.sleep(0.3)
+    assert len(provider.calls) == 1
+    item = await runtime.understand(refs[0], instruction="图中有多少个人？")
+    assert item.ok and len(provider.calls) == 2
+    await runtime.terminate()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_generic_tool_joins_auto_inflight(tmp_path):
+    provider = FakeProvider()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_chat(**kwargs):
+        provider.calls.append(kwargs)
+        started.set()
+        await release.wait()
+        return SimpleNamespace(completion_text="自动概览")
+
+    provider.text_chat = slow_chat
+    runtime = build(tmp_path, provider)
+    await runtime.initialize()
+    refs = await runtime.observe(FakeEvent([FakeImage(png(tmp_path))]), auto_allowed=False)
+    automatic = asyncio.create_task(runtime.understand(refs[0]))
+    await started.wait()
+    tool = asyncio.create_task(runtime.understand(refs[0], instruction="请描述画面"))
+    await asyncio.sleep(0)
+    assert len(provider.calls) == 1
+    release.set()
+    first, second = await asyncio.gather(automatic, tool)
+    assert first.summary == second.summary == "自动概览"
+    await runtime.terminate()
+
+
+@pytest.mark.asyncio
+async def test_target_isolation_prevents_wrong_region_reuse(tmp_path):
+    provider = FakeProvider()
+    runtime = build(tmp_path, provider)
+    await runtime.initialize()
+    source = png(tmp_path, "target.png")
+    first = MediaRef(
+        kind="image", reference=str(source), urn="u::target::0",
+        umo="aiocqhttp:GroupMessage:1", extra={"target": "page 1"}
+    )
+    second = MediaRef(
+        kind="image", reference=str(source), urn="u::target::0",
+        umo="aiocqhttp:GroupMessage:1", extra={"target": "page 2"}
+    )
+    await runtime.understand(first)
+    await runtime.understand(second)
+    assert len(provider.calls) == 2
+    await runtime.terminate()
+
+
+def test_local_media_version_changes_cache_identity(tmp_path):
+    path = png(tmp_path, "versioned.png")
+    ref = MediaRef(kind="image", reference=str(path), urn="u::v::0", umo="u")
+    first = ref.content_key
+    path.write_bytes(path.read_bytes() + b"changed")
+    assert ref.content_key != first
 
 
 @pytest.mark.asyncio

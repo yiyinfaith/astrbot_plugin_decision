@@ -977,7 +977,7 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     assert "skill_decision_enabled" in page
     assert "skill_filter_enabled" in page
     assert "Tool/MCP/Skill/SubAgent" in page
-    assert "<h2>输入增强</h2>" in page
+    assert "<h2>对话流分析</h2>" in page
     assert "conversation_flow_analysis_enabled" in page
     assert "conversation_flow_window" in page
     for field in (

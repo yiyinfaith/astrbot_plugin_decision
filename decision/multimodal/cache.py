@@ -178,7 +178,9 @@ class MultimodalCache:
         rows.sort(key=lambda item: item.created_at or 0, reverse=True)
         return rows[:limit]
 
-    async def get_for_media(self, umo: str, media_key: str) -> Understanding | None:
+    async def get_for_media(
+        self, umo: str, media_key: str, *, target: str | None = None
+    ) -> Understanding | None:
         """Newest cached analysis of one media item inside one conversation."""
 
         async with self._lock:
@@ -189,12 +191,39 @@ class MultimodalCache:
                 for item in self._entries.values()
                 if item.umo == umo
                 and item.media_key == media_key
+                and (
+                    target is None
+                    or str((item.meta or {}).get("target") or "") == str(target or "")
+                )
                 and (not item.expires_at or item.expires_at >= now)
             ]
         if not rows:
             return None
         rows.sort(key=lambda item: item.created_at or 0, reverse=True)
         return rows[0]
+
+    async def analyses_for_media(
+        self, umo: str, media_key: str, *, target: str | None = None
+    ) -> list[Understanding]:
+        """Return successful analyses for one media/version in newest-first order."""
+
+        async with self._lock:
+            await self.load()
+            now = time.time()
+            rows = [
+                item
+                for item in self._entries.values()
+                if item.umo == umo
+                and item.media_key == media_key
+                and item.ok
+                and (not item.expires_at or item.expires_at >= now)
+                and (
+                    target is None
+                    or str((item.meta or {}).get("target") or "") == str(target or "")
+                )
+            ]
+        rows.sort(key=lambda item: item.created_at or 0, reverse=True)
+        return rows
 
     async def drop_media(self, umo: str, media_key: str) -> int:
         """Invalidate every cached analysis of one media item."""

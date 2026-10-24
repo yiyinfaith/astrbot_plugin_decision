@@ -81,6 +81,7 @@ class MultimodalRuntime:
         self._by_urn: dict[str, MediaRef] = {}
         # In-flight understanding per cache key, so N concurrent misses cost one call.
         self._inflight: dict[str, asyncio.Future] = {}
+        self._inflight_specs: dict[str, tuple[str, str, str, bool, str]] = {}
         # Directories kept alive only while a provider call still references
         # their frames; swept on every new GIF and on terminate().
         self._gif_dirs: list[tuple[float, Path]] = []
@@ -120,6 +121,7 @@ class MultimodalRuntime:
         self._by_urn.clear()
         self._rate.clear()
         self._inflight.clear()
+        self._inflight_specs.clear()
         for _, directory in self._gif_dirs:
             preprocess.cleanup_dir(directory)
         self._gif_dirs.clear()
@@ -210,12 +212,108 @@ class MultimodalRuntime:
 
     # ----------------------------------------------------------- understand
     @staticmethod
+    def _target(ref: MediaRef) -> str:
+        return str((ref.extra or {}).get("target") or "").strip()
+
+    @staticmethod
+    def _instruction_terms(instruction: str) -> list[str]:
+        """Extract useful words for conservative cache sufficiency checks."""
+
+        import re
+
+        text = str(instruction or "").strip().lower()
+        terms = re.findall(r"[a-z0-9_]{3,}|[\u4e00-\u9fff]{2,}", text)
+        stop = {
+            "请问",
+            "请你",
+            "帮我",
+            "一下",
+            "这个",
+            "内容",
+            "进行",
+            "分析",
+            "告诉我",
+            "看看",
+            "描述",
+            "概括",
+            "总结",
+            "理解",
+            "画面",
+            "图片",
+            "视频",
+            "音频",
+            "文档",
+            "文件",
+        }
+        return [term for term in terms if term not in stop]
+
+    @classmethod
+    def _cache_satisfies(
+        cls,
+        item: Understanding,
+        instruction: str,
+        detail: bool,
+        target: str,
+        route_signature: str,
+    ) -> bool:
+        meta = item.meta or {}
+        if str(meta.get("target") or "") != target:
+            return False
+        if str(meta.get("route_signature") or "") != route_signature:
+            return False
+        if detail and not bool(meta.get("detail", False)):
+            return False
+        query = str(instruction or "").strip().lower()
+        if not query:
+            return True
+        previous = str(meta.get("instruction") or "").strip().lower()
+        if previous == query:
+            return True
+        searchable = f"{item.summary}\n{item.detail}".lower()
+        terms = cls._instruction_terms(query)
+        if terms and all(term in searchable for term in terms):
+            return True
+        # Short, generic follow-up requests ask for the same overview in new
+        # words.  Specific questions fall through to an incremental provider
+        # call so the missing fact is actually obtained and cached.
+        markers = (
+            "多少", "几", "是否", "有没有", "哪一个", "哪个", "文字", "数字",
+            "时间", "地点", "颜色", "数量", "公式", "坐标", "逐页", "逐帧",
+        )
+        if len(query) <= 40 and not any(marker in query for marker in markers):
+            return True
+        return False
+
+    @classmethod
+    def _inflight_satisfies(
+        cls,
+        spec: tuple[str, str, str, bool, str],
+        *,
+        media_key: str,
+        provider_key: str,
+        instruction: str,
+        detail: bool,
+        target: str,
+    ) -> bool:
+        spec_media, spec_provider, spec_instruction, spec_detail, spec_target = spec
+        if (spec_media, spec_provider, spec_target) != (media_key, provider_key, target):
+            return False
+        if detail and not spec_detail:
+            return False
+        if not instruction or not spec_instruction:
+            # A generic automatic overview can satisfy a generic tool request;
+            # a specific question must start its own incremental read.
+            return not cls._instruction_terms(instruction)
+        return spec_instruction.strip().lower() == instruction.strip().lower()
+
+    @staticmethod
     def cache_identity(
         ref: MediaRef,
         provider_id: str,
         instruction: str,
         detail: bool,
         route_signature: str = "",
+        target: str = "",
     ) -> str:
         """Cache identity: the media plus everything that shapes the answer."""
 
@@ -229,6 +327,7 @@ class MultimodalRuntime:
                 "detail" if detail else "normal",
                 (instruction or "").strip(),
                 str(route_signature or ""),
+                str(target or "").strip(),
             ]
         )
         return hashlib.sha256(material.encode()).hexdigest()[:40]
@@ -246,16 +345,18 @@ class MultimodalRuntime:
         kind = ref.kind
         choice, error = adapters.pick_provider(self._context(), self._settings, kind)
         signature = self._route_signature(kind)
+        target = self._target(ref)
+        provider_key = f"{choice.provider_id}:{choice.model}" if choice is not None else error
         key = (
             self.cache_identity(
-                ref,
-                f"{choice.provider_id}:{choice.model}",
+                ref, provider_key,
                 instruction,
                 detail,
                 signature,
+                target,
             )
             if choice is not None
-            else self.cache_identity(ref, error, instruction, detail, signature)
+            else self.cache_identity(ref, error, instruction, detail, signature, target)
         )
         if force:
             return await self._understand_uncached(
@@ -264,10 +365,33 @@ class MultimodalRuntime:
         cached = await self.cache.get(key)
         if cached is not None and cached.umo == ref.umo:
             return cached
+        # Reuse an automatic overview for a differently-worded generic tool
+        # request.  Target/provider/model/version remain strict boundaries.
+        reusable = await self.cache.analyses_for_media(ref.umo, ref.content_key, target=target)
+        for candidate in reusable:
+            if candidate.provider_id != getattr(choice, "provider_id", ""):
+                continue
+            if candidate.model != getattr(choice, "model", ""):
+                continue
+            if self._cache_satisfies(candidate, instruction, detail, target, signature):
+                return candidate
         # SingleFlight: concurrent misses for the same media share one paid call.
         inflight = self._inflight.get(key)
         if inflight is not None:
             return await asyncio.shield(inflight)
+        for inflight_key, spec in list(self._inflight_specs.items()):
+            if not self._inflight_satisfies(
+                spec,
+                media_key=ref.content_key,
+                provider_key=provider_key,
+                instruction=instruction,
+                detail=detail,
+                target=target,
+            ):
+                continue
+            shared = self._inflight.get(inflight_key)
+            if shared is not None:
+                return await asyncio.shield(shared)
         flight: asyncio.Future = asyncio.get_running_loop().create_future()
         # A producer can fail before any waiter joins. Consume that exception
         # here while retaining it for tasks awaiting the shared Future.
@@ -275,6 +399,13 @@ class MultimodalRuntime:
             lambda done: done.exception() if not done.cancelled() else None
         )
         self._inflight[key] = flight
+        self._inflight_specs[key] = (
+            ref.content_key,
+            provider_key,
+            str(instruction or ""),
+            bool(detail),
+            target,
+        )
         try:
             item = await self._understand_uncached(
                 ref, key, choice, error, instruction, detail
@@ -289,6 +420,7 @@ class MultimodalRuntime:
             return item
         finally:
             self._inflight.pop(key, None)
+            self._inflight_specs.pop(key, None)
 
     async def _understand_uncached(
         self,
@@ -332,6 +464,15 @@ class MultimodalRuntime:
                     name=ref.name,
                     created_at=time.time(),
                     meta={**meta, "attempts": attempt + 1},
+                )
+                item.meta.update(
+                    {
+                        "instruction": str(instruction or "").strip(),
+                        "detail": bool(detail),
+                        "target": self._target(ref),
+                        "route_signature": self._route_signature(kind),
+                        "media_version": ref.content_key,
+                    }
                 )
                 if not item.summary:
                     raise ValueError("模型返回了空结果")
@@ -382,6 +523,16 @@ class MultimodalRuntime:
         """Cache-affecting route settings, so options never share a result."""
 
         settings = self._settings
+        if kind == "image":
+            return (
+                f"image:edge={settings.int('mm_image_max_edge')}:"
+                f"frames={settings.int('mm_gif_max_frames')}:pixels={settings.int('mm_gif_max_pixels')}"
+            )
+        if kind == "audio":
+            return (
+                f"audio:max={settings.int('mm_audio_max_seconds')}:"
+                f"segment={settings.int('mm_audio_segment_seconds')}"
+            )
         if kind == "video":
             return (
                 f"video:{settings.text('mm_video_strategy') or 'auto'}:"
@@ -391,10 +542,13 @@ class MultimodalRuntime:
                 f"segments={settings.int('mm_video_agentic_segments')}"
             )
         if kind == "file":
-            return "file:{ocr}:{engine}:{pages}".format(
+            return "file:enabled={enabled}:ocr={ocr}:{engine}:{pages}:office={office}:office_pages={office_pages}".format(
+                enabled=settings.bool("mm_file_ocr"),
                 ocr=settings.text("mm_ocr_strategy") or "auto",
                 engine=settings.text("mm_ocr_engine") or "auto",
                 pages=settings.int("mm_file_ocr_max_pages"),
+                office=settings.text("mm_office_render") or "auto",
+                office_pages=settings.int("mm_office_render_max_pages"),
             )
         return ""
 
@@ -636,14 +790,20 @@ class MultimodalRuntime:
             )
             outline = index.outline()
             visual_paths: list[str] = []
+            visual_notes: list[str] = []
             if adapters.supports_modality(choice.provider, "image"):
-                visual_paths = await asyncio.to_thread(
-                    self._materialize_office_visuals, index, workdir, target
+                visual_paths, visual_notes = await asyncio.to_thread(
+                    self._materialize_office_visuals,
+                    index,
+                    workdir,
+                    target,
+                    path,
+                    self._settings,
                 )
             visual_note = (
-                f"\n已提取 {len(visual_paths)} 个嵌入图片/图表视觉材料，请结合图像判断。"
+                f"\n已附加 {len(visual_paths)} 个 Office 视觉材料（含整页渲染图），请结合图像判断。"
                 if visual_paths
-                else ""
+                else "\n".join(visual_notes)
             )
             answer = await adapters.call_provider(
                 choice.provider,
@@ -662,6 +822,7 @@ class MultimodalRuntime:
                 "target": target,
                 "format": index.kind,
                 "visuals": len(visual_paths),
+                "visual_notes": visual_notes,
             }
 
         try:
@@ -711,8 +872,14 @@ class MultimodalRuntime:
         return answer, {"chars": len(prepared.text), "notes": prepared.notes}
 
     @staticmethod
-    def _materialize_office_visuals(index: Any, workdir: Path, target: str = "") -> list[str]:
-        """Write embedded Office image bytes to request-scoped files."""
+    def _materialize_office_visuals(
+        index: Any,
+        workdir: Path,
+        target: str = "",
+        source: Path | None = None,
+        settings: MultimodalSettings | None = None,
+    ) -> tuple[list[str], list[str]]:
+        """Materialize full Office pages plus embedded assets in request scope."""
 
         # Images are currently associated with the document/slide as a whole;
         # for a targeted slide, use its ordinal to keep the request bounded.
@@ -726,6 +893,27 @@ class MultimodalRuntime:
             if match:
                 selected_number = int(match.group(1))
         paths: list[str] = []
+        notes: list[str] = []
+        mode = (settings.text("mm_office_render") if settings else "auto").lower()
+        should_render = mode not in {"never", "off", "false"}
+        if mode == "auto" and index.kind == "docx" and not target:
+            should_render = False
+        if should_render and source is not None:
+            try:
+                from . import office
+
+                paths.extend(
+                    office.render_pages(
+                        source,
+                        workdir,
+                        target=target,
+                        max_pages=settings.int("mm_office_render_max_pages") if settings else 12,
+                        timeout=settings.int("mm_office_render_timeout_seconds") if settings else 90,
+                    )
+                )
+            except Exception as exc:
+                notes.append(f"整页视觉渲染不可用，已安全回退到结构化文本/内嵌资源：{str(exc)[:180]}")
+                logger.info("Decision Engine Office 整页渲染跳过：%s", str(exc)[:180])
         for index_number, visual in enumerate((index.meta or {}).get("images", [])[:40]):
             if not isinstance(visual, dict) or not visual.get("data"):
                 continue
@@ -742,21 +930,32 @@ class MultimodalRuntime:
             target_path = workdir / f"office-{index_number}{suffix}"
             target_path.write_bytes(bytes(visual["data"]))
             paths.append(str(target_path))
-        return paths
+        return paths, notes
 
     @staticmethod
     def _pdf_sparse_pages(path: Path) -> list[int]:
-        """Return zero-based pages with little/no text for hybrid-PDF OCR."""
+        """Return pages needing OCR, including image regions on text-heavy pages."""
 
         try:
-            from pypdf import PdfReader
+            import fitz
 
-            reader = PdfReader(str(path))
-            return [
-                number
-                for number, page in enumerate(reader.pages)
-                if len((page.extract_text() or "").strip()) < 40
-            ]
+            pages: list[int] = []
+            with fitz.open(str(path)) as document:
+                for number, page in enumerate(document):
+                    text = (page.get_text("text") or "").strip()
+                    image_needs_ocr = False
+                    for image in page.get_images(full=True):
+                        try:
+                            width, height = int(image[2]), int(image[3])
+                            rects = page.get_image_rects(image[0])
+                            image_needs_ocr |= width >= 80 and height >= 40 and any(
+                                rect.get_area() >= 2_000 for rect in rects
+                            )
+                        except Exception:
+                            image_needs_ocr = True
+                    if len(text) < 40 or image_needs_ocr:
+                        pages.append(number)
+            return pages
         except Exception:
             return []
 
@@ -794,14 +993,24 @@ class MultimodalRuntime:
         images = await asyncio.to_thread(
             preprocess.pdf_page_images, path, self._settings, workdir, selected_pages
         )
+        # A hybrid page can have a perfectly healthy text layer and still hide
+        # unique text in a scanned image.  Add bounded crops of those image
+        # regions so OCR/vision can inspect the region without relying on the
+        # page-wide text density heuristic.
+        region_images = await asyncio.to_thread(
+            self._pdf_image_regions, path, workdir, selected_pages
+        )
+        if region_images:
+            images.extend(region_images)
         page_numbers = self._pdf_image_page_numbers(images)
         local_text, engine_note = await self._local_ocr_pages(
             images, strategy, page_numbers=page_numbers
         )
         if local_text and strategy == "local_only":
-            combined_local = local_text
-            if fallback is not None and getattr(fallback, "text", ""):
-                combined_local = f"已有文本层：\n{fallback.text}\n\n扫描页本地 OCR：\n{local_text}"
+            combined_local = self._join_unique(
+                f"已有文本层：\n{fallback.text}" if fallback is not None else "",
+                f"扫描页本地 OCR：\n{local_text}",
+            )
             return combined_local, {
                 "mode": "local_ocr",
                 "engine": engine_note or self._settings.text("mm_ocr_engine"),
@@ -832,11 +1041,11 @@ class MultimodalRuntime:
             model=choice.model or None,
             timeout=float(self._settings.int("mm_timeout_seconds")),
         )
-        combined = answer.strip()
-        if local_text:
-            combined = f"本地 OCR：\n{local_text}\n\n视觉模型校对：\n{combined}"
-        if fallback is not None and getattr(fallback, "text", ""):
-            combined = f"已有文本层：\n{fallback.text}\n\n{combined}"
+        combined = self._join_unique(
+            f"已有文本层：\n{fallback.text}" if fallback is not None else "",
+            f"本地 OCR：\n{local_text}" if local_text else "",
+            f"视觉模型校对：\n{answer.strip()}",
+        )
         return combined, {
             "pages": len(images),
             "page_numbers": page_numbers,
@@ -855,6 +1064,72 @@ class MultimodalRuntime:
             match = re.search(r"page-(\d+)", Path(image).stem, re.I)
             numbers.append(int(match.group(1)) if match else order)
         return numbers
+
+    @staticmethod
+    def _join_unique(*sources: str) -> str:
+        """Join OCR/text/vision sources while dropping repeated lines."""
+
+        import re
+
+        result: list[str] = []
+        seen: set[str] = set()
+        for source in sources:
+            for raw in str(source or "").splitlines():
+                line = raw.strip()
+                if not line:
+                    continue
+                key = re.sub(r"\s+", " ", line).casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                result.append(line)
+        return "\n".join(result)
+
+    @staticmethod
+    def _pdf_image_regions(
+        path: Path,
+        workdir: Path,
+        pages: list[int] | None = None,
+    ) -> list[str]:
+        """Render bounded crops for text-bearing images on mixed PDF pages."""
+
+        try:
+            import fitz
+        except ImportError:
+            return []
+        selected = set(pages or [])
+        rendered: list[str] = []
+        try:
+            with fitz.open(str(path)) as document:
+                for page_number, page in enumerate(document):
+                    if selected and page_number not in selected:
+                        continue
+                    # Sparse pages are already rendered whole; crops are for a
+                    # text-heavy page where a scan is otherwise easy to miss.
+                    if len((page.get_text("text") or "").strip()) < 40:
+                        continue
+                    for order, image in enumerate(page.get_images(full=True)[:8], 1):
+                        try:
+                            width, height = int(image[2]), int(image[3])
+                            if width < 80 or height < 40:
+                                continue
+                            rects = page.get_image_rects(image[0])
+                            if not rects:
+                                continue
+                            clip = rects[0] & page.rect
+                            if clip.is_empty or clip.get_area() < 2_000:
+                                continue
+                            pixmap = page.get_pixmap(
+                                matrix=fitz.Matrix(2.0, 2.0), clip=clip, alpha=False
+                            )
+                            target = workdir / f"page-{page_number + 1:02d}-image-{order}.png"
+                            pixmap.save(str(target))
+                            rendered.append(str(target))
+                        except Exception:
+                            continue
+            return rendered
+        except Exception:
+            return []
 
     async def _local_ocr_pages(
         self,
@@ -1012,7 +1287,7 @@ class MultimodalRuntime:
             for key in keys:
                 if key in found:
                     continue
-                item = await self.cache.get_for_media(umo, key)
+                item = await self.cache.get_for_media(umo, key, target="")
                 if item is not None:
                     found[key] = item
             if len(found) >= len(keys) or time.time() >= deadline:

@@ -7,6 +7,10 @@ here executes macros, follows external links or evaluates formulas.
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -231,6 +235,9 @@ def _cell_text(value: Any) -> str:
     return str(value).strip()
 
 
+_MAX_INDEX_ROWS = 100_000
+
+
 def _xlsx(path: Path, limit_chars: int, *, max_rows: int | None = None) -> DocumentIndex:
     from openpyxl import load_workbook
     from openpyxl.utils import get_column_letter
@@ -249,17 +256,22 @@ def _xlsx(path: Path, limit_chars: int, *, max_rows: int | None = None) -> Docum
             header: list[str] = []
             merged = [str(rng) for rng in sheet.merged_cells.ranges][:40]
             formula_cells = []
-            row_limit = sheet.max_row if max_rows is None else min(sheet.max_row, max_rows)
+            row_limit = min(
+                sheet.max_row,
+                max_rows if max_rows is not None else _MAX_INDEX_ROWS,
+            )
             for row_number, row in enumerate(
                 sheet.iter_rows(min_row=1, max_row=row_limit), 1
             ):
                 cells = [_cell_text(cell.value) for cell in row]
-                if not any(cells):
-                    continue
                 if not header:
-                    header = [c for c in cells if c]
+                    header = list(cells)
                 coordinate = f"第 {row_number} 行"
-                rows.append(f"{coordinate}: " + " | ".join(cells))
+                hidden = " [隐藏]" if sheet.row_dimensions[row_number].hidden else ""
+                # Keep one record per physical Excel row, including blank rows.
+                # The coordinate is part of the record so every targeted read
+                # remains correct even with sparse sheets.
+                rows.append(f"{coordinate}{hidden}: " + " | ".join(cells))
                 if formula_book is not None:
                     try:
                         source_row = formula_book[sheet.title][row_number]
@@ -287,6 +299,7 @@ def _xlsx(path: Path, limit_chars: int, *, max_rows: int | None = None) -> Docum
                     "columns": sheet.max_column,
                     "header": header,
                     "rows_data": rows,
+                    "truncated": row_limit < sheet.max_row,
                 }
             )
     finally:
@@ -312,6 +325,118 @@ def parse_document(path: Path, *, limit_chars: int = 12_000) -> DocumentIndex:
 
 def is_office(path: Path) -> bool:
     return path.suffix.lower() in {".docx", ".pptx", ".xlsx", ".xlsm"}
+
+
+def _page_selection(target: str, page_count: int) -> list[int]:
+    """Return zero-based page numbers selected by a slide/page target."""
+
+    import re
+
+    value = str(target or "").strip().lower()
+    match = re.search(r"(?:slide|幻灯片|page|页|第)\s*(\d+)(?:\s*[-~到]\s*(\d+))?", value)
+    if not match and value.isdigit():
+        match = re.match(r"(\d+)", value)
+    if not match:
+        return list(range(page_count))
+    start = max(1, int(match.group(1)))
+    end_group = match.group(2) if (match.lastindex or 0) >= 2 else None
+    end = max(start, int(end_group or start))
+    return [number - 1 for number in range(start, min(end, page_count) + 1)]
+
+
+def render_pages(
+    path: Path,
+    workdir: Path,
+    *,
+    target: str = "",
+    max_pages: int = 12,
+    timeout: float = 90.0,
+) -> list[str]:
+    """Render complete DOCX/PPTX pages through a sandboxed LibreOffice job.
+
+    The conversion happens in a request-scoped profile and temporary directory;
+    macros, user profiles, network proxies and external state are not reused.
+    PyMuPDF then turns the resulting PDF pages into full-page PNGs, preserving
+    shapes, arrows, charts, text and relative layout for a vision provider.
+    """
+
+    if path.suffix.lower() not in {".docx", ".pptx"}:
+        return []
+    executable = shutil.which("libreoffice") or shutil.which("soffice")
+    if not executable:
+        raise RuntimeError("缺少 LibreOffice/soffice，无法进行 Office 整页视觉渲染")
+    try:
+        import fitz  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("缺少 PyMuPDF，无法读取 LibreOffice 的整页渲染结果") from exc
+
+    job = Path(tempfile.mkdtemp(prefix="office-render-", dir=str(workdir)))
+    profile = job / "profile"
+    output = job / "output"
+    profile.mkdir()
+    output.mkdir()
+    env = os.environ.copy()
+    env.update({"HOME": str(job), "USERPROFILE": str(job), "TMPDIR": str(job)})
+    command = [
+        executable,
+        "--headless",
+        "--nologo",
+        "--nodefault",
+        "--norestore",
+        "--nolockcheck",
+        f"-env:UserInstallation={profile.as_uri()}",
+        "--convert-to",
+        "pdf",
+        "--outdir",
+        str(output),
+        str(path),
+    ]
+
+    def _limits() -> None:
+        # Apply hard process limits where the host supports them.  Windows
+        # safely falls back to the subprocess timeout.
+        try:
+            import resource
+
+            resource.setrlimit(resource.RLIMIT_CPU, (max(5, int(timeout)), max(5, int(timeout) + 2)))
+            memory = 1024 * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
+        except (ImportError, OSError, ValueError):
+            return None
+
+    try:
+        subprocess.run(
+            command,
+            capture_output=True,
+            check=True,
+            timeout=timeout,
+            env=env,
+            cwd=str(job),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            preexec_fn=_limits if os.name == "posix" else None,
+        )
+        pdfs = list(output.glob("*.pdf"))
+        if not pdfs:
+            raise RuntimeError("LibreOffice 未生成 PDF 页面")
+        rendered: list[str] = []
+        with fitz.open(str(pdfs[0])) as document:
+            wanted = _page_selection(target, document.page_count)
+            for number in wanted[: max(1, int(max_pages))]:
+                if number < 0 or number >= document.page_count:
+                    continue
+                page = document.load_page(number)
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+                target_path = workdir / f"office-page-{number + 1:02d}.png"
+                pixmap.save(str(target_path))
+                rendered.append(str(target_path))
+        return rendered
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("Office 整页渲染超时") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or b"").decode("utf-8", "replace")[-400:]
+        raise RuntimeError(f"LibreOffice 整页渲染失败：{detail}") from exc
+    finally:
+        shutil.rmtree(job, ignore_errors=True)
 
 
 def read_target(index: DocumentIndex, target: str, *, limit_chars: int = 12_000) -> str:
@@ -349,7 +474,16 @@ def read_target(index: DocumentIndex, target: str, *, limit_chars: int = 12_000)
             if candidates:
                 blocks = []
                 for block in candidates:
-                    rows = list(block.get("rows_data", []))[max(0, start - 1) : end]
+                    # rows_data contains physical row coordinates, so an empty
+                    # row never shifts a requested Excel range.
+                    rows = []
+                    for row in block.get("rows_data", []):
+                        row_match = re.match(r"第\s*(\d+)\s*行(?:\s*\[隐藏\])?:\s*(.*)$", row)
+                        if not row_match:
+                            continue
+                        row_number = int(row_match.group(1))
+                        if start <= row_number <= end:
+                            rows.append(row)
                     if start_col > 1 or end_col > 1:
                         import re as _re
 

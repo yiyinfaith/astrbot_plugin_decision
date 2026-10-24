@@ -346,6 +346,34 @@ async def test_host_resolving_to_a_private_ip_is_rejected(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_download_uses_one_pinned_dns_answer_before_http(monkeypatch):
+    """A second DNS answer cannot redirect the connector to an attacker host."""
+
+    import socket
+
+    calls = []
+
+    def first_only(*args, **kwargs):
+        calls.append(1)
+        # A public address is validated once.  If the implementation performs
+        # another lookup immediately before connecting, it would see the
+        # private address and this test catches that unsafe path.
+        if len(calls) == 1:
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.9", 80))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", first_only)
+    host, port, pinned = await asyncio.to_thread(
+        media._public_resolution, "http://rebind.example/a.gif"
+    )
+    resolver = media._PinnedResolver(host, pinned)
+    resolved = await resolver.resolve("rebind.example", port)
+    assert len(calls) == 1
+    assert resolved[0]["host"] == "93.184.216.34"
+    assert all(media._is_public_ip(item["host"]) for item in resolved)
+
+
+@pytest.mark.asyncio
 async def test_ffmpeg_cancellation_terminates_child_process(monkeypatch):
     """A cancelled media request must not leave an encoder behind."""
 

@@ -67,6 +67,11 @@ MULTIMODAL_DEFAULTS: dict[str, Any] = {
     "mm_audio_segment_seconds": 120,
     # --- file --------------------------------------------------------------
     "mm_file_max_chars": 12_000,
+    # auto: render PPTX pages and only explicitly targeted DOCX pages;
+    # always: render every DOCX/PPTX request; never: embedded assets/text only.
+    "mm_office_render": "auto",
+    "mm_office_render_max_pages": 12,
+    "mm_office_render_timeout_seconds": 90,
     # Scanned pages are rendered and read by the vision model. Keeping this
     # explicit means a plain text PDF never costs an image request.
     "mm_file_ocr": True,
@@ -116,6 +121,8 @@ INT_BOUNDS: dict[str, tuple[int, int]] = {
     "mm_audio_segment_seconds": (20, 600),
     "mm_file_max_chars": (500, 200_000),
     "mm_file_ocr_max_pages": (1, 30),
+    "mm_office_render_max_pages": (1, 30),
+    "mm_office_render_timeout_seconds": (10, 300),
     "mm_ocr_timeout_seconds": (10, 600),
     "mm_file_chunk_chars": (500, 100_000),
     "mm_timeout_seconds": (10, 900),

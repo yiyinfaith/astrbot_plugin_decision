@@ -156,6 +156,28 @@ def test_xlsx_indexes_rows_beyond_400_and_supports_range_reads(tmp_path):
     assert "row-400" not in window and "row-406" not in window
 
 
+def test_xlsx_ranges_use_physical_rows_when_blank_rows_are_present(tmp_path):
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "稀疏"
+    sheet["A1"] = "标题"
+    sheet["C3"] = "row-3"
+    sheet["B100"] = "row-100"
+    sheet["D400"] = "row-400"
+    sheet["A401"] = "row-401"
+    sheet.row_dimensions[400].hidden = True
+    path = tmp_path / "sparse.xlsx"
+    workbook.save(path)
+
+    index = office.parse_document(path)
+    window = office.read_target(index, "稀疏!A398:D401")
+    assert "第 398 行" in window and "第 399 行" in window
+    assert "第 400 行 [隐藏]" in window and "row-400" in window
+    assert "row-401" in window and "第 397 行" not in window
+
+
 def test_office_indexes_embedded_docx_image_bytes(tmp_path):
     import io
 
@@ -173,6 +195,57 @@ def test_office_indexes_embedded_docx_image_bytes(tmp_path):
     index = office.parse_document(path)
     visuals = index.meta.get("images")
     assert visuals and visuals[0]["data"].startswith(b"\x89PNG")
+
+
+def test_office_render_pages_produces_full_page_visual(monkeypatch, tmp_path, pptx_file):
+    """The renderer sends a complete slide page, not only embedded pictures."""
+
+    import fitz
+
+    monkeypatch.setattr(office.shutil, "which", lambda name: "fake-soffice")
+
+    def fake_run(command, **kwargs):
+        output = Path(command[command.index("--outdir") + 1])
+        output.mkdir(parents=True, exist_ok=True)
+        document = fitz.open()
+        document.new_page(width=400, height=300)
+        page = document.new_page(width=400, height=300)
+        page.insert_text((30, 60), "FULL SLIDE ARROW AND SHAPE LAYOUT")
+        document.save(str(output / "a.pdf"))
+        document.close()
+
+    monkeypatch.setattr(office.subprocess, "run", fake_run)
+    workdir = tmp_path / "request"
+    workdir.mkdir()
+    images = office.render_pages(pptx_file, workdir, target="2", max_pages=2)
+    assert len(images) == 1
+    assert Path(images[0]).name == "office-page-02.png"
+    assert Path(images[0]).stat().st_size > 100
+
+
+def test_hybrid_pdf_with_text_and_scan_image_is_marked_for_ocr(tmp_path):
+    import fitz
+    from PIL import Image, ImageDraw
+
+    image_path = tmp_path / "scan.png"
+    image = Image.new("RGB", (500, 160), "white")
+    ImageDraw.Draw(image).text((20, 50), "UNIQUE SCANNED LABEL", fill="black")
+    image.save(image_path)
+    pdf_path = tmp_path / "hybrid.pdf"
+    document = fitz.open()
+    page = document.new_page(width=600, height=800)
+    page.insert_textbox((30, 30, 560, 300), "normal text " * 80)
+    page.insert_image(fitz.Rect(60, 350, 540, 510), filename=str(image_path))
+    document.save(str(pdf_path))
+    document.close()
+
+    from decision.multimodal.runtime import MultimodalRuntime
+
+    assert MultimodalRuntime._pdf_sparse_pages(pdf_path) == [0]
+    workdir = tmp_path / "regions"
+    workdir.mkdir()
+    regions = MultimodalRuntime._pdf_image_regions(pdf_path, workdir, [0])
+    assert regions and Path(regions[0]).exists()
 
 
 def test_office_rejects_other_formats(tmp_path):
@@ -320,6 +393,22 @@ def test_capability_label_requires_a_real_native_route():
         get_current_key=lambda: "",
     )
     assert adapters.classify_kind(frames_only, "video") == "preprocessed"
+
+
+def test_interactions_parser_excludes_user_thought_and_tools():
+    payload = {
+        "status": "completed",
+        "steps": [
+            {"type": "user_input", "content": [{"type": "text", "text": "秘密输入"}]},
+            {"type": "thought", "summary": [{"type": "text", "text": "内部思考"}]},
+            {"type": "function_call", "arguments": {"text": "工具参数"}},
+            {"type": "function_result", "content": [{"type": "text", "text": "工具结果"}]},
+            {"type": "model_output", "content": [{"type": "text", "text": "最终视频答案"}]},
+        ],
+    }
+    result = native_video._model_output_text(payload)
+    assert result == "最终视频答案"
+    assert all(value not in result for value in ("秘密输入", "内部思考", "工具结果"))
 
 
 @pytest.mark.asyncio
