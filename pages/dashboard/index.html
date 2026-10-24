@@ -208,6 +208,21 @@
         width: 100%; border: 1px solid rgba(168, 204, 255, .2); border-radius: 13px; padding: 11px 13px; color: var(--text); background: linear-gradient(145deg, rgba(17, 32, 57, .8), rgba(5, 13, 28, .82)); outline: none; transition: border .24s, box-shadow .24s, transform .24s, background .24s; box-shadow: inset 0 1px rgba(255,255,255,.06), inset 0 -8px 18px rgba(0,0,0,.1); }
       input[type="text"]:hover, input[type="number"]:hover, input[type="search"]:hover, textarea:hover, select:hover { border-color: rgba(168, 204, 255, .36); transform: translateY(-1px); }
       input:focus, textarea:focus, select:focus { border-color: #73b5ff; background: linear-gradient(145deg, rgba(20, 42, 77, .9), rgba(6, 16, 34, .9)); box-shadow: 0 0 0 3px rgba(74, 145, 255, .17), 0 10px 26px rgba(17, 85, 171, .16), inset 0 1px rgba(255,255,255,.14); transform: translateY(-1px); }
+      /* Native option popups otherwise inherit an unreadable light-on-light
+         palette from the browser. Keep every dialogue-flow select in the same
+         dark glass treatment as the surrounding cards. */
+      .dialogue-flow-page select:not([multiple]) {
+        appearance: none; -webkit-appearance: none; color: #eaf3ff; color-scheme: dark;
+        padding-right: 42px; background-color: rgba(8, 19, 39, .94);
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Cpath d='M3 5.25 7 9l4-3.75' fill='none' stroke='%23b9d8ff' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.6'/%3E%3C/svg%3E");
+        background-repeat: no-repeat; background-position: right 14px center; background-size: 14px 14px;
+      }
+      .dialogue-flow-page select:not([multiple]) option,
+      .dialogue-flow-page select:not([multiple]) optgroup { color: #eaf3ff; background: #101d36; }
+      .dialogue-flow-page select:not([multiple]):focus {
+        color: #f4f8ff; background-color: rgba(10, 27, 55, .98);
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Cpath d='M3 5.25 7 9l4-3.75' fill='none' stroke='%23d9ebff' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.6'/%3E%3C/svg%3E");
+      }
       textarea { min-height: 180px; resize: vertical; line-height: 1.55; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
       .two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
       .hint { margin: 7px 0 0; color: #8291aa; font-size: 11px; line-height: 1.55; }
@@ -771,7 +786,6 @@
               <div class="switch-row"><div class="switch-copy"><strong>启用多模态理解</strong><small>总开关。关闭时自动理解与工具都不生效，也不会产生任何模型调用。</small></div><label class="switch"><input v-model="mm.multimodal.mm_enabled" type="checkbox"><span class="switch-track"></span></label></div>
               <div class="scope-mode"><div><strong>{{ mm.multimodal.mm_auto_scope_blacklist ? '自动理解黑名单' : '自动理解白名单' }}</strong><small>{{ mm.multimodal.mm_auto_scope_blacklist ? '名单内不自动理解；名单为空时全部会话自动理解。' : '只对名单内会话自动理解；名单为空时不对任何会话自动理解。' }}</small></div><button class="scope-toggle" type="button" @click="mm.multimodal.mm_auto_scope_blacklist = !mm.multimodal.mm_auto_scope_blacklist">{{ mm.multimodal.mm_auto_scope_blacklist ? '黑名单' : '白名单' }}</button></div>
               <div class="field"><label>{{ mm.multimodal.mm_auto_scope_blacklist ? '不自动理解的会话' : '自动理解的会话' }} <span>每行一个群聊 ID、私聊用户 ID 或 unified_msg_origin</span></label><textarea v-model="mm.multimodal.mm_auto_scope" class="list-editor" placeholder="aiocqhttp:GroupMessage:123456"></textarea></div>
-              <div class="switch-row"><div class="switch-copy"><strong>自动理解</strong><small>收到媒体后自动开始理解并缓存结果，即使消息没有 @ 机器人。</small></div><label class="switch"><input v-model="mm.multimodal.mm_auto_enabled" type="checkbox"><span class="switch-track"></span></label></div>
               <div class="two-col">
                 <div class="field"><label>自动理解图片</label><label class="switch"><input v-model="mm.multimodal.mm_auto_image" type="checkbox"><span class="switch-track"></span></label></div>
                 <div class="field"><label>自动理解视频</label><label class="switch"><input v-model="mm.multimodal.mm_auto_video" type="checkbox"><span class="switch-track"></span></label></div>

@@ -62,7 +62,6 @@ def test_multimodal_section_is_under_input_enhancement():
     assert "多模态理解" in html
     for key in (
         "mm_enabled",
-        "mm_auto_enabled",
         "mm_tools_enabled",
         "mm_auto_image",
         "mm_auto_video",
@@ -80,6 +79,19 @@ def test_multimodal_section_is_under_input_enhancement():
         "mm_auto_scope",
     ):
         assert key in html, key
+    # Automatic understanding remains a backend setting for compatibility,
+    # but its duplicate visible switch was removed from this card.
+    assert 'v-model="mm.multimodal.mm_auto_enabled"' not in html
+    assert '<strong>启用多模态理解</strong>' in html
+
+
+def test_input_selects_use_readable_dark_glass_theme():
+    html = page_text()
+    assert '.dialogue-flow-page select:not([multiple])' in html
+    assert 'appearance: none' in html
+    assert 'color-scheme: dark' in html
+    assert '.dialogue-flow-page select:not([multiple]) option' in html
+    assert '#eaf3ff' in html
 
 
 def test_model_dropdowns_are_populated_from_the_provider_catalog():

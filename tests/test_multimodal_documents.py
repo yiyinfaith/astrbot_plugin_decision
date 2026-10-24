@@ -261,6 +261,25 @@ def test_xlsx_single_row_and_single_cell_are_exact(tmp_path):
     assert "A5=" not in cell and "C5=" not in cell and "D5=" not in cell
 
 
+def test_xlsx_target_column_beyond_used_range_is_not_clamped(tmp_path):
+    """An out-of-range coordinate must not silently become the last column."""
+
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sheet1"
+    sheet.append(["A5", "B5", "C5", "D5"])
+    path = tmp_path / "column-boundary.xlsx"
+    workbook.save(path)
+
+    result = office.read_target(office.parse_document(path), "Sheet1!Z5")
+
+    assert "Z5=（超出工作表索引范围 A:D）" in result
+    assert "D5=D5" not in result
+    assert "A5=A5" not in result
+
+
 def test_xlsx_empty_rows_hidden_merge_and_formula_stay_precise(tmp_path):
     path = tmp_path / "metadata.xlsx"
     _make_exact_range_workbook(path)

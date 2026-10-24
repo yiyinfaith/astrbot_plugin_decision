@@ -436,11 +436,16 @@ def _render_xlsx_region(
 
     from openpyxl.utils import get_column_letter
 
-    max_columns = max(1, int(block.get("columns", 1) or 1))
-    start_col = start_col or 1
-    end_col = end_col or max_columns
-    start_col = max(1, min(start_col, max_columns))
-    end_col = max(start_col, min(end_col, max_columns))
+    indexed_columns = max(1, int(block.get("columns", 1) or 1))
+    # An explicit target is a coordinate query, not a request to clamp to the
+    # sheet's last populated column.  Clamping ``Z5`` to ``D5`` for an A:D
+    # sheet silently answers a different question.  Keep the requested bounds
+    # intact and render an explicit out-of-index marker for cells beyond the
+    # indexed worksheet dimensions.
+    explicit_start_col = start_col > 0
+    explicit_end_col = end_col > 0
+    start_col = max(1, start_col or 1)
+    end_col = max(start_col, end_col or indexed_columns)
     cells_data = block.get("cells_data") or {}
     hidden = {int(row) for row in block.get("hidden_rows", [])}
     merged_ranges = [str(value) for value in (block.get("merged_ranges") or [])]
@@ -454,7 +459,16 @@ def _render_xlsx_region(
             cell = row_data.get(str(column_number)) or {}
             formula = str(cell.get("formula") or "")
             value = str(cell.get("value") or "")
-            if formula:
+            outside_index = (
+                column_number > indexed_columns
+                and (explicit_start_col or explicit_end_col)
+            )
+            if outside_index:
+                rendered = (
+                    f"{coordinate}=（超出工作表索引范围 "
+                    f"A:{get_column_letter(indexed_columns)}）"
+                )
+            elif formula:
                 rendered = f"{coordinate}={formula}"
                 rendered += f" [缓存值: {value or '（空）'}]"
             elif value:
