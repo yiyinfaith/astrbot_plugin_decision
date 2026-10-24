@@ -658,7 +658,10 @@ class DecisionPlugin(Star):
                 )
             self._multimodal = None
         if self._life_runtime is not None:
-            await self._life_runtime.terminate()
+            try:
+                await self._life_runtime.terminate()
+            except Exception as exc:
+                logger.warning("Decision Engine 虚拟生活关闭失败：%s", _safe_error(exc))
             self._life_runtime = None
         if self._personal_network is not None:
             try:
@@ -669,11 +672,17 @@ class DecisionPlugin(Star):
                 )
             self._personal_network = None
         if self.provider is not None:
-            await self.provider.close()
+            try:
+                await self.provider.close()
+            except Exception as exc:
+                logger.warning("Decision Engine Provider 关闭失败：%s", _safe_error(exc))
         self.provider = None
         self._ready = False
         if self._output_runtime is not None:
-            await self._output_runtime.close()
+            try:
+                await self._output_runtime.close()
+            except Exception as exc:
+                logger.warning("Decision Engine 输出增强关闭失败：%s", _safe_error(exc))
             self._output_runtime = None
 
     def _int(self, key: str, default: int) -> int:

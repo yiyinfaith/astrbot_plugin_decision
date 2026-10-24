@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from aiohttp.abc import AbstractResolver
 from astrbot import logger
 
 from .models import MediaIndexEntry, MediaRef
@@ -293,7 +294,7 @@ def _peername(response: Any) -> str:
         return ""
 
 
-class _PinnedResolver:
+class _PinnedResolver(AbstractResolver):
     """Small aiohttp resolver adapter backed by one validated DNS answer."""
 
     def __init__(self, host: str, pinned: list[dict[str, Any]]) -> None:
@@ -331,7 +332,7 @@ async def _download(url: str) -> str:
             use_dns_cache=False,
             # trust_env=False prevents an unvalidated HTTP proxy from changing
             # the destination after our pinned resolution.
-            ssl=None,
+            ssl=True,
         )
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=60),

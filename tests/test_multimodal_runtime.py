@@ -217,6 +217,25 @@ async def test_target_isolation_prevents_wrong_region_reuse(tmp_path):
     await runtime.terminate()
 
 
+@pytest.mark.asyncio
+async def test_file_processing_policy_changes_cache_route_signature(tmp_path):
+    provider = FakeProvider()
+    runtime = build(tmp_path, provider)
+    before = runtime._route_signature("file")
+    runtime.refresh(
+        {
+            **runtime.settings.values,
+            "mm_ocr_lang": "eng",
+            "mm_file_chunk_chars": 9000,
+            "mm_office_render_timeout_seconds": 120,
+        }
+    )
+    after = runtime._route_signature("file")
+    assert before != after
+    assert "lang=eng" in after and "chunk=9000" in after
+    await runtime.terminate()
+
+
 def test_local_media_version_changes_cache_identity(tmp_path):
     path = png(tmp_path, "versioned.png")
     ref = MediaRef(kind="image", reference=str(path), urn="u::v::0", umo="u")

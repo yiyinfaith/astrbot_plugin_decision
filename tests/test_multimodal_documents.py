@@ -178,6 +178,25 @@ def test_xlsx_ranges_use_physical_rows_when_blank_rows_are_present(tmp_path):
     assert "row-401" in window and "第 397 行" not in window
 
 
+def test_xlsx_range_preserves_hidden_row_marker_when_slicing_columns(tmp_path):
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "隐藏"
+    sheet.append(["A", "B", "C"])
+    sheet.append(["keep-a", "keep-b", "drop-c"])
+    sheet.row_dimensions[2].hidden = True
+    path = tmp_path / "hidden.xlsx"
+    workbook.save(path)
+
+    index = office.parse_document(path)
+    window = office.read_target(index, "隐藏!A2:B2")
+
+    assert "第 2 行 [隐藏]: keep-a | keep-b" in window
+    assert "drop-c" not in window
+
+
 def test_office_indexes_embedded_docx_image_bytes(tmp_path):
     import io
 

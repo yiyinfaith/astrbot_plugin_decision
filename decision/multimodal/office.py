@@ -489,7 +489,9 @@ def read_target(index: DocumentIndex, target: str, *, limit_chars: int = 12_000)
 
                         sliced = []
                         for row in rows:
-                            match_row = _re.match(r"第\s*\d+\s*行:\s*(.*)$", row)
+                            match_row = _re.match(
+                                r"第\s*\d+\s*行(?:\s*\[隐藏\])?:\s*(.*)$", row
+                            )
                             if not match_row:
                                 sliced.append(row)
                                 continue

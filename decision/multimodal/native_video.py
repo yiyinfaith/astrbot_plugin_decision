@@ -134,11 +134,15 @@ async def upload_file(
         "X-Goog-Upload-Header-Content-Length": str(size),
         "X-Goog-Upload-Header-Content-Type": mime,
         "Content-Type": "application/json",
+        # Keep credentials out of request URLs.  Besides reducing accidental
+        # proxy/access-log exposure, this also prevents an aiohttp exception
+        # from echoing the key as part of a failed URL.
+        "x-goog-api-key": api_key,
     }
     start_body = {"file": {"display_name": path.name}}
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            f"{base}/upload/v1beta/files?key={api_key}",
+            f"{base}/upload/v1beta/files",
             headers=headers,
             json=start_body,
             timeout=aiohttp.ClientTimeout(total=timeout),
@@ -184,7 +188,8 @@ async def wait_active(
     async with aiohttp.ClientSession() as session:
         while asyncio.get_running_loop().time() < deadline:
             async with session.get(
-                f"{base}/v1beta/{name}?key={api_key}",
+                f"{base}/v1beta/{name}",
+                headers={"x-goog-api-key": api_key},
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as response:
                 if response.status >= 400:
@@ -226,7 +231,8 @@ async def generate(
     }
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            f"{base}/v1beta/models/{model}:generateContent?key={api_key}",
+            f"{base}/v1beta/models/{model}:generateContent",
+            headers={"x-goog-api-key": api_key},
             json=body,
             timeout=aiohttp.ClientTimeout(total=timeout),
         ) as response:
@@ -352,7 +358,8 @@ async def delete_file(name: str, *, api_key: str, base: str = DEFAULT_BASE) -> N
 
         async with aiohttp.ClientSession() as session:
             async with session.delete(
-                f"{base}/v1beta/{name}?key={api_key}",
+                f"{base}/v1beta/{name}",
+                headers={"x-goog-api-key": api_key},
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as response:
                 if response.status >= 400:
@@ -360,7 +367,10 @@ async def delete_file(name: str, *, api_key: str, base: str = DEFAULT_BASE) -> N
                         "Decision Engine 删除 Gemini 上传文件失败：HTTP %s", response.status
                     )
     except Exception as exc:  # pragma: no cover - cleanup must never raise
-        logger.debug("Decision Engine 删除 Gemini 上传文件异常：%s", str(exc)[:120])
+        logger.debug(
+            "Decision Engine 删除 Gemini 上传文件异常：%s",
+            _safe_error(exc, api_key),
+        )
 
 
 async def analyze(

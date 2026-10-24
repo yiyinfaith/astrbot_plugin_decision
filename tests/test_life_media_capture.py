@@ -216,6 +216,91 @@ async def test_proactive_audio_spends_its_budget_across_calls(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_reload_cancel_before_backend_call_refunds_reserved_quota(tmp_path):
+    media, aigen = await make_media(tmp_path)
+    runtime = await media.owner._get_life_runtime()
+    original_call_kwargs = media._call_kwargs
+
+    def close_after_prepare(*args, **kwargs):
+        result = original_call_kwargs(*args, **kwargs)
+        runtime.closed = True
+        return result
+
+    media._call_kwargs = close_after_prepare
+
+    result = await media.capture(FakeEvent(), kind="photo", count=1)
+
+    assert "已取消" in result
+    assert aigen.image_calls == []
+    assert await media.usage.load() == {"usage": {}}
+
+
+@pytest.mark.asyncio
+async def test_daily_limit_counts_generated_media_units(tmp_path):
+    media, aigen = await make_media(tmp_path)
+
+    await media.capture(FakeEvent(), kind="photo", count=3)
+
+    usage = await media.usage.load()
+    key = "2026-10-21::aiocqhttp:FriendMessage:1"
+    assert usage["usage"][key] == 3
+    assert aigen.image_calls[0]["n"] == 3
+
+
+@pytest.mark.asyncio
+async def test_backend_actual_batch_units_override_requested_count(tmp_path):
+    class PartialBatchAigen(FakeAigen):
+        async def generate_image(self, event=None, n=None, **kwargs):
+            self.image_calls.append({"event": event, "n": n, **kwargs})
+            event.set_extra("aigen_completed_media_units", 2)
+            yield "image-ok"
+
+    media, aigen = await make_media(
+        tmp_path,
+        settings=media_settings(photo_count_min=3, photo_count_max=3),
+        aigen=PartialBatchAigen(),
+    )
+
+    await media.capture(FakeEvent(), kind="photo", count=3)
+
+    usage = await media.usage.load()
+    assert usage["usage"]["2026-10-21::aiocqhttp:FriendMessage:1"] == 2
+
+
+@pytest.mark.asyncio
+async def test_request_cannot_reserve_more_than_daily_limit(tmp_path):
+    media, aigen = await make_media(tmp_path, settings=media_settings(daily_limit=2))
+
+    result = await media.capture(FakeEvent(), kind="photo", count=3)
+
+    assert "仅剩 2 个额度" in result
+    assert aigen.image_calls == []
+    assert await media.usage.load() == {"usage": {}}
+
+
+@pytest.mark.asyncio
+async def test_partial_video_failure_reconciles_reserved_units(tmp_path):
+    class PartialAigen(FakeAigen):
+        async def generate_video(self, *args, **kwargs):
+            self.video_calls.append({"event": kwargs.get("event")})
+            if len(self.video_calls) == 2:
+                raise RuntimeError("second segment failed")
+            yield "video-ok"
+
+    media, aigen = await make_media(
+        tmp_path,
+        settings=media_settings(video_count_min=2, video_count_max=2),
+        aigen=PartialAigen(),
+    )
+
+    result = await media.capture(FakeEvent(), kind="video", count=2)
+
+    assert "部分生成失败" in result
+    usage = await media.usage.load()
+    assert usage["usage"]["2026-10-21::aiocqhttp:FriendMessage:1"] == 1
+
+
+@pytest.mark.asyncio
 async def test_proactive_rejects_a_second_media_kind(tmp_path):
     """Only the preselected kind may be sent during one proactive delivery."""
 

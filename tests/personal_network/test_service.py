@@ -951,6 +951,18 @@ async def test_api_import_apply_rejects_unknown_token(services, data_dir: Path):
     assert "expired" in (await service.api_import_apply())["error"]
 
 
+async def test_api_import_preview_expires_and_is_pruned(services, data_dir: Path):
+    service = services(FakeOwner(network_settings(enable=True)), data_dir)
+    service._import_previews["old"] = (time.monotonic() - 3600, "alice", {})
+    stub = reset_request()
+    stub.json_body = {"token": "old"}
+
+    response = await service.api_import_apply()
+
+    assert "expired" in response["error"]
+    assert "old" not in service._import_previews
+
+
 async def test_api_import_preview_rejects_invalid_key(services, data_dir: Path):
     service = services(FakeOwner(network_settings(enable=True)), data_dir)
     reset_request()

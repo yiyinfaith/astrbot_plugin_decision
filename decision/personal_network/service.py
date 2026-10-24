@@ -52,6 +52,8 @@ MAX_IMPORT_BYTES = 25 * 1024 * 1024
 MAX_GENERATION_RAW_CHARS = 500_000
 GENERATION_JOB_TTL_SECONDS = 15 * 60
 GENERATION_TASK_TIMEOUT_SECONDS = 10 * 60
+IMPORT_PREVIEW_TTL_SECONDS = 10 * 60
+MAX_IMPORT_PREVIEWS = 32
 
 
 class PersonalNetworkService:
@@ -74,7 +76,7 @@ class PersonalNetworkService:
         self.export_dir.mkdir(parents=True, exist_ok=True)
         self._migrate_from_standalone()
         self.storage = NetworkStorage(self.data_dir / DB_FILENAME)
-        self._import_previews: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._import_previews: dict[str, tuple[float, str, dict[str, Any]]] = {}
         self._generation_jobs: dict[str, dict[str, Any]] = {}
         self._generation_tasks: set[asyncio.Task[None]] = set()
 
@@ -782,6 +784,23 @@ class PersonalNetworkService:
         ]
         for job_id in expired:
             self._generation_jobs.pop(job_id, None)
+
+    def _prune_import_previews(self) -> None:
+        """Bound unconsumed import previews kept in process memory."""
+
+        cutoff = time.monotonic() - IMPORT_PREVIEW_TTL_SECONDS
+        expired = [
+            token
+            for token, (created_at, _persona_id, _payload) in self._import_previews.items()
+            if created_at < cutoff
+        ]
+        for token in expired:
+            self._import_previews.pop(token, None)
+        if len(self._import_previews) <= MAX_IMPORT_PREVIEWS:
+            return
+        oldest = sorted(self._import_previews.items(), key=lambda item: item[1][0])
+        for token, _value in oldest[: len(self._import_previews) - MAX_IMPORT_PREVIEWS]:
+            self._import_previews.pop(token, None)
 
     def _active_generation_job(self, persona_id: str) -> str | None:
         """Return the active generation job for one persona, when present."""
@@ -1519,8 +1538,9 @@ class PersonalNetworkService:
             existing_character_ids = {item["id"] for item in existing["characters"]}
             existing_relationship_ids = {item["id"] for item in existing["relationships"]}
             existing_event_ids = {item["id"] for item in existing["life_events"]}
+            self._prune_import_previews()
             token = uuid.uuid4().hex
-            self._import_previews[token] = (persona_id, payload)
+            self._import_previews[token] = (time.monotonic(), persona_id, payload)
             return json_response(
                 {
                     "token": token,
@@ -1558,10 +1578,11 @@ class PersonalNetworkService:
         try:
             payload = await self._json_payload()
             token = str(payload.get("token") or "")
+            self._prune_import_previews()
             preview = self._import_previews.pop(token, None)
             if not preview:
                 raise ValueError("import preview expired or not found")
-            persona_id, imported = preview
+            _created_at, persona_id, imported = preview
             result = await asyncio.to_thread(self.storage.replace_from_import, persona_id, imported)
             for character in imported["characters"]:
                 avatar_data = character.get("avatar_data")

@@ -542,13 +542,23 @@ class MultimodalRuntime:
                 f"segments={settings.int('mm_video_agentic_segments')}"
             )
         if kind == "file":
-            return "file:enabled={enabled}:ocr={ocr}:{engine}:{pages}:office={office}:office_pages={office_pages}".format(
+            return (
+                "file:enabled={enabled}:ocr={ocr}:{engine}:lang={lang}:"
+                "ocr_timeout={ocr_timeout}:pages={pages}:max_chars={max_chars}:"
+                "chunk={chunk}:office={office}:office_pages={office_pages}:"
+                "office_timeout={office_timeout}"
+            ).format(
                 enabled=settings.bool("mm_file_ocr"),
                 ocr=settings.text("mm_ocr_strategy") or "auto",
                 engine=settings.text("mm_ocr_engine") or "auto",
+                lang=settings.text("mm_ocr_lang") or "chi_sim+eng",
+                ocr_timeout=settings.int("mm_ocr_timeout_seconds"),
                 pages=settings.int("mm_file_ocr_max_pages"),
+                max_chars=settings.int("mm_file_max_chars"),
+                chunk=settings.int("mm_file_chunk_chars"),
                 office=settings.text("mm_office_render") or "auto",
                 office_pages=settings.int("mm_office_render_max_pages"),
+                office_timeout=settings.int("mm_office_render_timeout_seconds"),
             )
         return ""
 
@@ -841,7 +851,10 @@ class MultimodalRuntime:
         except ValueError as exc:
             if "扫描件" not in str(exc) or not self._settings.bool("mm_file_ocr"):
                 raise
-            return await self._ocr_document(choice, prompt, workdir, path, target=target)
+            scanned = await self._ocr_document(choice, prompt, workdir, path, target=target)
+            if scanned is not None:
+                return scanned
+            raise ValueError("PDF 页面无法渲染，无法执行扫描件 OCR") from None
         # A mixed PDF can have plenty of extractable text overall while still
         # containing scanned pages.  Inspect page-level text and OCR sparse
         # pages instead of using one document-wide length threshold.

@@ -298,6 +298,8 @@ class BillingConfigurationError(ValueError):
 
 
 class LifeMedia:
+    _BACKEND_UNITS_EXTRA = "aigen_completed_media_units"
+
     def __init__(self, owner, root):
         self.owner = owner
         self.appearance = AppearanceStore(root)
@@ -324,6 +326,21 @@ class LifeMedia:
         if kind in MEDIA_KINDS:
             return instance if callable(getattr(instance, {"photo": "generate_image", "video": "generate_video", "audio": "generate_audio"}[kind], None)) else None
         return instance if any(callable(getattr(instance, method, None)) for method in ("generate_image", "generate_video", "generate_audio")) else None
+
+    @classmethod
+    def _backend_units(cls, event, fallback: int) -> int:
+        """Read AIGen's optional actual-unit result without requiring its type."""
+
+        getter = getattr(event, "get_extra", None)
+        if not callable(getter):
+            return fallback
+        try:
+            value = getter(cls._BACKEND_UNITS_EXTRA, None)
+            if value is None:
+                return fallback
+            return max(0, min(fallback, int(value)))
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            return fallback
 
     async def capture(
         self, event, *, kind="photo", scene="", subject="self", count=None, audio_text=""
@@ -452,21 +469,37 @@ class LifeMedia:
             kwargs = {key: value for key, value in kwargs.items() if key in signature.parameters}
             if self.aigen(kind) is not aigen:
                 return "aigen 正在重载或已停用，尚未提交生成任务。"
-            # Reserve before calling a potentially paid backend. Never retry
-            # automatically after ambiguous transport or platform failures.
+            # ``n`` is a real image-unit count for AIGen, while video/audio
+            # calls each create one unit.  Reserve the whole requested amount
+            # before entering the backend so concurrent requests cannot both
+            # observe the same remaining daily quota and overshoot it.
+            planned_units = resolved_count
             async with self.usage_lock:
                 usage = await self.usage.load()
+                usage_map = usage.get("usage")
+                if not isinstance(usage_map, dict):
+                    usage_map = {}
+                    usage["usage"] = usage_map
                 # Read the clock once: taking it again below could cross midnight
                 # and prune away the very key just used to compute the quota.
                 today = runtime._now().date().isoformat()
                 key = today + "::" + umo
-                quota = usage["usage"].get(key, 0)
-                if quota >= settings["daily_limit"]:
+                try:
+                    quota = max(0, int(usage_map.get(key, 0) or 0))
+                except (TypeError, ValueError):
+                    quota = 0
+                daily_limit = max(0, int(settings["daily_limit"]))
+                if quota >= daily_limit:
                     return "本会话今日生成额度已用完。"
+                if quota + planned_units > daily_limit:
+                    return (
+                        f"本次需要生成 {planned_units} 个媒体单位，"
+                        f"但本会话今日仅剩 {daily_limit - quota} 个额度，未提交生成任务。"
+                    )
                 usage["usage"] = {
-                    k: v for k, v in usage["usage"].items() if k.startswith(today)
+                    k: v for k, v in usage_map.items() if k.startswith(today)
                 }
-                usage["usage"][key] = quota + 1
+                usage["usage"][key] = quota + planned_units
                 await self.usage.save(usage)
                 self.last_call[umo] = time.monotonic()
             # ``n`` lets one image request return several pictures. Video and
@@ -475,12 +508,32 @@ class LifeMedia:
             batched = "n" in signature.parameters
             calls = 1 if batched else resolved_count
             results = []
+            completed_units = 0
+            backend_started = False
             try:
                 if runtime.closed:
+                    async with self.usage_lock:
+                        usage = await self.usage.load()
+                        usage_map = usage.get("usage")
+                        current = usage_map.get(key) if isinstance(usage_map, dict) else None
+                        if current == quota + planned_units:
+                            if quota:
+                                usage_map[key] = quota
+                            else:
+                                usage_map.pop(key, None)
+                            await self.usage.save(usage)
+                            self.last_call.pop(umo, None)
                     return "生活设置已重载，已取消尚未提交的生成尝试。"
                 for index in range(calls):
                     if index and runtime.closed:
                         break
+                    backend_started = True
+                    setter = getattr(event, "set_extra", None)
+                    if callable(setter):
+                        try:
+                            setter(self._BACKEND_UNITS_EXTRA, None)
+                        except (AttributeError, TypeError, RuntimeError):
+                            pass
                     outcome = method(**kwargs)
                     if inspect.isasyncgen(outcome):
                         async for value in outcome:
@@ -493,13 +546,41 @@ class LifeMedia:
                         value = await outcome
                         if isinstance(value, str):
                             results.append(value)
+                    # A completed backend call represents one video/audio
+                    # segment, or the requested ``n`` image artifacts for a
+                    # batched image call.  A later failed call must not erase
+                    # units that were already generated successfully.
+                    completed_units += self._backend_units(
+                        event, resolved_count if batched else 1
+                    )
             except Exception as exc:
                 if not results:
                     return f"aigen 生成失败：{str(exc)[:180]}。未自动重试，请先确认任务状态。"
                 results.append(f"aigen 部分生成失败：{str(exc)[:180]}")
+            finally:
+                # The reservation is made before calling a potentially paid
+                # backend. Reconcile it with the number of completed media
+                # units, so partial failures and cancellation do not consume
+                # the entire requested range.
+                async with self.usage_lock:
+                    usage = await self.usage.load()
+                    usage_map = usage.get("usage")
+                    current = usage_map.get(key) if isinstance(usage_map, dict) else None
+                    if isinstance(current, int):
+                        # ``current`` can include reservations made by other
+                        # concurrent calls. Reconcile only this call's
+                        # reservation, preserving those other reservations.
+                        target = max(0, current - planned_units + completed_units)
+                        if target:
+                            usage_map[key] = target
+                        else:
+                            usage_map.pop(key, None)
+                        await self.usage.save(usage)
+                        if completed_units == 0 and not backend_started:
+                            self.last_call.pop(umo, None)
             if proactive:
                 try:
-                    event.set_extra("decision_life_media_used", used + resolved_count)
+                    event.set_extra("decision_life_media_used", used + completed_units)
                 except AttributeError:
                     pass
             return "\n".join(results) or json.dumps(

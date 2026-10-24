@@ -956,7 +956,7 @@
       "daily_limit": {
         "description": "每会话每日生成上限",
         "type": "int",
-        "hint": "每个会话每天最多提交多少次多媒体生成，0 表示禁止。",
+        "hint": "按实际照片张数、视频段数或音频段数计算；0 表示禁止。金额计费由 aigen 负责。",
         "default": 5
       },
       "proactive_billing_mode": {
