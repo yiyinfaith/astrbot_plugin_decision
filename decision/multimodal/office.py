@@ -254,8 +254,13 @@ def _xlsx(path: Path, limit_chars: int, *, max_rows: int | None = None) -> Docum
         for sheet in workbook.worksheets:
             rows: list[str] = []
             header: list[str] = []
-            merged = [str(rng) for rng in sheet.merged_cells.ranges][:40]
+            merged = [str(rng) for rng in sheet.merged_cells.ranges]
             formula_cells = []
+            # Keep a sparse physical-coordinate index for exact target reads.
+            # ``rows_data`` remains the human-readable overview, while this
+            # map avoids reconstructing a target from compressed list indexes.
+            cells_data: dict[str, dict[str, dict[str, str]]] = {}
+            hidden_rows: list[int] = []
             row_limit = min(
                 sheet.max_row,
                 max_rows if max_rows is not None else _MAX_INDEX_ROWS,
@@ -267,11 +272,15 @@ def _xlsx(path: Path, limit_chars: int, *, max_rows: int | None = None) -> Docum
                 if not header:
                     header = list(cells)
                 coordinate = f"第 {row_number} 行"
-                hidden = " [隐藏]" if sheet.row_dimensions[row_number].hidden else ""
+                hidden_flag = bool(sheet.row_dimensions[row_number].hidden)
+                hidden = " [隐藏]" if hidden_flag else ""
+                if hidden_flag:
+                    hidden_rows.append(row_number)
                 # Keep one record per physical Excel row, including blank rows.
                 # The coordinate is part of the record so every targeted read
                 # remains correct even with sparse sheets.
                 rows.append(f"{coordinate}{hidden}: " + " | ".join(cells))
+                source_row = None
                 if formula_book is not None:
                     try:
                         source_row = formula_book[sheet.title][row_number]
@@ -282,6 +291,19 @@ def _xlsx(path: Path, limit_chars: int, *, max_rows: int | None = None) -> Docum
                                 )
                     except Exception:  # pragma: no cover
                         pass
+                for cell in row:
+                    formula = ""
+                    if source_row is not None and cell.column <= len(source_row):
+                        source_value = source_row[cell.column - 1].value
+                        if isinstance(source_value, str) and source_value.startswith("="):
+                            formula = source_value
+                    cached = _cell_text(cell.value)
+                    if cached or formula:
+                        cells_data.setdefault(str(row_number), {})[str(cell.column)] = {
+                            "coordinate": cell.coordinate,
+                            "value": cached,
+                            "formula": formula,
+                        }
             text = "\n".join(rows)
             if formula_cells:
                 text += "\n[公式]\n" + "\n".join(formula_cells[:40])
@@ -299,6 +321,9 @@ def _xlsx(path: Path, limit_chars: int, *, max_rows: int | None = None) -> Docum
                     "columns": sheet.max_column,
                     "header": header,
                     "rows_data": rows,
+                    "cells_data": cells_data,
+                    "hidden_rows": hidden_rows,
+                    "merged_ranges": merged,
                     "truncated": row_limit < sheet.max_row,
                 }
             )
@@ -325,6 +350,131 @@ def parse_document(path: Path, *, limit_chars: int = 12_000) -> DocumentIndex:
 
 def is_office(path: Path) -> bool:
     return path.suffix.lower() in {".docx", ".pptx", ".xlsx", ".xlsm"}
+
+
+def _parse_xlsx_target(target: str) -> tuple[str, int, int, int, int] | None:
+    """Parse an Excel target into sheet and physical row/column bounds.
+
+    The returned coordinates are one-based and inclusive.  A target without
+    explicit columns (``Sheet1!401:450``) means every indexed column in the
+    sheet; the caller supplies the sheet's last column when rendering.
+    """
+
+    import re
+
+    value = str(target or "").strip()
+    if not value:
+        return None
+    sheet_name = ""
+    address = value
+    if "!" in value:
+        sheet_name, address = value.split("!", 1)
+        sheet_name = sheet_name.strip().strip("'")
+    match = re.fullmatch(
+        r"\s*\$?([A-Za-z]*)\$?(\d+)\s*"
+        r"(?:[:\-~到]\s*\$?([A-Za-z]*)\$?(\d+))?\s*行?\s*",
+        address,
+    )
+    if not match:
+        # Keep the legacy row-only spelling, such as ``Sheet 401-450``.
+        match = re.fullmatch(
+            r"\s*(?:第\s*)?(\d+)\s*[-~到]\s*(\d+)\s*行?\s*", address
+        )
+        if not match:
+            return None
+        return sheet_name, 0, int(match.group(1)), 0, int(match.group(2))
+    start_col_text, start_row_text, end_col_text, end_row_text = match.groups()
+    start_row = int(start_row_text)
+    end_row = int(end_row_text or start_row_text)
+    if end_row < start_row:
+        start_row, end_row = end_row, start_row
+    from openpyxl.utils.cell import column_index_from_string
+
+    try:
+        start_col = (
+            column_index_from_string(start_col_text) if start_col_text else 0
+        )
+        end_col = (
+            column_index_from_string(end_col_text)
+            if end_col_text
+            else start_col
+        )
+    except ValueError:
+        return None
+    if start_col and end_col < start_col:
+        start_col, end_col = end_col, start_col
+    return sheet_name, start_col, start_row, end_col, end_row
+
+
+def _xlsx_merged_range(
+    ranges: list[str], row_number: int, column_number: int
+) -> str:
+    """Return the merged range containing a physical cell, if any."""
+
+    from openpyxl.utils.cell import range_boundaries
+
+    for value in ranges:
+        try:
+            min_col, min_row, max_col, max_row = range_boundaries(value)
+        except ValueError:
+            continue
+        if min_row <= row_number <= max_row and min_col <= column_number <= max_col:
+            return value
+    return ""
+
+
+def _render_xlsx_region(
+    block: dict[str, Any],
+    *,
+    start_col: int,
+    start_row: int,
+    end_col: int,
+    end_row: int,
+    limit_chars: int,
+) -> str:
+    """Render exactly the requested physical cells from one worksheet."""
+
+    from openpyxl.utils import get_column_letter
+
+    max_columns = max(1, int(block.get("columns", 1) or 1))
+    start_col = start_col or 1
+    end_col = end_col or max_columns
+    start_col = max(1, min(start_col, max_columns))
+    end_col = max(start_col, min(end_col, max_columns))
+    cells_data = block.get("cells_data") or {}
+    hidden = {int(row) for row in block.get("hidden_rows", [])}
+    merged_ranges = [str(value) for value in (block.get("merged_ranges") or [])]
+    lines: list[str] = []
+    used = 0
+    for row_number in range(max(1, start_row), max(start_row, end_row) + 1):
+        row_data = cells_data.get(str(row_number), {})
+        values: list[str] = []
+        for column_number in range(start_col, end_col + 1):
+            coordinate = f"{get_column_letter(column_number)}{row_number}"
+            cell = row_data.get(str(column_number)) or {}
+            formula = str(cell.get("formula") or "")
+            value = str(cell.get("value") or "")
+            if formula:
+                rendered = f"{coordinate}={formula}"
+                rendered += f" [缓存值: {value or '（空）'}]"
+            elif value:
+                rendered = f"{coordinate}={value}"
+            else:
+                merged = _xlsx_merged_range(merged_ranges, row_number, column_number)
+                rendered = (
+                    f"{coordinate}=（合并单元格 {merged}）"
+                    if merged
+                    else f"{coordinate}=（空）"
+                )
+            values.append(rendered)
+        marker = " [隐藏]" if row_number in hidden else ""
+        line = f"第 {row_number} 行{marker}: " + " | ".join(values)
+        if used + len(line) > limit_chars:
+            lines.append(f"…（已达到 {limit_chars} 字上限）")
+            break
+        lines.append(line)
+        used += len(line)
+    return "\n".join(lines)
 
 
 def _page_selection(target: str, page_count: int) -> list[int]:
@@ -446,64 +596,29 @@ def read_target(index: DocumentIndex, target: str, *, limit_chars: int = 12_000)
     # Spreadsheet precision reads: ``Sheet!A401:C450``, ``Sheet 401-450`` or
     # ``第 401-450 行`` select a bounded row window without reparsing the file.
     if target and index.kind == "xlsx":
-        import re
-
-        match = re.search(
-            r"(?:!|\s|第\s*)([A-Za-z]*)(\d+)\s*(?:[:\-~到]\s*([A-Za-z]*)(\d+))?\s*行?$",
-            target,
-        )
-        if match:
-            from openpyxl.utils.cell import column_index_from_string
-
-            start_col = column_index_from_string(match.group(1)) if match.group(1) else 1
-            start = int(match.group(2))
-            end_col = (
-                column_index_from_string(match.group(3))
-                if match.group(3)
-                else start_col
-            )
-            end = int(match.group(4) or start)
-            end = max(start, end)
-            end_col = max(start_col, end_col)
-            sheet_name = target.split("!", 1)[0].strip() if "!" in target else ""
+        parsed = _parse_xlsx_target(target)
+        if parsed is not None:
+            sheet_name, start_col, start, end_col, end = parsed
             candidates = [
                 block
                 for block in index.blocks
-                if not sheet_name or str(block.get("name", "")) == sheet_name
+                if not sheet_name
+                or str(block.get("name", "")).casefold() == sheet_name.casefold()
             ]
             if candidates:
                 blocks = []
                 for block in candidates:
-                    # rows_data contains physical row coordinates, so an empty
-                    # row never shifts a requested Excel range.
-                    rows = []
-                    for row in block.get("rows_data", []):
-                        row_match = re.match(r"第\s*(\d+)\s*行(?:\s*\[隐藏\])?:\s*(.*)$", row)
-                        if not row_match:
-                            continue
-                        row_number = int(row_match.group(1))
-                        if start <= row_number <= end:
-                            rows.append(row)
-                    if start_col > 1 or end_col > 1:
-                        import re as _re
-
-                        sliced = []
-                        for row in rows:
-                            match_row = _re.match(
-                                r"第\s*\d+\s*行(?:\s*\[隐藏\])?:\s*(.*)$", row
-                            )
-                            if not match_row:
-                                sliced.append(row)
-                                continue
-                            cells = match_row.group(1).split(" | ")
-                            sliced.append(
-                                row.split(":", 1)[0]
-                                + ": "
-                                + " | ".join(cells[start_col - 1 : end_col])
-                            )
-                        rows = sliced
+                    # Exact physical-coordinate rendering: no compressed row
+                    # or column list is used for a target request.
                     copy_block = dict(block)
-                    copy_block["text"] = "\n".join(rows)
+                    copy_block["text"] = _render_xlsx_region(
+                        block,
+                        start_col=start_col,
+                        start_row=start,
+                        end_col=end_col,
+                        end_row=end,
+                        limit_chars=limit_chars,
+                    )
                     blocks.append(copy_block)
     if not blocks:
         available = ", ".join(

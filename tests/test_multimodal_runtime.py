@@ -218,6 +218,41 @@ async def test_target_isolation_prevents_wrong_region_reuse(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_understand_file_xlsx_target_passes_only_requested_cells(tmp_path):
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sheet1"
+    for row in range(1, 451):
+        sheet.cell(row, 1).value = f"A-{row}"
+        sheet.cell(row, 2).value = f"B-{row}"
+        sheet.cell(row, 3).value = f"C-{row}"
+    path = tmp_path / "target.xlsx"
+    workbook.save(path)
+
+    provider = FakeProvider()
+    runtime = build(tmp_path, provider)
+    await runtime.initialize()
+    ref = MediaRef(
+        kind="file",
+        reference=str(path),
+        urn="u::xlsx::0",
+        umo="aiocqhttp:GroupMessage:1",
+        message_id="xlsx",
+        extra={"target": "Sheet1!A401:A450"},
+    )
+
+    item = await runtime.understand(ref)
+
+    assert item.ok
+    prompt = str(provider.calls[-1]["prompt"])
+    assert "A-401" in prompt and "A-450" in prompt
+    assert "B-401" not in prompt and "C-401" not in prompt
+    await runtime.terminate()
+
+
+@pytest.mark.asyncio
 async def test_file_processing_policy_changes_cache_route_signature(tmp_path):
     provider = FakeProvider()
     runtime = build(tmp_path, provider)

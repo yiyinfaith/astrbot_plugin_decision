@@ -193,8 +193,88 @@ def test_xlsx_range_preserves_hidden_row_marker_when_slicing_columns(tmp_path):
     index = office.parse_document(path)
     window = office.read_target(index, "隐藏!A2:B2")
 
-    assert "第 2 行 [隐藏]: keep-a | keep-b" in window
+    assert "第 2 行 [隐藏]: A2=keep-a | B2=keep-b" in window
     assert "drop-c" not in window
+
+
+def _make_exact_range_workbook(path: Path) -> None:
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sheet1"
+    for row in range(1, 451):
+        sheet.cell(row, 1).value = f"A-{row}"
+        sheet.cell(row, 2).value = f"B-{row}"
+        sheet.cell(row, 3).value = f"C-{row}"
+        sheet.cell(row, 4).value = f"D-{row}"
+    # Physical gaps must remain gaps in the target result.
+    for row in (2, 100, 400):
+        for column in range(1, 5):
+            sheet.cell(row, column).value = None
+    # Sparse single-column data and a formula with no calculated cache in
+    # openpyxl's normal writer path.
+    for row in range(10, 21):
+        sheet.cell(row, 3).value = None
+    sheet["C10"] = "=A10+B10"
+    sheet["C20"] = "sparse-c20"
+    sheet.row_dimensions[7].hidden = True
+    sheet.merge_cells("A20:B20")
+    sheet["A20"] = "merged-a20"
+    workbook.save(path)
+
+
+def test_xlsx_single_column_range_never_leaks_other_columns(tmp_path):
+    path = tmp_path / "exact.xlsx"
+    _make_exact_range_workbook(path)
+
+    window = office.read_target(office.parse_document(path), "Sheet1!A401:A450")
+
+    assert "A401=A-401" in window and "A450=A-450" in window
+    assert "B401=" not in window and "C401=" not in window and "D401=" not in window
+    assert "B-401" not in window and "C-401" not in window and "D-401" not in window
+
+
+def test_xlsx_sparse_single_column_uses_physical_rows(tmp_path):
+    path = tmp_path / "sparse-column.xlsx"
+    _make_exact_range_workbook(path)
+
+    window = office.read_target(office.parse_document(path), "Sheet1!C10:C20")
+
+    assert "C10==A10+B10" in window
+    assert "C20=sparse-c20" in window
+    assert "C11=（空）" in window and "C19=（空）" in window
+    assert "A10=" not in window and "B10=" not in window and "D10=" not in window
+
+
+def test_xlsx_single_row_and_single_cell_are_exact(tmp_path):
+    path = tmp_path / "row-cell.xlsx"
+    _make_exact_range_workbook(path)
+    index = office.parse_document(path)
+
+    row = office.read_target(index, "Sheet1!A10:D10")
+    cell = office.read_target(index, "Sheet1!B5")
+
+    assert all(f"{column}10=" in row for column in "ABCD")
+    assert "A9=" not in row and "A11=" not in row
+    assert "B5=B-5" in cell
+    assert "A5=" not in cell and "C5=" not in cell and "D5=" not in cell
+
+
+def test_xlsx_empty_rows_hidden_merge_and_formula_stay_precise(tmp_path):
+    path = tmp_path / "metadata.xlsx"
+    _make_exact_range_workbook(path)
+    index = office.parse_document(path)
+
+    empty_rows = office.read_target(index, "Sheet1!A1:A3")
+    hidden = office.read_target(index, "Sheet1!A7:B7")
+    merged = office.read_target(index, "Sheet1!A20:B20")
+    formula = office.read_target(index, "Sheet1!C10")
+
+    assert "第 2 行: A2=（空）" in empty_rows
+    assert "第 7 行 [隐藏]: A7=A-7 | B7=B-7" in hidden
+    assert "A20=merged-a20" in merged and "B20=（合并单元格 A20:B20）" in merged
+    assert "C10==A10+B10" in formula and "缓存值" in formula
 
 
 def test_office_indexes_embedded_docx_image_bytes(tmp_path):
