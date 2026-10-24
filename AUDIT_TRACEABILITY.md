@@ -12,7 +12,7 @@
 | PDF 按页/混合扫描 OCR，Tesseract/PaddleOCR 互补 | `preprocess.py` PDF 渲染；`runtime.py` `_pdf_sparse_pages`/`_pdf_image_regions`/`_ocr_document`；`ocr.py` | `tests/test_multimodal_documents.py` 混合页图片区域、OCR 后端选择与降级；集成测试覆盖取消清理 | 混合页即使原生文本超过 200 字也会检查嵌入图片区域；融合结果按行去重；实际 OCR 准确率依赖主机安装与字体 |
 | DOCX/PPTX 结构、整页渲染、嵌入图片和复杂页面视觉材料 | `decision/multimodal/office.py` `render_pages`；`runtime.py` `_materialize_office_visuals` | `tests/test_multimodal_documents.py` 文档/幻灯片/嵌图/整页渲染 | 本地渲染函数会把完整 PDF 页面转为 PNG；真实 Provider 未调用，缺少 LibreOffice 时明确安全回退 |
 | XLSX 超 400 行、空行/隐藏行、区域精读 | `office.py` `_xlsx`/`read_target` | `test_xlsx_indexes_rows_beyond_400_and_supports_range_reads`、`test_xlsx_ranges_use_physical_rows_when_blank_rows_are_present` | 本地稀疏 450 行工作簿通过；行索引有 100,000 行上限并保留物理坐标 |
-| Provider 从 AstrBot 列表选择，UI 能力与真实路线一致 | `adapters.py` `provider_catalog`/`classify_kind`；`main.py` WebUI API | `tests/test_multimodal_core.py`、`test_multimodal_ui.py` | 本地 Provider double 通过；宿主版本测试因未配置 `DECISION_REAL_ASTRBOT_SOURCE` 跳过 |
+| Provider 从 AstrBot 列表选择，UI 能力与真实路线一致 | `adapters.py` `provider_catalog`/`classify_kind`；`main.py` WebUI API | `tests/test_multimodal_core.py`、`test_multimodal_ui.py` | 本地 Provider double 通过；VPS 使用实际 `https://api.yiyinfaith.com/v1/chat/completions` + `gemini-3.8-flash` 纯文本探针返回 `DECISION_REAL_API_OK`；宿主版本测试因未配置 `DECISION_REAL_ASTRBOT_SOURCE` 跳过 |
 | 自动理解异步、默认空白名单、不唤醒不回复 | `main.py` `multimodal_observe_message`；`config.py` 默认值；`runtime.py` `observe` | `tests/test_multimodal_integration.py`、`test_multimodal_core.py` | 本地事件链通过；无真实平台外发 |
 | 工具独立开关、定位当前/历史附件、自定义指令/精读 | `decision/multimodal/tools.py`、`runtime.py`、`cache.py` | `tests/test_multimodal_core.py` 工具/缓存/会话隔离 | 本地调用链通过 |
 | 会话隔离、SingleFlight、自动/工具双模式协作与增量缓存 | `cache.py`；`runtime.py` `observe`/`understand`/`inject` | `tests/test_multimodal_runtime.py` 自动关闭仍索引、通用指令复用、特定问题增量调用、并发合并、目标隔离、媒体版本 | 本地验证实际 Provider 调用次数；不同会话、媒体版本、文件 target、模型、策略和分析深度严格隔离 |
@@ -31,7 +31,7 @@
 
 ## 外部依赖边界
 
-本次没有 Gemini/其它模型密钥、管理员指定测试会话或生产平台外发授权，因此没有执行真实模型请求、真实媒体扣费、真实群聊/私聊发送。部署只复制代码并保持现有自动发送配置，不主动触发测试消息；若宿主未提供兼容 AstrBot 源，宿主原生测试继续明确标为 skipped。
+本次真实 Provider 仅执行了一次低成本纯文本探针：VPS 已配置的 `gemini-3.8-flash` 返回 `DECISION_REAL_API_OK`。没有执行真实图片/视频/音频多模态请求、真实媒体扣费或真实群聊/私聊发送；因此多模态模型理解质量、Office 视觉效果和 AIGen 生产账单仍以本地行为测试与生产运行边界为准。部署保持现有自动发送配置，不主动触发测试消息；若宿主未提供兼容 AstrBot 源，宿主原生测试继续明确标为 skipped。
 
 ## 生产盘点与边界
 
