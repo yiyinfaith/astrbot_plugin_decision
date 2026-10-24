@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import json
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,23 @@ class OutputPipelineRuntime:
         self._pipeline: Any | None = None
         self._plugin_config: Any | None = None
         self.error: str = ""
+        self._state_namespace = uuid.uuid4().hex
+        self._state_keys: set[str] = set()
+
+    def _state_key(self, event: Any) -> str:
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        if not umo:
+            # Minimal/test adapters may omit UMO. Never merge platforms, bot
+            # accounts, or private/group conversations sharing a numeric ID.
+            group = str(event.get_group_id() or "")
+            umo = json.dumps([
+                str(getattr(event, "platform_meta", "") or type(event).__module__),
+                str(event.get_self_id() or ""), "group" if group else "private",
+                group or str(event.get_sender_id() or ""),
+            ], ensure_ascii=False)
+        key = f"{self._state_namespace}:{umo}"
+        self._state_keys.add(key)
+        return key
 
     @property
     def available(self) -> bool:
@@ -124,8 +142,7 @@ class OutputPipelineRuntime:
             self.error = ""
             return True
         except Exception as exc:  # optional dependencies are deployment-specific
-            self._pipeline = None
-            self._plugin_config = None
+            await self.close()
             self.error = f"{type(exc).__name__}: {exc}"
             logger.warning("Decision Engine output enhancement is unavailable: %s", self.error)
             return False
@@ -145,7 +162,7 @@ class OutputPipelineRuntime:
             original_chain = copy.deepcopy(result.chain)
             from .outputpro.core.model import OutContext, StateManager
 
-            gid = str(event.get_group_id() or event.get_sender_id() or "")
+            gid = str(event.get_group_id() or "")
             message_obj = getattr(event, "message_obj", None)
             raw_timestamp = getattr(message_obj, "timestamp", 0) or 0
             try:
@@ -160,7 +177,7 @@ class OutputPipelineRuntime:
                 gid=gid,
                 uid=str(event.get_sender_id() or ""),
                 bid=str(event.get_self_id() or ""),
-                group=StateManager.get_group(gid),
+                group=StateManager.get_group(self._state_key(event)),
                 timestamp=timestamp,
             )
             await self._pipeline.run(context)
@@ -192,8 +209,7 @@ class OutputPipelineRuntime:
 
             # Private chats have no group ID.  Fall back to the sender so
             # OutputPro's per-conversation state cannot leak between users.
-            gid = str(event.get_group_id() or event.get_sender_id() or "")
-            group = StateManager.get_group(gid)
+            group = StateManager.get_group(self._state_key(event))
             sender_id = str(event.get_sender_id() or "")
             self_id = str(event.get_self_id() or "")
             if self._plugin_config.reply.threshold > 0 and sender_id != self_id:
@@ -220,4 +236,10 @@ class OutputPipelineRuntime:
                 logger.debug("Decision Engine output pipeline shutdown failed: %s", exc)
         self._pipeline = None
         self._plugin_config = None
+        if self._state_keys:
+            from .outputpro.core.model import StateManager
+
+            for key in self._state_keys:
+                StateManager._groups.pop(key, None)
+            self._state_keys.clear()
 

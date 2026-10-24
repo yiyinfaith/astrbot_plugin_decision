@@ -45,6 +45,15 @@ async def _resolve_reference(component: Any) -> str:
     """Turn a component into something the provider layer can read."""
 
     kind = _kind_of(component)
+    # Preserve HTTP references for our pinned, bounded downloader. AstrBot's
+    # convenience converters may fetch them eagerly through an unvalidated
+    # connection, bypassing this module's SSRF boundary entirely.
+    for attribute in ("path", "url", "file", "file_"):
+        reference = getattr(component, attribute, None)
+        if isinstance(reference, str) and (
+            reference.lower().startswith(("https://", "http://")) or is_local_file(reference)
+        ):
+            return reference
     if kind == "file":
         getter = getattr(component, "get_file", None)
         if callable(getter):
@@ -170,7 +179,7 @@ def is_local_file(reference: str) -> bool:
         return False
 
 
-async def ensure_local(reference: str, *, timeout: float = 60.0) -> str:
+async def ensure_local(reference: str, *, timeout: float = 60.0, max_bytes: int = 200 * 1024 * 1024) -> str:
     """Return a local path for a reference, downloading http(s) sources safely.
 
     Only http(s) with a public-looking host is attempted; the download is bounded
@@ -181,7 +190,7 @@ async def ensure_local(reference: str, *, timeout: float = 60.0) -> str:
         return reference
     if not reference.lower().startswith(("http://", "https://")):
         raise ValueError("媒体引用不是本地文件也不是可下载链接")
-    return await asyncio.wait_for(_download(reference), timeout=timeout)
+    return await asyncio.wait_for(_download(reference, max_bytes=max_bytes), timeout=timeout)
 
 
 _PRIVATE_HOSTS = {"localhost", "localhost.localdomain", "metadata", "metadata.google.internal"}
@@ -198,7 +207,22 @@ def _is_public_ip(ip: str) -> bool:
     # ``is_global`` is deliberately stricter than just ``not private``.  It
     # rejects documentation/test ranges, benchmarking ranges and other
     # special-use networks which must never be reachable from a media fetcher.
-    return bool(address.is_global)
+    if not address.is_global or any((
+        address.is_multicast, address.is_reserved, address.is_loopback,
+        address.is_link_local, address.is_unspecified,
+        getattr(address, "is_site_local", False),
+    )):
+        return False
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            return _is_public_ip(str(address.ipv4_mapped))
+        # Transition/translation endpoints can route an otherwise global IPv6
+        # literal to private IPv4. Refuse these special-use transports.
+        if any(address in ipaddress.ip_network(prefix) for prefix in (
+            "64:ff9b::/96", "64:ff9b:1::/48", "2002::/16", "2001::/32",
+        )):
+            return False
+    return True
 
 
 def _public_resolution(url: str) -> tuple[str, int, list[dict[str, Any]]]:
@@ -220,6 +244,10 @@ def _public_resolution(url: str) -> tuple[str, int, list[dict[str, Any]]]:
     host = (parts.hostname or "").strip().lower()
     if not host:
         raise ValueError("媒体链接缺少主机名")
+    try:
+        host = host.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise ValueError("媒体链接主机名无效") from exc
     if host in _PRIVATE_HOSTS or host.endswith(_PRIVATE_SUFFIXES):
         raise ValueError("拒绝访问内网或元数据地址")
     try:
@@ -315,7 +343,7 @@ class _PinnedResolver(AbstractResolver):
         return None
 
 
-async def _download(url: str) -> str:
+async def _download(url: str, *, max_bytes: int = 200 * 1024 * 1024) -> str:
     import aiohttp
     host, port, pinned = await asyncio.to_thread(_public_resolution, url)
     suffix = Path(url.split("?", 1)[0]).suffix[:8] or ".bin"
@@ -342,10 +370,12 @@ async def _download(url: str) -> str:
             async with session.get(url, allow_redirects=False, proxy=None) as response:
                 if response.status != 200:
                     raise ValueError(f"下载失败：HTTP {response.status}")
+                if response.content_length is not None and response.content_length > max_bytes:
+                    raise ValueError("媒体体积超过下载上限")
                 total = 0
                 async for chunk in response.content.iter_chunked(65536):
                     total += len(chunk)
-                    if total > 200 * 1024 * 1024:
+                    if total > max_bytes:
                         raise ValueError("媒体体积超过下载上限")
                     handle.write(chunk)
         handle.close()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -91,6 +92,7 @@ def _validate_answer(question_id: str, question: Mapping[str, Any], answer: Any)
         if (
             not isinstance(score, (int, float))
             or isinstance(score, bool)
+            or not math.isfinite(score)
             or score < 0
             or score > len(criteria) - 1
         ):

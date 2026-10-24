@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -71,6 +72,11 @@ async def run_command(cmd: list[str], *, timeout: float = 120.0) -> tuple[int, b
     # expensive ffmpeg/ffprobe process. A to_thread(subprocess.run) wrapper keeps
     # running after its awaiting task is cancelled and can accumulate orphaned
     # encoders during plugin reloads.
+    if cmd and Path(cmd[0]).stem.lower() in {"ffmpeg", "ffprobe"}:
+        # A downloaded "video" can actually be a playlist referencing an
+        # internal HTTP service. Decoders must not open secondary network URLs
+        # after the safe downloader has validated only the outer attachment.
+        cmd = [cmd[0], "-protocol_whitelist", "file,pipe,crypto,data", *cmd[1:]]
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -338,6 +344,25 @@ async def extract_audio_track(path: Path, workdir: Path) -> str:
     return str(target) if code == 0 and target.is_file() else ""
 
 
+async def audio_is_silent(path: Path) -> bool | None:
+    """Detect digital silence; undecodable/unmeasured audio remains unknown.
+
+    -80 dB is below quiet speech and close to the 16-bit quantization floor.
+    A silent codec stream must not invite the model to invent sounds.
+    """
+    try:
+        code, _, error = await run_command([
+            "ffmpeg", "-hide_banner", "-nostdin", "-i", str(path), "-vn",
+            "-af", "volumedetect", "-f", "null", "-",
+        ], timeout=60)
+    except (OSError, RuntimeError, TimeoutError):
+        return None
+    match = re.search(r"max_volume:\s*(-?inf|[-\d.]+)\s*dB", error.decode("utf-8", "replace"))
+    if code or not match:
+        return None
+    return float(match[1]) <= -80.0
+
+
 def plan_timestamps(duration: float, max_frames: int) -> list[float]:
     """Evenly spaced sample points that always include the very beginning."""
 
@@ -471,7 +496,11 @@ def pdf_text_pages(path: Path, limit: int, pages: list[int] | None = None) -> st
     from pypdf import PdfReader
 
     reader = PdfReader(str(path))
-    wanted = pages if pages is not None else list(range(len(reader.pages)))
+    wanted = pages if pages is not None else range(len(reader.pages))
+    if isinstance(wanted, range):
+        wanted = range(max(0, wanted.start), min(wanted.stop, len(reader.pages)), wanted.step)
+    if pages is not None and not wanted:
+        raise ValueError("指定的 PDF 页码超出文档范围")
     chunks: list[str] = []
     used = 0
     for number in wanted:
@@ -484,10 +513,10 @@ def pdf_text_pages(path: Path, limit: int, pages: list[int] | None = None) -> st
         if not text.strip():
             continue
         chunk = f"[第 {number + 1} 页]\n{text.strip()}"
-        if used + len(chunk) > limit:
+        chunks.append(chunk[: max(0, limit - used)])
+        used += len(chunks[-1])
+        if used >= limit:
             break
-        chunks.append(chunk)
-        used += len(chunk)
     return "\n\n".join(chunks)[:limit]
 
 
@@ -553,12 +582,14 @@ def pdf_page_images(
     edge = int(settings.int("mm_image_max_edge")) or DEFAULT_EDGE
     rendered: list[str] = []
     with fitz.open(str(path)) as document:
-        wanted = pages if pages else list(range(min(limit, document.page_count)))
+        wanted = pages if pages is not None else range(min(limit, document.page_count))
+        if isinstance(wanted, range):
+            wanted = range(max(0, wanted.start), min(wanted.stop, document.page_count), wanted.step)
         for number in wanted[:limit]:
             if number < 0 or number >= document.page_count:
                 continue
             page = document.load_page(number)
-            zoom = min(2.0, max(1.0, edge / max(1.0, float(page.rect.width))))
+            zoom = min(2.0, edge / max(1.0, float(page.rect.width), float(page.rect.height)))
             pixmap = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
             target = workdir / f"page-{number + 1:02d}.png"
             pixmap.save(str(target))

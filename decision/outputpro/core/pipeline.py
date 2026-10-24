@@ -84,7 +84,10 @@ class Pipeline:
     async def terminate(self) -> None:
         """终止所有步骤"""
         for step in self._steps:
-            await step.terminate()
+            try:
+                await step.terminate()
+            except Exception as exc:
+                logger.warning("Output step %s shutdown failed: %s", step.name, type(exc).__name__)
 
     # ==================== run =====================
 

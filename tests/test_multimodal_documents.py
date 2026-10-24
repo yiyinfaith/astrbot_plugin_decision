@@ -465,8 +465,11 @@ def test_office_render_pages_produces_full_page_visual(monkeypatch, tmp_path, pp
     import fitz
 
     monkeypatch.setattr(office.shutil, "which", lambda name: "fake-soffice")
+    # Test the rendering boundary with a fake converter; sandbox isolation is
+    # independently exercised against real bubblewrap in the VPS acceptance.
+    monkeypatch.setattr(office, "_office_sandbox_command", lambda exe, job, timeout: [exe, "--outdir", str(job / "output")])
 
-    def fake_run(command, **kwargs):
+    def fake_run(command, job, timeout, cancelled):
         output = Path(command[command.index("--outdir") + 1])
         output.mkdir(parents=True, exist_ok=True)
         document = fitz.open()
@@ -476,7 +479,7 @@ def test_office_render_pages_produces_full_page_visual(monkeypatch, tmp_path, pp
         document.save(str(output / "a.pdf"))
         document.close()
 
-    monkeypatch.setattr(office.subprocess, "run", fake_run)
+    monkeypatch.setattr(office, "_run_office_conversion", fake_run)
     workdir = tmp_path / "request"
     workdir.mkdir()
     images = office.render_pages(pptx_file, workdir, target="2", max_pages=2)

@@ -324,6 +324,7 @@ async def test_office_worker_receives_cancellation_without_provider_call(tmp_pat
     provider = FakeProvider()
     runtime = build(tmp_path, provider)
     path = tmp_path / "cancel.xlsx"
+    path.write_bytes(b"worker cancellation fixture")
     ref = MediaRef(kind="file", reference=str(path), urn="u::cancel", umo="u")
     task = asyncio.create_task(runtime._run_file(
         ref, SimpleNamespace(provider=provider, model=""), "read", tmp_path, path,

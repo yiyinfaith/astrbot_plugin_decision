@@ -46,7 +46,9 @@ class DocumentIndex:
             header = f"[{block.get('label', '')}]".strip()
             chunk = f"{header}\n{text}".strip() if header != "[]" else text
             if used + len(chunk) > limit_chars:
-                parts.append(f"…（已达到 {limit_chars} 字上限，后续内容可用指定范围的工具读取）")
+                notice = f"…（已达到 {limit_chars} 字上限，后续内容可用指定范围的工具读取）"
+                remaining = max(0, limit_chars - used)
+                parts.append(chunk[: max(0, remaining - len(notice) - 1)] + "\n" + notice)
                 break
             parts.append(chunk)
             used += len(chunk)
@@ -59,6 +61,15 @@ class DocumentIndex:
         if not key:
             return list(self.blocks)
         lowered = key.lower()
+        if self.kind == "pptx":
+            # Ordinals are coordinates, not title substring searches ("2"
+            # must not match a different slide titled "2026 report").
+            import re
+
+            ordinal = re.fullmatch(r"(?:slide|幻灯片|第)?\s*(\d+)(?:\s*[-~到]\s*(\d+))?\s*(?:页|张)?", lowered)
+            if ordinal:
+                start, end = int(ordinal[1]), int(ordinal[2] or ordinal[1])
+                return [block for block in self.blocks if start <= int(block.get("number", 0)) <= end]
         hits = []
         for block in self.blocks:
             names = {
@@ -454,6 +465,14 @@ def parse_document(
     """Parse a supported Office document into an index of readable blocks."""
 
     suffix = path.suffix.lower()
+    if suffix in {".docx", ".pptx", ".xlsx", ".xlsm"}:
+        from zipfile import ZipFile
+
+        from .preprocess import HARD_MAX_BYTES
+
+        with ZipFile(path) as archive:
+            if sum(item.file_size for item in archive.infolist()) > HARD_MAX_BYTES:
+                raise ValueError("Office 解压后体积超过安全处理上限")
     if suffix == ".docx":
         return _docx(path, limit_chars)
     if suffix == ".pptx":
@@ -661,21 +680,83 @@ def _render_xlsx_region(
     return "\n".join(lines)
 
 
+def is_page_target(target: str) -> bool:
+    import re
+
+    return bool(re.fullmatch(r"(?:pages?|slide|幻灯片|第)?\s*\d+(?:\s*[-~到,]\s*\d+)*\s*(?:页|张)?", str(target or "").strip(), re.I))
+
+
 def _page_selection(target: str, page_count: int) -> list[int]:
     """Return zero-based page numbers selected by a slide/page target."""
 
     import re
 
     value = str(target or "").strip().lower()
-    match = re.search(r"(?:slide|幻灯片|page|页|第)\s*(\d+)(?:\s*[-~到]\s*(\d+))?", value)
-    if not match and value.isdigit():
-        match = re.match(r"(\d+)", value)
-    if not match:
+    if not value:
         return list(range(page_count))
-    start = max(1, int(match.group(1)))
-    end_group = match.group(2) if (match.lastindex or 0) >= 2 else None
-    end = max(start, int(end_group or start))
-    return [number - 1 for number in range(start, min(end, page_count) + 1)]
+    value = re.sub(r"^(?:pages?|slide|幻灯片|第)\s*", "", value)
+    value = re.sub(r"\s*(?:页|张)$", "", value)
+    wanted = set()
+    for part in value.split(","):
+        match = re.fullmatch(r"(\d{1,12})(?:\s*[-~到]\s*(\d{1,12}))?", part.strip())
+        if not match:
+            raise ValueError("整页渲染目标不是有效页码或页码范围")
+        start, end = int(match[1]), int(match[2] or match[1])
+        if start < 1 or end < start:
+            raise ValueError("整页渲染页码范围无效")
+        wanted.update(range(start - 1, min(end, page_count)))
+    if not wanted:
+        raise ValueError("指定的渲染页码超出文档范围")
+    return sorted(wanted)
+
+
+def _office_sandbox_command(executable: str, job: Path, timeout: float) -> list[str]:
+    """Expose only system libraries and this job; remove network and secrets."""
+    bwrap, prlimit = shutil.which("bwrap"), shutil.which("prlimit")
+    if os.name != "posix" or not bwrap or not prlimit:
+        raise RuntimeError("缺少 bubblewrap/prlimit 隔离环境，无法安全执行 Office 整页渲染")
+    command = [prlimit, "--as=1073741824", f"--cpu={max(5, int(timeout))}:{max(7, int(timeout) + 2)}", "--nofile=256:256", "--",
+               bwrap, "--unshare-all", "--die-with-parent", "--new-session", "--cap-drop", "ALL", "--clearenv"]
+    for system_path in ("/usr", "/bin", "/lib", "/lib64", "/etc/fonts", "/etc/libreoffice", "/etc/ld.so.cache"):
+        if Path(system_path).exists():
+            command.extend(["--ro-bind", system_path, system_path])
+    command.extend([
+        "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
+        "--bind", str(job), "/work", "--chdir", "/work",
+        "--setenv", "HOME", "/work", "--setenv", "TMPDIR", "/tmp",
+        "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "LANG", "C.UTF-8",
+        "--setenv", "SAL_USE_VCLPLUGIN", "svp",
+        executable, "--headless", "--nologo", "--nodefault", "--norestore", "--nolockcheck",
+        "-env:UserInstallation=file:///work/profile", "--convert-to", "pdf",
+        "--outdir", "/work/output", "/work/input" + (job / "input.name").read_text(),
+    ])
+    return command
+
+
+def _run_office_conversion(command: list[str], job: Path, timeout: float, cancelled: Callable[[], bool] | None) -> None:
+    deadline = time.monotonic() + timeout
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          env={"PATH": os.defpath}, cwd=str(job), start_new_session=True) as process:
+        try:
+            while True:
+                if cancelled is not None and cancelled():
+                    raise RuntimeError("Office 整页渲染已取消")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                try:
+                    _, stderr = process.communicate(timeout=min(.2, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if process.returncode:
+                raise subprocess.CalledProcessError(process.returncode, command, stderr=stderr)
+        finally:
+            if process.poll() is None:
+                # bubblewrap's PID namespace and --die-with-parent ensure its
+                # converter descendants exit as well; do not leave soffice jobs.
+                process.kill()
+                process.communicate()
 
 
 def render_pages(
@@ -685,6 +766,7 @@ def render_pages(
     target: str = "",
     max_pages: int = 12,
     timeout: float = 90.0,
+    cancelled: Callable[[], bool] | None = None,
 ) -> list[str]:
     """Render complete DOCX/PPTX pages through a sandboxed LibreOffice job.
 
@@ -709,57 +791,44 @@ def render_pages(
     output = job / "output"
     profile.mkdir()
     output.mkdir()
-    env = os.environ.copy()
-    env.update({"HOME": str(job), "USERPROFILE": str(job), "TMPDIR": str(job)})
-    command = [
-        executable,
-        "--headless",
-        "--nologo",
-        "--nodefault",
-        "--norestore",
-        "--nolockcheck",
-        f"-env:UserInstallation={profile.as_uri()}",
-        "--convert-to",
-        "pdf",
-        "--outdir",
-        str(output),
-        str(path),
-    ]
-
-    def _limits() -> None:
-        # Apply hard process limits where the host supports them.  Windows
-        # safely falls back to the subprocess timeout.
-        try:
-            import resource
-
-            resource.setrlimit(resource.RLIMIT_CPU, (max(5, int(timeout)), max(5, int(timeout) + 2)))
-            memory = 1024 * 1024 * 1024
-            resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
-        except (ImportError, OSError, ValueError):
-            return None
-
     try:
-        subprocess.run(
-            command,
-            capture_output=True,
-            check=True,
-            timeout=timeout,
-            env=env,
-            cwd=str(job),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            preexec_fn=_limits if os.name == "posix" else None,
+        shutil.copyfile(path, job / ("input" + path.suffix.lower()))
+        (job / "input.name").write_text(path.suffix.lower())
+        user = profile / "user"
+        user.mkdir()
+        (user / "registrymodifications.xcu").write_text(
+            '<?xml version="1.0" encoding="UTF-8"?><oor:items xmlns:oor="http://openoffice.org/2001/registry">'
+            '<item oor:path="/org.openoffice.Office.Common/Security/Scripting">'
+            '<prop oor:name="MacroSecurityLevel" oor:op="fuse"><value>3</value></prop></item></oor:items>',
+            encoding="utf-8",
         )
+        command = _office_sandbox_command(executable, job, timeout)
+        _run_office_conversion(command, job, timeout, cancelled)
         pdfs = list(output.glob("*.pdf"))
         if not pdfs:
             raise RuntimeError("LibreOffice 未生成 PDF 页面")
         rendered: list[str] = []
         with fitz.open(str(pdfs[0])) as document:
-            wanted = _page_selection(target, document.page_count)
+            if target and not is_page_target(target):
+                # DOCX section reads use exported heading bookmarks. If the
+                # converter cannot map the section, never attach unrelated pages.
+                toc = document.get_toc()
+                hits = [(i, row) for i, row in enumerate(toc) if target.casefold() in row[1].casefold()]
+                if not hits:
+                    raise ValueError("无法把章节映射到物理页；仅可回退到结构化章节文本")
+                wanted_set = set()
+                for offset, (level, _title, start) in hits:
+                    end = next((row[2] - 1 for row in toc[offset + 1:] if row[0] <= level), document.page_count)
+                    wanted_set.update(range(max(0, start - 1), min(end, document.page_count)))
+                wanted = sorted(wanted_set)
+            else:
+                wanted = _page_selection(target, document.page_count)
             for number in wanted[: max(1, int(max_pages))]:
                 if number < 0 or number >= document.page_count:
                     continue
                 page = document.load_page(number)
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+                zoom = min(1.5, 1568 / max(1.0, page.rect.width, page.rect.height))
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
                 target_path = workdir / f"office-page-{number + 1:02d}.png"
                 pixmap.save(str(target_path))
                 rendered.append(str(target_path))

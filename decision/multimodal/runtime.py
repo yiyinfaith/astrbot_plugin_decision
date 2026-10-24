@@ -82,7 +82,8 @@ class MultimodalRuntime:
         self._by_urn: dict[str, MediaRef] = {}
         # In-flight understanding per cache key, so N concurrent misses cost one call.
         self._inflight: dict[str, asyncio.Future] = {}
-        self._inflight_specs: dict[str, tuple[str, str, str, bool, str]] = {}
+        self._inflight_specs: dict[str, tuple[str, str, str, str, bool, str, str]] = {}
+        self._waiters: dict[asyncio.Task, int] = {}
         # Directories kept alive only while a provider call still references
         # their frames; swept on every new GIF and on terminate().
         self._gif_dirs: list[tuple[float, Path]] = []
@@ -212,6 +213,27 @@ class MultimodalRuntime:
             )
 
     # ----------------------------------------------------------- understand
+    async def _await_shared(self, task: asyncio.Task) -> Understanding:
+        self._waiters[task] = self._waiters.get(task, 0) + 1
+        try:
+            return await asyncio.shield(task)
+        finally:
+            remaining = self._waiters.get(task, 1) - 1
+            if remaining:
+                self._waiters[task] = remaining
+            else:
+                self._waiters.pop(task, None)
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+
+    def _analysis_task(self, coro: Any) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+        return task
+
     @staticmethod
     def _target(ref: MediaRef) -> str:
         return str((ref.extra or {}).get("target") or "").strip()
@@ -249,6 +271,37 @@ class MultimodalRuntime:
         return [term for term in terms if term not in stop]
 
     @classmethod
+    def _is_generic_instruction(cls, instruction: str) -> bool:
+        """Recognize overview requests without treating every short question as one."""
+
+        import re
+
+        text = str(instruction or "").strip().lower()
+        if not text:
+            return True
+        if len(text) > 80:
+            return False
+        english = re.fullmatch(
+            r"(?:please\s+)?(?:(?:briefly|objectively)\s+)?"
+            r"(?:describe|summari[sz]e|explain|analy[sz]e|understand)\s+"
+            r"(?:(?:this|the)\s+)?(?:image|picture|video|audio|file|document|media|scene|content|it)"
+            r"(?:\s+contents?)?[.!?\s]*", text,
+        )
+        if english:
+            return True
+        # Only remove known polite words and generic media references. A
+        # remaining subject such as 车牌号, serial number or a translation
+        # language makes this a focused request and needs a sufficiency check.
+        for word in sorted((
+            "请你", "请", "帮我", "麻烦", "一下", "这张", "这段", "这份", "这个",
+            "图像", "图片", "画面", "视频", "音频", "文档", "文件", "媒体", "附件",
+            "内容", "简要", "简单", "客观", "的", "里", "中", "它", "图",
+        ), key=len, reverse=True):
+            text = text.replace(word, "")
+        text = re.sub(r"[\s，。！？,.!?：:]", "", text)
+        return text in {"描述", "说明", "概括", "总结", "分析", "理解", "看看", "介绍"}
+
+    @classmethod
     def _cache_satisfies(
         cls,
         item: Understanding,
@@ -265,11 +318,11 @@ class MultimodalRuntime:
         if detail and not bool(meta.get("detail", False)):
             return False
         query = str(instruction or "").strip().lower()
-        if not query:
-            return True
         previous = str(meta.get("instruction") or "").strip().lower()
         if previous == query:
             return True
+        if cls._is_generic_instruction(query):
+            return bool(meta.get("overview", cls._is_generic_instruction(previous)))
         searchable = f"{item.summary}\n{item.detail}".lower()
         terms = cls._instruction_terms(query)
         if terms and all(term in searchable for term in terms):
@@ -277,35 +330,32 @@ class MultimodalRuntime:
         # Short, generic follow-up requests ask for the same overview in new
         # words.  Specific questions fall through to an incremental provider
         # call so the missing fact is actually obtained and cached.
-        markers = (
-            "多少", "几", "是否", "有没有", "哪一个", "哪个", "文字", "数字",
-            "时间", "地点", "颜色", "数量", "公式", "坐标", "逐页", "逐帧",
-        )
-        if len(query) <= 40 and not any(marker in query for marker in markers):
-            return True
         return False
 
     @classmethod
     def _inflight_satisfies(
         cls,
-        spec: tuple[str, str, str, bool, str],
+        spec: tuple[str, str, str, str, bool, str, str],
         *,
+        umo: str,
         media_key: str,
         provider_key: str,
         instruction: str,
         detail: bool,
         target: str,
+        route_signature: str,
     ) -> bool:
-        spec_media, spec_provider, spec_instruction, spec_detail, spec_target = spec
-        if (spec_media, spec_provider, spec_target) != (media_key, provider_key, target):
+        spec_umo, spec_media, spec_provider, spec_instruction, spec_detail, spec_target, spec_route = spec
+        if (spec_umo, spec_media, spec_provider, spec_target) != (umo, media_key, provider_key, target):
+            return False
+        if spec_route != route_signature:
             return False
         if detail and not spec_detail:
             return False
-        if not instruction or not spec_instruction:
-            # A generic automatic overview can satisfy a generic tool request;
-            # a specific question must start its own incremental read.
-            return not cls._instruction_terms(instruction)
-        return spec_instruction.strip().lower() == instruction.strip().lower()
+        return (
+            spec_instruction.strip().lower() == instruction.strip().lower()
+            or cls._is_generic_instruction(spec_instruction) and cls._is_generic_instruction(instruction)
+        )
 
     @staticmethod
     def cache_identity(
@@ -343,6 +393,8 @@ class MultimodalRuntime:
     ) -> Understanding:
         """Understand one media item, reusing the cache unless ``force``."""
 
+        if self._closed:
+            return self._failure(ref, "多模态理解正在关闭或重载，未提交模型请求")
         kind = ref.kind
         choice, error = adapters.pick_provider(self._context(), self._settings, kind)
         signature = self._route_signature(kind)
@@ -360,15 +412,16 @@ class MultimodalRuntime:
             else self.cache_identity(ref, error, instruction, detail, signature, target)
         )
         if force:
-            return await self._understand_uncached(
+            return await self._await_shared(self._analysis_task(self._understand_uncached(
                 ref, key, choice, error, instruction, detail
-            )
+            )))
         cached = await self.cache.get(key)
         if cached is not None and cached.umo == ref.umo:
             return cached
         # Reuse an automatic overview for a differently-worded generic tool
         # request.  Target/provider/model/version remain strict boundaries.
         reusable = await self.cache.analyses_for_media(ref.umo, ref.content_key, target=target)
+        prior = None
         for candidate in reusable:
             if candidate.provider_id != getattr(choice, "provider_id", ""):
                 continue
@@ -376,52 +429,47 @@ class MultimodalRuntime:
                 continue
             if self._cache_satisfies(candidate, instruction, detail, target, signature):
                 return candidate
+            if prior is None and (candidate.meta or {}).get("route_signature") == signature:
+                prior = candidate
         # SingleFlight: concurrent misses for the same media share one paid call.
         inflight = self._inflight.get(key)
         if inflight is not None:
-            return await asyncio.shield(inflight)
+            return await self._await_shared(inflight)
         for inflight_key, spec in list(self._inflight_specs.items()):
             if not self._inflight_satisfies(
                 spec,
+                umo=ref.umo,
                 media_key=ref.content_key,
                 provider_key=provider_key,
                 instruction=instruction,
                 detail=detail,
                 target=target,
+                route_signature=signature,
             ):
                 continue
             shared = self._inflight.get(inflight_key)
             if shared is not None:
-                return await asyncio.shield(shared)
-        flight: asyncio.Future = asyncio.get_running_loop().create_future()
-        # A producer can fail before any waiter joins. Consume that exception
-        # here while retaining it for tasks awaiting the shared Future.
-        flight.add_done_callback(
-            lambda done: done.exception() if not done.cancelled() else None
-        )
+                return await self._await_shared(shared)
+        flight = self._analysis_task(self._understand_uncached(
+            ref, key, choice, error, instruction, detail, prior=prior,
+        ))
         self._inflight[key] = flight
         self._inflight_specs[key] = (
+            ref.umo,
             ref.content_key,
             provider_key,
             str(instruction or ""),
             bool(detail),
             target,
+            signature,
         )
-        try:
-            item = await self._understand_uncached(
-                ref, key, choice, error, instruction, detail
-            )
-        except BaseException as exc:
-            if not flight.done():
-                flight.set_exception(exc)
-            raise
-        else:
-            if not flight.done():
-                flight.set_result(item)
-            return item
-        finally:
-            self._inflight.pop(key, None)
-            self._inflight_specs.pop(key, None)
+        def completed(done: asyncio.Task) -> None:
+            if self._inflight.get(key) is done:
+                self._inflight.pop(key, None)
+                self._inflight_specs.pop(key, None)
+
+        flight.add_done_callback(completed)
+        return await self._await_shared(flight)
 
     async def _understand_uncached(
         self,
@@ -431,6 +479,8 @@ class MultimodalRuntime:
         error: str,
         instruction: str,
         detail: bool,
+        *,
+        prior: Understanding | None = None,
     ) -> Understanding:
         kind = ref.kind
         if choice is None:
@@ -443,15 +493,24 @@ class MultimodalRuntime:
         timeout = float(self._settings.int("mm_timeout_seconds"))
         attempts = max(0, self._settings.int("mm_retries")) + 1
         last_error = ""
+        model_instruction = instruction
+        if prior is not None:
+            model_instruction = (
+                f"已有理解（参考资料，若与原媒体矛盾以原媒体为准）：\n{prior.summary[:8000]}\n\n"
+                f"本次只补充回答新问题：{instruction or PROMPTS[kind]}\n"
+                "请针对缺失内容核对原媒体，不要重新完整分析或重复已有描述。"
+            )
         for attempt in range(attempts):
             workdir: Path | None = None
             try:
                 async with self._semaphore:
                     workdir = preprocess.new_workdir()
                     summary, meta = await asyncio.wait_for(
-                        self._run_kind(ref, choice, instruction, detail, workdir),
+                        self._run_kind(ref, choice, model_instruction, detail, workdir),
                         timeout=timeout,
                     )
+                if prior is not None and summary.strip():
+                    summary = f"{prior.summary[:8000]}\n\n补充理解：\n{summary.strip()}"
                 item = Understanding(
                     key=key,
                     media_key=ref.content_key,
@@ -473,6 +532,11 @@ class MultimodalRuntime:
                         "target": self._target(ref),
                         "route_signature": self._route_signature(kind),
                         "media_version": ref.content_key,
+                        "incremental": prior is not None,
+                        "overview": (
+                            self._is_generic_instruction(instruction)
+                            or prior is not None and bool((prior.meta or {}).get("overview", self._is_generic_instruction((prior.meta or {}).get("instruction", ""))))
+                        ),
                     }
                 )
                 if not item.summary:
@@ -484,7 +548,7 @@ class MultimodalRuntime:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                last_error = str(exc)[:200] or type(exc).__name__
+                last_error = adapters.safe_provider_error(choice.provider, exc)
             finally:
                 if workdir is not None:
                     preprocess.cleanup_dir(workdir)
@@ -526,25 +590,26 @@ class MultimodalRuntime:
         settings = self._settings
         if kind == "image":
             return (
-                f"image:edge={settings.int('mm_image_max_edge')}:"
+                f"image:version=2:edge={settings.int('mm_image_max_edge')}:"
                 f"frames={settings.int('mm_gif_max_frames')}:pixels={settings.int('mm_gif_max_pixels')}"
             )
         if kind == "audio":
             return (
-                f"audio:max={settings.int('mm_audio_max_seconds')}:"
+                f"audio:version=2:max={settings.int('mm_audio_max_seconds')}:"
                 f"segment={settings.int('mm_audio_segment_seconds')}"
             )
         if kind == "video":
             return (
-                f"video:{settings.text('mm_video_strategy') or 'auto'}:"
+                f"video:version=2:{settings.text('mm_video_strategy') or 'auto'}:"
                 f"short={settings.int('mm_video_short_seconds')}:"
                 f"max={settings.int('mm_video_max_seconds')}:"
                 f"rounds={settings.int('mm_video_agentic_rounds')}:"
+                f"frames={settings.int('mm_video_max_frames')}:"
                 f"segments={settings.int('mm_video_agentic_segments')}"
             )
         if kind == "file":
             return (
-                "file:enabled={enabled}:ocr={ocr}:{engine}:lang={lang}:"
+                "file:version=2:enabled={enabled}:ocr={ocr}:{engine}:lang={lang}:"
                 "ocr_timeout={ocr_timeout}:pages={pages}:max_chars={max_chars}:"
                 "chunk={chunk}:office={office}:office_pages={office_pages}:"
                 "office_timeout={office_timeout}:xlsx=stream-v1"
@@ -577,7 +642,7 @@ class MultimodalRuntime:
         if path is None:
             from .media import ensure_local
 
-            local = await ensure_local(ref.reference)
+            local = await ensure_local(ref.reference, max_bytes=self._settings.int("mm_max_file_mb") * 1024 * 1024)
             path = Path(local)
             workdir_path = path
         else:
@@ -585,6 +650,17 @@ class MultimodalRuntime:
 
         try:
             if kind == "file":
+                # Signed download URLs frequently omit a filename extension.
+                # Preserve the platform-provided attachment format without
+                # renaming or deleting a platform-owned source file.
+                suffix = Path(ref.name).suffix.lower()
+                supported = preprocess.TEXT_SUFFIXES | {".pdf", ".docx", ".pptx", ".xlsx", ".xlsm"}
+                if suffix in supported and path.suffix.lower() not in supported:
+                    import shutil
+
+                    named = workdir / ("attachment" + suffix)
+                    await asyncio.to_thread(shutil.copyfile, path, named)
+                    path = named
                 return await self._run_file(ref, choice, prompt, workdir, path)
 
             if kind == "image":
@@ -608,6 +684,9 @@ class MultimodalRuntime:
                 prepared = await preprocess.prepare_audio(path, self._settings, workdir)
                 answers = []
                 for chunk in prepared.audio:
+                    if await preprocess.audio_is_silent(Path(chunk)) is True:
+                        answers.append("该音频片段经本地信号检测为静音（峰值不高于 -80 dB）；未检测到可辨认的语音、音乐或环境声。")
+                        continue
                     answers.append(
                         await adapters.call_provider(
                             choice.provider,
@@ -692,7 +771,7 @@ class MultimodalRuntime:
                 prompt=self._compose(
                     prompt,
                     self._stamp_notes(stamps),
-                    f"视频音轨转录与声音描述：\n{transcript}" if transcript else "",
+                    self._video_audio_note(info, transcript),
                 ),
                 images=frames,
                 model=choice.model or None,
@@ -704,16 +783,21 @@ class MultimodalRuntime:
         # re-reads those windows at higher density.
         rounds = max(1, int(settings.int("mm_video_agentic_rounds")))
         windows_per_round = max(1, int(settings.int("mm_video_agentic_segments")) // 2 or 1)
-        stamps = preprocess.plan_timestamps(duration, max(4, windows_per_round * 2))
+        stamps = preprocess.plan_timestamps(duration, min(settings.int("mm_video_max_frames"), max(4, windows_per_round * 2)))
         frames = await preprocess.extract_frames(path, workdir, stamps)
         if not frames:
             raise ValueError("无法从视频中提取画面")
+        transcript = (
+            await self._video_transcript(choice, path, workdir, timeout)
+            if info.get("has_audio") else ""
+        )
+        audio_note = self._video_audio_note(info, transcript)
         overview = await adapters.call_provider(
             choice.provider,
             prompt=self._compose(
-                AGENTIC_PROMPT.format(limit=windows_per_round),
+                f"本次分析目标：{prompt}\n\n" + AGENTIC_PROMPT.format(limit=windows_per_round),
                 self._stamp_notes(stamps),
-                "",
+                audio_note,
             ),
             images=frames,
             model=choice.model or None,
@@ -721,11 +805,6 @@ class MultimodalRuntime:
         )
         details: list[str] = []
         seen: set[tuple[float, float]] = set()
-        transcript = (
-            await self._video_transcript(choice, path, workdir, timeout)
-            if info.get("has_audio")
-            else ""
-        )
         if transcript:
             overview = f"{overview}\n\n视频音轨转录与声音描述：\n{transcript}"
         for round_index in range(rounds):
@@ -750,11 +829,14 @@ class MultimodalRuntime:
                 )
                 part = await adapters.call_provider(
                     choice.provider,
-                    prompt=(
+                    prompt=self._compose(
+                        f"本次分析目标：{prompt}\n\n"
                         f"这是第 {round_index + 2} 轮。已有发现：\n{seen_text}\n"
                         f"尚未细看的区间：{pending_text}\n"
                         f"现在只聚焦 {window[0]:.1f}s 到 {window[1]:.1f}s，"
-                        "说明具体发生了什么，并指出仍需确认的问题。"
+                        "说明与本次分析目标有关的细节，并指出仍需确认的问题。",
+                        self._stamp_notes(focus_stamps),
+                        audio_note,
                     ),
                     images=focus,
                     model=choice.model or None,
@@ -762,8 +844,6 @@ class MultimodalRuntime:
                 )
                 details.append(f"[{window[0]:.1f}s-{window[1]:.1f}s] {part.strip()}")
         summary = overview.strip()
-        if transcript:
-            summary = f"{summary}\n\n音轨要点：\n{transcript}"
         if details:
             summary = f"{summary}\n\n重点片段（{len(details)} 段，{rounds} 轮迭代）：\n" + "\n".join(details)
         return summary, {
@@ -789,6 +869,7 @@ class MultimodalRuntime:
         from . import office
 
         timeout = float(self._settings.int("mm_timeout_seconds"))
+        preprocess._guard_size(path, self._settings.int("mm_max_file_mb"))
         target = str((ref.extra or {}).get("target") or "")
         if office.is_office(path):
             cancelled = threading.Event()
@@ -801,6 +882,8 @@ class MultimodalRuntime:
                 # ZIP/workbook handles instead of continuing in the background.
                 options = dict(limit_chars=limit_chars, deadline=deadline, cancelled=cancelled.is_set)
                 document = office.parse_document(path, **options)
+                if document.kind == "docx" and office.is_page_target(target):
+                    return document, "已按文档物理页码请求视觉精读，页内文字以整页图像为准。"
                 return document, office.read_target(document, target, **options)
 
             try:
@@ -811,19 +894,28 @@ class MultimodalRuntime:
             visual_paths: list[str] = []
             visual_notes: list[str] = []
             if adapters.supports_modality(choice.provider, "image"):
-                visual_paths, visual_notes = await asyncio.to_thread(
+                render_cancelled = threading.Event()
+                rendering = asyncio.create_task(asyncio.to_thread(
                     self._materialize_office_visuals,
                     index,
                     workdir,
                     target,
                     path,
                     self._settings,
-                )
-            visual_note = (
-                f"\n已附加 {len(visual_paths)} 个 Office 视觉材料（含整页渲染图），请结合图像判断。"
-                if visual_paths
-                else "\n".join(visual_notes)
-            )
+                    render_cancelled.is_set,
+                ))
+                try:
+                    visual_paths, visual_notes = await asyncio.shield(rendering)
+                except asyncio.CancelledError:
+                    render_cancelled.set()
+                    await asyncio.shield(rendering)
+                    raise
+            full_pages = sum(Path(item).name.startswith("office-page-") for item in visual_paths)
+            if index.kind == "docx" and office.is_page_target(target) and not full_pages:
+                raise ValueError("指定 DOCX 物理页码需要整页渲染；" + "；".join(visual_notes))
+            visual_note = "\n".join(visual_notes)
+            if visual_paths:
+                visual_note += f"\n已附加 {len(visual_paths)} 个视觉材料，其中 {full_pages} 张为完整页面；其余是内嵌资源。"
             answer = await adapters.call_provider(
                 choice.provider,
                 prompt=self._compose(
@@ -871,8 +963,7 @@ class MultimodalRuntime:
         if path.suffix.lower() == ".pdf" and self._settings.bool("mm_file_ocr"):
             sparse_pages = await asyncio.to_thread(self._pdf_sparse_pages, path)
             if target_pages:
-                selected_pages = set(target_pages)
-                sparse_pages = [page for page in sparse_pages if page in selected_pages]
+                sparse_pages = [page for page in sparse_pages if page in target_pages]
         if (len(prepared.text) < 80 or sparse_pages) and self._settings.bool("mm_file_ocr"):
             scanned = await self._ocr_document(
                 choice,
@@ -900,20 +991,18 @@ class MultimodalRuntime:
         target: str = "",
         source: Path | None = None,
         settings: MultimodalSettings | None = None,
+        cancelled: Any = None,
     ) -> tuple[list[str], list[str]]:
         """Materialize full Office pages plus embedded assets in request scope."""
 
         # Images are currently associated with the document/slide as a whole;
         # for a targeted slide, use its ordinal to keep the request bounded.
-        selected_number = None
-        if target:
-            import re
-
-            match = re.search(r"(?:幻灯片|slide|第)\s*(\d+)", target, re.I)
-            if not match and re.fullmatch(r"\d+", target.strip()):
-                match = re.match(r"(\d+)", target.strip())
-            if match:
-                selected_number = int(match.group(1))
+        selected_numbers = None
+        render_target = target
+        if target and index.kind == "pptx":
+            selected_numbers = {int(block["number"]) for block in index.select(target)}
+            # Full-page rendering must follow title/ordinal selection too.
+            render_target = ",".join(str(number) for number in sorted(selected_numbers))
         paths: list[str] = []
         notes: list[str] = []
         mode = (settings.text("mm_office_render") if settings else "auto").lower()
@@ -928,14 +1017,19 @@ class MultimodalRuntime:
                     office.render_pages(
                         source,
                         workdir,
-                        target=target,
+                        target=render_target,
                         max_pages=settings.int("mm_office_render_max_pages") if settings else 12,
                         timeout=settings.int("mm_office_render_timeout_seconds") if settings else 90,
+                        cancelled=cancelled,
                     )
                 )
             except Exception as exc:
                 notes.append(f"整页视觉渲染不可用，已安全回退到结构化文本/内嵌资源：{str(exc)[:180]}")
                 logger.info("Decision Engine Office 整页渲染跳过：%s", str(exc)[:180])
+        if target and paths:
+            # Targeted rendered pages already contain their images. Attaching
+            # all DOCX assets could disclose material from an unrequested page.
+            return paths, notes
         for index_number, visual in enumerate((index.meta or {}).get("images", [])[:40]):
             if not isinstance(visual, dict) or not visual.get("data"):
                 continue
@@ -943,11 +1037,11 @@ class MultimodalRuntime:
             suffix = Path(name).suffix.lower()
             if suffix not in {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}:
                 suffix = ".png"
-            if selected_number is not None and index.kind == "pptx":
+            if selected_numbers is not None and index.kind == "pptx":
                 # PPTX extraction order follows slide order; retain only the
                 # image(s) belonging to the selected slide when possible.
                 slide_numbers = visual.get("slide_number")
-                if slide_numbers is not None and int(slide_numbers) != selected_number:
+                if slide_numbers is not None and int(slide_numbers) not in selected_numbers:
                     continue
             target_path = workdir / f"office-{index_number}{suffix}"
             target_path.write_bytes(bytes(visual["data"]))
@@ -982,16 +1076,20 @@ class MultimodalRuntime:
             return []
 
     @staticmethod
-    def _target_pdf_pages(target: str) -> list[int]:
+    def _target_pdf_pages(target: str) -> range | None:
         import re
 
-        value = str(target or "").strip().lower().replace("页", "")
-        if not value or not re.fullmatch(r"\d+(?:\s*[-~到]\s*\d+)?", value):
-            return []
+        value = str(target or "").strip().lower()
+        if not value:
+            return None
+        value = re.sub(r"^(?:pages?|第)\s*", "", value).replace("页", "").strip()
+        if not re.fullmatch(r"\d{1,12}(?:\s*[-~到]\s*\d{1,12})?", value):
+            raise ValueError("PDF target 无效，请使用页码或页码范围，例如 2 或 2-5")
         parts = re.split(r"\s*[-~到]\s*", value)
-        start = max(1, int(parts[0]))
-        end = max(start, int(parts[-1]))
-        return list(range(start - 1, end))
+        start, end = int(parts[0]), int(parts[-1])
+        if start < 1 or end < start:
+            raise ValueError("PDF 页码范围无效")
+        return range(start - 1, end)
 
     async def _ocr_document(
         self,
@@ -1020,7 +1118,8 @@ class MultimodalRuntime:
         # regions so OCR/vision can inspect the region without relying on the
         # page-wide text density heuristic.
         region_images = await asyncio.to_thread(
-            self._pdf_image_regions, path, workdir, selected_pages
+            self._pdf_image_regions, path, workdir, selected_pages,
+            max_pages=self._settings.int("mm_file_ocr_max_pages"),
         )
         if region_images:
             images.extend(region_images)
@@ -1112,6 +1211,8 @@ class MultimodalRuntime:
         path: Path,
         workdir: Path,
         pages: list[int] | None = None,
+        *,
+        max_pages: int = 12,
     ) -> list[str]:
         """Render bounded crops for text-bearing images on mixed PDF pages."""
 
@@ -1119,13 +1220,17 @@ class MultimodalRuntime:
             import fitz
         except ImportError:
             return []
-        selected = set(pages or [])
+        selected = pages
         rendered: list[str] = []
         try:
             with fitz.open(str(path)) as document:
+                visited = 0
                 for page_number, page in enumerate(document):
-                    if selected and page_number not in selected:
+                    if selected is not None and page_number not in selected:
                         continue
+                    if visited >= max_pages:
+                        break
+                    visited += 1
                     # Sparse pages are already rendered whole; crops are for a
                     # text-heavy page where a scan is otherwise easy to miss.
                     if len((page.get_text("text") or "").strip()) < 40:
@@ -1141,9 +1246,8 @@ class MultimodalRuntime:
                             clip = rects[0] & page.rect
                             if clip.is_empty or clip.get_area() < 2_000:
                                 continue
-                            pixmap = page.get_pixmap(
-                                matrix=fitz.Matrix(2.0, 2.0), clip=clip, alpha=False
-                            )
+                            zoom = min(2.0, 1568 / max(1.0, clip.width, clip.height))
+                            pixmap = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip, alpha=False)
                             target = workdir / f"page-{page_number + 1:02d}-image-{order}.png"
                             pixmap.save(str(target))
                             rendered.append(str(target))
@@ -1187,6 +1291,14 @@ class MultimodalRuntime:
                 notes.append(result.error)
         return "\n\n".join(chunks), used or (notes[0] if notes else "")
 
+    @staticmethod
+    def _video_audio_note(info: dict[str, Any], transcript: str) -> str:
+        if transcript:
+            return "视频音轨的实际检测/理解结果（声音结论只以此为依据，不要从静态画面猜测）：\n" + transcript
+        if not info.get("has_audio"):
+            return "该视频没有音轨。只描述画面，不要编造语音、音乐或环境声。"
+        return "该视频含音轨，但本次未能取得可靠的音频理解；请明确声音未验证，不要根据画面猜测声音。"
+
     async def _video_transcript(
         self, choice: adapters.ProviderChoice, path: Path, workdir: Path, timeout: float
     ) -> str:
@@ -1198,6 +1310,8 @@ class MultimodalRuntime:
             audio_path = await preprocess.extract_audio_track(path, workdir)
             if not audio_path:
                 return ""
+            if await preprocess.audio_is_silent(Path(audio_path)) is True:
+                return "音轨经本地信号检测为静音（峰值不高于 -80 dB），未检测到可辨认语音、音乐或环境声。"
             prepared = await preprocess.prepare_audio(Path(audio_path), self._settings, workdir)
             parts = []
             for chunk in prepared.audio[:4]:
@@ -1215,7 +1329,7 @@ class MultimodalRuntime:
                 )
             return "\n".join(part.strip() for part in parts if part.strip())
         except Exception as exc:  # audio is a bonus, never fail the whole video
-            logger.info("Decision Engine 视频音轨理解跳过：%s", str(exc)[:140])
+            logger.info("Decision Engine 视频音轨理解跳过：%s", adapters.safe_provider_error(choice.provider, exc))
             return ""
 
     async def _native_video(
@@ -1443,7 +1557,7 @@ class MultimodalRuntime:
                 else:
                     from .media import ensure_local
 
-                    source = Path(await ensure_local(reference_text))
+                    source = Path(await ensure_local(reference_text, max_bytes=self._settings.int("mm_max_file_mb") * 1024 * 1024))
                     downloaded = True
 
                 def is_animated(target: Path) -> bool:

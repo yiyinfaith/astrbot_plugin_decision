@@ -22,10 +22,21 @@ KIND_LABELS = {"native": "原生视频", "frames": "抽帧精读"}
 def _safe_error(exc: BaseException, secret: str = "") -> str:
     """Return a bounded error without credentials or request URLs."""
 
-    text = str(exc)[:240]
+    text = str(exc)
     if secret:
         text = text.replace(secret, "<redacted>")
-    return text
+    return text[:240]
+
+
+def _generate_content_text(payload: Any) -> str:
+    candidates = (payload or {}).get("candidates") or []
+    if not candidates:
+        return ""
+    parts = ((candidates[0] or {}).get("content") or {}).get("parts") or []
+    return "".join(
+        str(part.get("text") or "") for part in parts
+        if isinstance(part, dict) and not part.get("thought", False)
+    ).strip()
 
 
 def _model_output_text(payload: Any) -> str:
@@ -34,11 +45,11 @@ def _model_output_text(payload: Any) -> str:
     Interactions ``steps`` is a heterogeneous timeline containing user_input,
     thought, tool calls/results and model_output.  Concatenating all text-bearing
     steps leaks that timeline to the caller.  The REST schema puts answer text
-    under ``model_output.content``; choose the last non-empty such step because
-    it is the final answer in a multi-step interaction.
+    under ``model_output.content``. Choose the last such step, including an
+    empty final step: an earlier intermediate answer must never replace it.
     """
 
-    candidates: list[str] = []
+    final = ""
     for step in (payload or {}).get("steps", []) or []:
         if not isinstance(step, dict) or step.get("type") != "model_output":
             continue
@@ -48,12 +59,11 @@ def _model_output_text(payload: Any) -> str:
         parts = [
             str(part.get("text") or "").strip()
             for part in content
-            if isinstance(part, dict) and part.get("type", "text") == "text"
+            if isinstance(part, dict) and part.get("type") == "text" and not part.get("thought", False)
         ]
         text = "\n".join(part for part in parts if part).strip()
-        if text:
-            candidates.append(text)
-    return candidates[-1] if candidates else ""
+        final = text
+    return final
 
 
 @dataclass(slots=True)
@@ -86,8 +96,12 @@ def gemini_credentials(provider: Any) -> tuple[str, str]:
             except Exception:  # pragma: no cover
                 key = ""
     if not key:
-        key = str(config.get("key") or "")
+        value = config.get("key") or ""
+        key = str(value[0] if isinstance(value, list) and value else value)
     base = str(config.get("api_base") or DEFAULT_BASE).rstrip("/")
+    for suffix in ("/v1beta", "/v1alpha"):
+        if base.endswith(suffix):
+            base = base[:-len(suffix)]
     if "gemini" not in provider_type and "google" not in provider_type:
         return "", ""
     if not key:
@@ -173,6 +187,8 @@ async def upload_file(
     name = str(info.get("name") or "")
     uri = str(info.get("uri") or "")
     if not name or not uri:
+        if name:
+            await delete_file(name, api_key=api_key, base=base)
         raise RuntimeError("原生视频上传返回内容不完整")
     return name, uri
 
@@ -237,14 +253,9 @@ async def generate(
             timeout=aiohttp.ClientTimeout(total=timeout),
         ) as response:
             if response.status >= 400:
-                detail = (await response.text())[:200]
-                raise RuntimeError(f"原生视频理解失败：HTTP {response.status} {detail}")
+                raise RuntimeError(f"原生视频理解失败：HTTP {response.status}")
             payload = await response.json(content_type=None)
-    candidates = (payload or {}).get("candidates") or []
-    if not candidates:
-        raise RuntimeError("原生视频理解没有返回候选结果")
-    parts = ((candidates[0] or {}).get("content") or {}).get("parts") or []
-    text = "".join(str(part.get("text") or "") for part in parts).strip()
+    text = _generate_content_text(payload)
     if not text:
         raise RuntimeError("原生视频理解返回空结果")
     return text
@@ -294,14 +305,18 @@ async def agentic_generate(
                 raise RuntimeError("Gemini Agentic Video 未返回 interaction id")
             while asyncio.get_running_loop().time() < deadline:
                 status = str((payload or {}).get("status") or "")
-                if status in {"completed", "succeeded", "success", "incomplete"}:
+                if status == "completed":
                     break
-                if status in {"failed", "cancelled", "expired"}:
+                if status in {"failed", "cancelled", "incomplete"}:
                     raise RuntimeError(f"Gemini Agentic Video 失败：{status}")
+                if status == "requires_action":
+                    raise RuntimeError("Gemini Agentic Video 请求了未配置的客户端工具，无法完成理解")
+                if status not in {"in_progress"}:
+                    raise RuntimeError("Gemini Agentic Video 返回未知状态")
                 await asyncio.sleep(min(2.0, max(0.0, deadline - asyncio.get_running_loop().time())))
                 async with session.get(
                     f"{base}/v1beta/interactions/{interaction_id}", headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=min(timeout, 60.0)),
+                    timeout=aiohttp.ClientTimeout(total=max(.001, min(deadline - asyncio.get_running_loop().time(), 60.0))),
                 ) as response:
                     if response.status >= 400:
                         raise RuntimeError(f"Gemini Agentic Video 状态查询失败：HTTP {response.status}")

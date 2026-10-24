@@ -9,6 +9,7 @@ pre-processing layer, so a text-only or image-only model still has a usable path
 from __future__ import annotations
 
 import asyncio
+import inspect
 from dataclasses import dataclass
 from typing import Any
 
@@ -216,9 +217,39 @@ async def call_provider(
         kwargs["audio_urls"] = list(audio)
     if model:
         kwargs["model"] = model
+    # Decision owns mm_retries. A host provider's default five-attempt retry
+    # loop otherwise multiplies each configured attempt and can bill twice
+    # after a response timeout. Use its explicit per-call override when present.
+    try:
+        if "request_max_retries" in inspect.signature(chat).parameters:
+            kwargs["request_max_retries"] = 1
+    except (TypeError, ValueError):
+        pass
 
     response = await asyncio.wait_for(chat(**kwargs), timeout=timeout)
     return _extract_text(response)
+
+
+def safe_provider_error(provider: Any, exc: BaseException) -> str:
+    """Redact known provider credentials before truncating any SDK error."""
+    message = str(exc) or type(exc).__name__
+    config = getattr(provider, "provider_config", None) or {}
+    secrets = []
+    for name in ("key", "api_key", "api_keys", "token", "access_token"):
+        value = config.get(name)
+        secrets.extend(value if isinstance(value, list) else [value])
+    for method in ("get_current_key", "get_keys"):
+        getter = getattr(provider, method, None)
+        if callable(getter):
+            try:
+                value = getter()
+                secrets.extend(value if isinstance(value, list) else [value])
+            except Exception:
+                pass
+    for secret in secrets:
+        if isinstance(secret, str) and secret:
+            message = message.replace(secret, "<redacted>")
+    return message[:200]
 
 
 def _extract_text(response: Any) -> str:
@@ -232,7 +263,11 @@ def _extract_text(response: Any) -> str:
     result = getattr(response, "result", None)
     if isinstance(result, str):
         return result.strip()
-    try:
-        return str(response).strip()
-    except Exception:  # pragma: no cover
-        return ""
+    if isinstance(response, dict):
+        for name in ("completion_text", "result"):
+            value = response.get(name)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    # Object representations can contain thoughts, tool calls, credentials or
+    # SDK metadata. They are never a substitute for a final model answer.
+    return ""

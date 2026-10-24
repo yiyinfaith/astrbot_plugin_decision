@@ -35,6 +35,7 @@ class MultimodalCache:
         self.ttl_seconds = max(0, int(ttl_seconds))
         self.max_entries = max(10, int(max_entries))
         self._lock = asyncio.Lock()
+        self._load_lock = asyncio.Lock()
         self._loaded = False
         self._entries: dict[str, Understanding] = {}
         self._index: dict[str, list[MediaIndexEntry]] = {}
@@ -43,7 +44,13 @@ class MultimodalCache:
     async def load(self) -> None:
         if self._loaded:
             return
-        self._loaded = True
+        async with self._load_lock:
+            if self._loaded:
+                return
+            await self._load_from_disk()
+            self._loaded = True
+
+    async def _load_from_disk(self) -> None:
         try:
             raw = await asyncio.to_thread(self.path.read_text, "utf-8")
             payload = json.loads(raw)
@@ -51,7 +58,8 @@ class MultimodalCache:
             return
         if not isinstance(payload, dict):
             return
-        for value in payload.get("entries", []):
+        entries = payload.get("entries")
+        for value in entries if isinstance(entries, list) else []:
             if not isinstance(value, dict):
                 continue
             try:
@@ -60,7 +68,10 @@ class MultimodalCache:
                 continue
             if item.key:
                 self._entries[item.key] = item
-        for umo, rows in (payload.get("index") or {}).items():
+        index = payload.get("index")
+        if not isinstance(index, dict):
+            index = {}
+        for umo, rows in index.items():
             if not isinstance(rows, list):
                 continue
             bucket = []
@@ -106,7 +117,15 @@ class MultimodalCache:
                     pass
                 raise
 
-        await asyncio.to_thread(write)
+        writer = asyncio.create_task(asyncio.to_thread(write))
+        try:
+            await asyncio.shield(writer)
+        except asyncio.CancelledError:
+            # The filesystem worker cannot be cancelled. Finish its commit
+            # before releasing the caller's cache lock, otherwise an older
+            # write can race and replace a newer snapshot after cancellation.
+            await writer
+            raise
 
     # --------------------------------------------------------------- prune
     def _prune(self, now: float) -> None:
@@ -279,8 +298,9 @@ class MultimodalCache:
             ]
             for key in removed:
                 self._entries.pop(key, None)
+            had_index = umo in self._index
             self._index.pop(umo, None)
-            if removed:
+            if removed or had_index:
                 await self.save()
         return len(removed)
 

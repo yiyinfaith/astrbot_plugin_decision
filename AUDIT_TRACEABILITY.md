@@ -1,6 +1,6 @@
 # JEV 综合审计追踪清单
 
-更新时间：2026-10-24（Asia/Shanghai）
+更新时间：2026-10-25（Asia/Shanghai）
 
 本清单把本次审计要求映射到真实代码入口、行为测试和可执行证据。带“本地模拟”的项目只证明插件逻辑和失败降级；它不代表已经调用真实模型、真实平台或产生真实付费任务。
 
@@ -30,6 +30,52 @@
 | GitHub/VPS 同提交、备份、健康与回滚 | Git、部署脚本/命令与本清单 | 发布后补充 Commit、远端路径、备份路径、热重载和健康结果 | Decision `ba856c3` 已合并并推送 GitHub `main`，AIGen 协作提交 `c90707e` 已推送其 `main`；Decision `/root/yiyin/AstrBot/data/plugins/astrbot_plugin_decision/main.py` SHA-256 `8f579b68a2f68de71600b51da84867da74f74c6fdcb97b00a2de77df4553f1a7`，AIGen `/root/yiyin/AstrBot/data/plugins/astrbot_plugin_aigen/main.py` SHA-256 `3dfa506c9adc9520e72373060d492967dd7abe37be6f1541158b53030e35bfd2`，与本地 `main` 一致；写入前备份为 `/root/astrbot_backups/decision_final_20261024T165000Z/`，包含两个插件代码和各自 `plugin_data`。两个插件均通过 AstrBot `/api/plugin/reload` 单插件接口返回 HTTP 200；screen PID `568866`、AstrBot Python PID `568938`、端口 6185/8088 均保持正常，插件列表确认 Decision 与 AIGen 均 activated。 |
 
 ## 外部依赖边界
+
+### 2026-10-25 全量审计与真实调用追加记录
+
+以下为本轮新增证据；上表和后面的 2026-10-24 记录保留为历史，不代表当前仍未进行外部验证。审计使用最新 main `69ef953` 起点，无回退、无宿主升级、无生产会话外发。
+
+本轮修复覆盖：
+
+- 多模态并发理解把 UMO 与处理策略同时纳入任务兼容判定；独立任务受插件生命周期管理，一个等待者取消不会取消其他调用者，最后一个等待者取消及热重载会清理正在运行的任务。
+- 通用指令换说法复用概览；短的具体问题不再被当成概览，缺失问题采用包含已有理解的增量请求，补充结果保留概览；普通 Provider 对象、思考字段、工具元数据不会被字符串化为答案。
+- 缓存加载与写入取消竞态、只有媒体索引的会话清理不落盘、错误 JSON 索引结构；已知 Provider Key 在异常截断前脱敏。
+- SSRF 特殊 IPv4/IPv6、NAT64/过渡地址和 IDN Host 一致性；直接保留组件的 HTTP 引用，防止 AstrBot 便捷转换器提前发出未验证下载；下载遵守配置大小上限并检查 Content-Length；FFmpeg/ffprobe 仅开放本地协议，禁止恶意播放列表从解码器二次访问内网。
+- 无扩展名的签名附件下载沿用平台原始文件名格式；Office 压缩包展开体积与本地文件大小约束；长文本首块不再因超出预算而整块丢弃。
+- Office 转换使用 bubblewrap 网络/PID/文件系统命名空间、只读系统库与 LibreOffice 系统配置、独立 profile、宏安全等级 3、CPU/内存/描述符限制和取消清理。真实 PPTX/DOCX 页图通过 LibreOffice 与 PyMuPDF 得到，降级资源不再冒充完整页面。指定章节按 PDF 书签映射，无法映射时明确降级。
+- PPTX 数字页码先于标题匹配；DOCX 物理页与页范围正确处理；定向渲染不额外附带其他页的内嵌图片。PDF 巨大范围改为惰性并按实际页数限制，首个长文本页保留内容，整页与图片区域渲染约束像素预算。
+- 长视频各轮保留用户问题和抽帧上限，传递同一音轨结论；实测发现静音音轨被模型编造声音后，加入数字静音检测与“声音未验证”约束，并实际重新验证。
+- Gemini GenerateContent 排除 thought；Interactions 依据官方 `steps/model_output.content` schema 只接受 completed 的最终输出，空的最终输出不回用中间答案；incomplete、客户端工具要求和未知状态明确失败并取消。Key 不写入错误响应体、日志和 URL。
+- 多模态调用显式使用宿主 `request_max_retries=1`（支持该参数的 Provider），由 `mm_retries` 统一控制尝试次数，避免宿主默认五次与插件重试相乘。
+- OutputPro 以 UMO 与运行实例隔离状态，热重载清理；私聊 OutContext 保持空 group_id，避免被撤回/分段步骤当成群消息；初始化失败与单步骤退出失败不阻碍其他资源清理。Jev 拒绝 NaN 分数。
+- AIGen 协作修复：Gemini 等不接受上游 `n` 的生图路线仍能处理逻辑数量 1–10；按单张调用现有 `_generate -> billed_call`，只应用一次工具冷却，实际成功数量累加，失败停止后续提交。原生支持批量的路线继续一次请求。
+
+真实验收材料与结果：
+
+| 材料/链路 | 实际输入与断言 | 结果 |
+| --- | --- | --- |
+| 静态图片、公开照片 | 校准图红色三角形/蓝圆/7429；真实 MDN 花朵视频截帧 | 正确识别；使用实际 AstrBot OpenAI Provider 与 `gemini-3.8-flash` |
+| GIF | 3 个独立 RGB 帧，红→蓝→绿与帧号 | 实际请求包含 3 张图，顺序正确 |
+| 短视频及多轮精读 | 公共 MDN 5.055 秒花朵视频，6 帧短片与独立精读窗口 | 正确描述开花变化；静音修复后不再虚构音乐/水声 |
+| 音频 | 公开恐龙吼声；FFmpeg flite 英语语音，含 7429 | 识别非语言声音、准确转录语音 |
+| 混合 PDF | 同页超过 200 字原生文本 CEDAR-9624 + 扫描图片 ORCHID-5831 | 实际模型收到完整页与图片区域并读到两个编码；真实 Tesseract 本地 OCR 也读到两者，0 次 Provider 调用 |
+| PPTX | 原生箭头、两色方框、橙色叠加椭圆、Q1/Q2/Q3 图表 10/20/35 | 实际请求含 1080×810 完整幻灯片图，箭头方向/重叠对象/数值正确 |
+| DOCX | 第二页 LILAC-2847 与表格 Orchid/17 | 实际请求只附第二页 918×1188 整页图，未返回第一页独有文字 |
+| XLSX | A401:A403 与 B401:B403 具有不同独有值 | 两次实际请求精确隔离列；原有百万物理行/空行/隐藏行/公式测试保留 |
+| 双模式与缓存 | 自动关闭仍索引/工具可读；自动开启并发工具；通用换说法；缺失事实追问；重复追问；跨 UMO | 按实际 HTTP 计数检查；并发一次、通用复用零次、增量一次、重复零次；其他会话不能召回 |
+| SSRF 网络对照 | 自有监听器仅绑定 127.0.0.1；DNS 首次公网、随后内网 | 修复路径内网收到 0 请求；旧式校验后重解析对照收到 1 请求；下载无临时文件泄漏 |
+| Office 隔离 | 沙箱内尝试访问宿主 /root/yiyin 与 dashboard | 目录不可见、网络不通；取消后转换目录清理 |
+| Jev | 实际 jev-latest 同次 noul/choice/score | 1 次实际调用；noul 0.88、choice red、score 1.96。最初探针遗漏 instructions 的 400 是验收脚本错误，已纠正 |
+| 原生日程/关系生成 | 周一高中人格、校服、不运动/不喝咖啡；一个同班好友 | 实际 Gemini 生成通过结构校验，日程满足角色约束，关系草稿通过严格验证 |
+| 原生 Agent | 真实 AstrBot Builder/Runner + 真实 Gemini，捕获平台发送 | 回答 NATIVE-AGENT-7429、注入人格并保存历史；未向平台外发 |
+| 生图协作 | Decision→真实 AIGen→gemini-3.1-flash-image→Gemini 理解，绿色方块/黄色星形 | 实际返回并解码验证 30042 字节 JPEG，实际媒体单位 1；再次真实理解识别绿色正方形与黄色五角星。财务验证使用生产账本私有副本，该模型未产生内部收费订单，没有改生产资金；不据此宣称生产扣费已验证 |
+| WebUI | 真浏览器读取生产 settings/tools/life/models，点击分区与选择 OCR 策略 | 9 个下拉框浅色文字/深色背景；标题正确；更改后未保存，刷新恢复生产设置 |
+
+验收目录：`/root/astrbot_backups/decision_full_audit_20261025/`，证据在 `evidence/`；生产发布与逐文件哈希以同目录的 release manifest 和部署报告为准。备份含私有配置/账本，不应公开上传。
+
+最终回归：VPS 隔离副本完整 pytest 为 **691 passed, 1 skipped, 12 subtests passed**，另以真实 AstrBot 源单独运行原生集成为 **43 passed**，真实 Provider 原生 Agent 验收为 **1 passed**。Decision 全量 ruff 与 diff whitespace 检查通过。Windows 全套为 690 passed（宿主入口与缺少 ffprobe 的实进程检查跳过）；ffprobe 内网阻断检查已在有实际二进制的 VPS 通过，且真实视频探测、抽帧、音轨抽取/静音检测通过。AIGen 全套为 **384 passed, 1 skipped, 230 subtests passed**，变更文件 ruff 通过；其跳过项是本地宿主配置加载器源码依赖。常规测试的 Provider/发送替身和本节明确列出的真实 HTTP/真实模型验收分别记录，不混为一类。
+
+边界保持明确：该 API 站点对 Gemini Files 初始化上传返回 HTTP 403，因此原生 Google 上传/Interactions 的远端成功未验证；实际通用视频链路已通过。PaddleOCR 未安装，使用并实测 Tesseract。AIGen 当前文字生音频自动路由没有唯一有效路线，真实尝试被本地校验阻止，未提交/扣费。生产多模态默认模型目前留空，未擅自修改配置；真实多模态验证使用隔离的明确模型配置。真实平台发送、生产余额扣费、所有上游模型组合与真实视频生成不宣称已通过。
 
 2026-10-24 追加验证：删除重复的自动理解后端总开关，配置默认值、校验、归一化、读取/保存及运行状态均不再保留该设置；自动理解使用 `mm_enabled`、媒体类型开关和会话名单，主动工具继续独立。旧客户端提交的已删除字段会被忽略。更新后的本地全量回归为 **649 passed, 1 skipped, 12 subtests passed**，ruff 与 `git diff --check` 通过。新增测试检查实际 Provider 替身调用次数、指定 XLSX 区域传入模型的内容、重复区域缓存命中和取消信号；不代表真实模型理解质量。对比修复前后的代码，旧 `read_target` 对同一真实文件的有界概览会把 A100001 误报为空，新实现从源文件读到独有文字；旧自动理解依赖隐藏开关，新实现只需现有总开关和媒体类型开关。
 
