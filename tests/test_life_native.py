@@ -19,7 +19,7 @@ import time
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -139,6 +139,11 @@ def native(tmp_path, monkeypatch):
     ctx.get_llm_tool_manager.return_value = SimpleNamespace(get_full_tool_set=lambda: ToolSet())
     provider = StubProvider()
     ctx.get_using_provider.return_value = provider
+    if hasattr(ctx, "get_using_provider_async"):
+        async def using_provider(*args, **kwargs):
+            return ctx.get_using_provider(*args, **kwargs)
+
+        ctx.get_using_provider_async = AsyncMock(side_effect=using_provider)
     ctx.get_provider_by_id.side_effect = lambda ident: provider if ident == "main" else None
     owner = SimpleNamespace(
         context=ctx,
@@ -164,6 +169,7 @@ def native(tmp_path, monkeypatch):
     )
     runtime = LifeRuntime(owner, settings)
     now = runtime._now()
+    runtime._conversation_activity_at[UMO] = now - timedelta(hours=1)
     plan = DailyPlan(
         date=now.date().isoformat(),
         persona_id="alice",
@@ -177,7 +183,8 @@ def native(tmp_path, monkeypatch):
         ),
     )
     runtime.storage.plans[runtime.storage.plan_key(plan.date, "alice")] = plan
-    runtime.policy.ensure_state(UMO, "alice", plan, now)
+    state = runtime.policy.ensure_state(UMO, "alice", plan, now)
+    state.last_user_message_at = (now - timedelta(hours=1)).isoformat()
     runtime.deadlines[UMO] = time.monotonic() + 60
     owner._get_life_runtime = AsyncMock(return_value=runtime)
     event = CronMessageEvent(
@@ -452,15 +459,16 @@ async def test_aigen_reference_and_outfit_forwarded_once(native, tmp_path, video
     media = LifeMedia(native.owner, tmp_path)
     await media.appearance.upload("alice", "face.png", image_url())
     native.event.send = AsyncMock()
-    result = await media.capture(native.event, video=video, scene="bookstore")
+    kind = "video" if video else "photo"
+    result = await media.capture(native.event, kind=kind, scene="bookstore")
     assert json.loads(result)["status"] == "completed"
     assert len(calls) == 1
     assert "bookstore" in calls[0][1] and "白色短袖衬衫" in calls[0][1]
-    assert "覆盖参考图中的旧服装" in calls[0][1]
+    assert "服装优先采用今日穿搭" in calls[0][1]
     assert isinstance(calls[0][0].get_messages()[1], Image)
     assert len(native.event.get_messages()) == 1
     native.event.send.assert_awaited_once()
-    assert "冷却" in await media.capture(native.event, video=video)
+    assert "冷却" in await media.capture(native.event, kind=kind)
     assert len(calls) == 1
 
 
@@ -576,7 +584,12 @@ async def test_group_chatter_does_not_reset_unanswered(native):
 
 @pytest.mark.asyncio
 async def test_native_send_tool_is_counted_without_patching_shared_context(native):
-    from astrbot.core.astr_main_agent_resources import SEND_MESSAGE_TO_USER_TOOL
+    try:
+        from astrbot.core.astr_main_agent_resources import SEND_MESSAGE_TO_USER_TOOL
+    except ImportError:
+        from astrbot.core.tools.message_tools import SendMessageToUserTool
+
+        SEND_MESSAGE_TO_USER_TOOL = SendMessageToUserTool()
 
     class SenderProvider(StubProvider):
         async def text_chat(self, **kwargs):
@@ -653,7 +666,7 @@ async def test_missing_reference_does_not_generate_daily_plan(native, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_real_aigen_extractor_sees_only_persona_references(native, tmp_path):
+async def test_real_aigen_extractor_sees_only_persona_references(native, tmp_path, monkeypatch):
     import importlib.util
 
     from astrbot.api.message_components import At
@@ -661,7 +674,10 @@ async def test_real_aigen_extractor_sees_only_persona_references(native, tmp_pat
     source = Path(__file__).resolve().parents[2] / "astrbot_plugin_aigen/image_manager.py"
     if not source.exists():
         pytest.skip("Optional AIGen checkout is not available")
-    spec = importlib.util.spec_from_file_location("_decision_aigen_extractor_qa", source)
+    package = ModuleType("_decision_aigen_extractor_qa")
+    package.__path__ = [str(source.parent)]
+    monkeypatch.setitem(sys.modules, "_decision_aigen_extractor_qa", package)
+    spec = importlib.util.spec_from_file_location("_decision_aigen_extractor_qa.image_manager", source)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     path = tmp_path / "persona.png"

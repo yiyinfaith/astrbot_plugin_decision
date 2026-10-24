@@ -74,6 +74,13 @@ async def dispatch_life_agent(
         raise RuntimeError("当前 AstrBot 不提供原生发送管道")
     pipe = PipelineContext(cfg, manager, event.get_platform_id())
     values = {f.name: settings[f.name] for f in fields(MainAgentBuildConfig) if f.name in settings}
+    # Newer hosts receive fallback IDs as a separate build option rather than
+    # reading fallback_chat_models from provider_settings inside the builder.
+    if any(field_info.name == "fallback_provider_ids" for field_info in fields(MainAgentBuildConfig)):
+        configured_fallbacks = settings.get("fallback_chat_models", [])
+        values["fallback_provider_ids"] = (
+            list(configured_fallbacks) if isinstance(configured_fallbacks, list) else []
+        )
     # ``tool_call_timeout`` has no default in newer AstrBot releases, and it is
     # absent from provider_settings on hosts that never customised it. Fill every
     # required field that has no default so the scheduled agent can still build.

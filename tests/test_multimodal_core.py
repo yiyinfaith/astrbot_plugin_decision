@@ -376,7 +376,7 @@ def test_docx_extraction(tmp_path):
 
 
 def test_pdf_extraction(tmp_path):
-    pypdf = pytest.importorskip("pypdf")
+    pytest.importorskip("pypdf")
     from pypdf import PdfWriter
 
     writer = PdfWriter()
@@ -384,10 +384,23 @@ def test_pdf_extraction(tmp_path):
     path = tmp_path / "a.pdf"
     with path.open("wb") as handle:
         writer.write(handle)
-    prepared = preprocess.extract_file_text(path, config.MultimodalSettings())
     # A blank page has no text, so the extractor must report that clearly.
-    assert prepared.text or True
-    assert "blank" or pypdf
+    with pytest.raises(ValueError, match="没有可提取的文本"):
+        preprocess.extract_file_text(path, config.MultimodalSettings())
+
+
+def test_pdf_extraction_preserves_real_text_and_page_numbers(tmp_path):
+    pytest.importorskip("pypdf")
+    import fitz
+
+    path = tmp_path / "text.pdf"
+    with fitz.open() as document:
+        document.new_page().insert_text((30, 60), "UNIQUE_PDF_FIRST_PAGE")
+        document.new_page().insert_text((30, 60), "UNIQUE_PDF_SECOND_PAGE")
+        document.save(path)
+    prepared = preprocess.extract_file_text(path, config.MultimodalSettings())
+    assert "[第 1 页]\nUNIQUE_PDF_FIRST_PAGE" in prepared.text
+    assert "[第 2 页]\nUNIQUE_PDF_SECOND_PAGE" in prepared.text
 
 
 def test_timestamp_plan_covers_the_whole_video():
