@@ -243,7 +243,8 @@ async def test_bot_relative_time_starts_on_actual_delivery_and_no_budget_bypass(
     ident = result["task"]["id"]
     assert c.ledger.get_task(ident)["status"] == "awaiting_delivery"
     c.now[0] += timedelta(minutes=5)
-    await c.temporal.activate_from_event(event)
+    c.provider.text_chat.return_value.completion_text = json.dumps({"commitments": [{"id": ident, "quote": "我六小时后读完小说"}]})
+    await c.temporal.activate_from_event(event, "我六小时后读完小说")
     assert c.ledger.get_task(ident)["due"] == c.now[0].timestamp() + 21600
     c.now[0] += timedelta(hours=3)
     task = json.loads(c.temporal.describe(UMO, "alice", c.now[0]))["tasks"][0]

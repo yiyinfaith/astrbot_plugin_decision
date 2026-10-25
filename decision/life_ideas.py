@@ -66,7 +66,7 @@ class LifeIdeas:
                 db.execute("INSERT INTO idea_attempts VALUES (?,?,?)", (persona.id, node, now.timestamp()))
             text = await self.model(umo, "根据当前真实日程活动，生成一个符合人格、可分享的小想法。只输出一两句观点或联想；不描述未记录的声音、人、物，不使用听见、看到、遇见、刚刚发生等见闻措辞，不捏造亲身经历、外部操作或承诺，不输出内部推理。\n"
                 + json.dumps({"time": now.isoformat(), "activity": item.activity, "location": item.location,
-                              "continuous_state": self.runtime.life_state.current(persona.id, plan, now) if getattr(self.runtime, "life_state", None) else {}}, ensure_ascii=False), system=persona.prompt, purpose="activity_idea")
+                              "continuous_state": self.runtime.life_state.current(persona.id, plan, now) if getattr(self.runtime, "life_state", None) else {}}, ensure_ascii=False), system=persona.prompt, purpose="activity_idea", persona_id=persona.id)
             if re.search(r"听见|听到|看到|看见|刚刚|遇见|遇到|买到|收到|有人|朋友说", text):
                 self.runtime.record_audit(umo, False, "活动想法含无来源见闻，已丢弃并保留本次调用预算")
                 return

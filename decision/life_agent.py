@@ -241,11 +241,14 @@ async def dispatch_life_agent(
         if delivered_text:
             actual_texts.append(delivered_text)
         temporal = getattr(runtime, "temporal", None)
-        if temporal and delivering_final:
-            await temporal.activate_from_event(event)
         sent += 1
         final_delivery = final_delivery or delivering_final
         event._has_send_oper = True
+        if temporal and delivered_text:
+            try:
+                await temporal.activate_from_event(event, delivered_text)
+            except Exception as exc:
+                runtime.record_audit(umo, True, "消息已送出，承诺计时未确认：" + type(exc).__name__)
         return True
 
     # A per-run Context copy also covers AstrBot's send_message_to_user tool,

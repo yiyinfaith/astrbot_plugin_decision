@@ -60,16 +60,23 @@ class LifeDelivery:
             previous = getattr(event, "_has_send_oper", False)
             event._has_send_oper = False
             result = None
+            succeeded = False
             try:
                 result = await original(chain)
+                succeeded = True
                 return result
             finally:
-                acknowledged = result is not False and (result is True or getattr(event, "_has_send_oper", False))
+                acknowledged = succeeded and result is not False and (result is True or getattr(event, "_has_send_oper", False))
                 event._has_send_oper = previous or acknowledged
                 if acknowledged:
                     count += 1
                     try:
-                        await self.record(str(event.unified_msg_origin), persona, ident + ":" + str(count), plain_text(chain), kind="reply")
+                        await self.runtime.temporal.activate_from_event(event, plain_text(chain))
+                    except Exception as exc:
+                        self.runtime.record_audit(str(event.unified_msg_origin), True, "回复已送出，承诺计时未确认：" + type(exc).__name__)
+                    try:
+                        if self.runtime.config["continuity_settings"]["enable"]:
+                            await self.record(str(event.unified_msg_origin), persona, ident + ":" + str(count), plain_text(chain), kind="reply")
                     except Exception as exc:
                         self.runtime.record_audit(str(event.unified_msg_origin), True, "回复已经发送，记录保存失败：" + type(exc).__name__)
 
@@ -125,7 +132,7 @@ class LifeDelivery:
         with self.ledger.transaction() as db:
             for match in matches:
                 kind, target = match.get("kind"), match.get("id")
-                if kind not in offered or target not in offered[kind]:
+                if not isinstance(kind, str) or not isinstance(target, str) or kind not in offered or target not in offered[kind]:
                     continue
                 if kind == "idea":
                     idea = db.execute("SELECT * FROM thoughts WHERE id=? AND persona=? AND expires>?", (target, row["persona"], row["at"])).fetchone()

@@ -178,6 +178,32 @@ API 证据位于 VPS `/root/astrbot_backups/decision_full_audit_20261025/contact
 
 本次只发布 Decision。生产代码、逐文件哈希、目标插件 reload、配置差异、SQLite 备份、端口与进程连续性以 `/root/astrbot_backups/decision_full_audit_20261025/workspace-release/` 的 manifest 和部署报告为准。
 
+## 2026-10-25 全量复审与控件修复（0.4.1）
+
+本轮从 `33abc5cfd763bfe0496cf132a2161636f3bb87b8` 获取最新远端后，在独立 `codex/audit-041` 分支修复。版本继续保持 `0.4.x`。用户确认重复判定保留最近四条、不限制时间；不调整频率、权限、免打扰、计费表达式或生产配置。
+
+| 已复现问题 | 修复与验收 |
+| --- | --- |
+| 固定账户平台选择器白底白字，提醒输入缺少统一样式 | `pages/dashboard/index.html` 全局覆盖 select option/optgroup 与 datetime-local、无 type 输入；Playwright 实际输入文字和时间，检查 19 个下拉控件配色、圆角、焦点与移动端 390px 无溢出 |
+| 准备前人格不匹配、关闭发送、排队时取消仍消耗尝试或请求模型 | `life_temporal.py` 在真正提交 Provider 前检查当前 revision/status、会话权限和人格；仅提交时计数；恢复人格可再次准备，取消排队 Provider 调用数为零 |
+| 编辑仍沿用旧准备退避／正文 | 编辑清空旧错误、退避、正文与 attempts；新 revision 可立即准备 |
+| 外部任务疑问被当作已完成，确认后可能发送旧正文 | `complete` 必须通过真实来信语义核验及逐字证据；保存前核对 revision，确认后使旧正文失效；疑问无状态变更 |
+| 无关第一段／失败发送提前启动 Bot 相对承诺 | `life_delivery.py`、`life_agent.py` 按实际确认送出的正文核验具体承诺，并以该段送出时刻计时；失败不调用模型、不记为发出；异步核验延迟不能推迟起算时间；关闭对话连续性不影响时间承诺入口 |
+| 模型返回非法字段类型导致分析崩溃／时间冲突未经有效校验就放行 | 验证 signals/topics 为列表、engagement/kind/id 为字符串、conflict 为 bool、corrected 为正文字符串；时间校验无效时返回账本事实，不放行错误完成声明 |
+| 新话题 ID 拼接碰撞覆盖另一人格 | `life_conversation.py` 对 UMO、人格、发送人、标题使用 JSON 数组哈希；仍识别旧 ID，保留已问／已结束状态；无历史数据重写 |
+| 40 天清理破坏“不限时间的最近四条”规则 | `life_ledger.py` 每个 UMO＋人格至少保留最新四条实际发送记录，其余保留原清理期限；90 天后仍可去重，不跨人格 |
+| 管理操作成功但并发读取导致状态刷新被跳过 | 控制操作捕获目标 UMO，成功后直接 inspect 当前目标；Playwright 模拟已有读取进行中，验证仍请求一次 inspect，未写生产配置 |
+
+审计覆盖 Jev/Tool/MCP/Skill/SubAgent 路由及 fail-open、消息接话、主动候选和额度、人格日程与长期阶段、时间任务与恢复、AIGen 包装及数量/费用边界、关系网 SQLite、输入多模态下载和预处理/缓存/SingleFlight/Office 区域、输出增强生命周期、WebUI 保存和热更新入口。已有对应回归均在全量测试中运行；本轮没有改动无关模块或宿主源码。不存在由测试数量推导绝对无缺陷的保证。
+
+本轮新增 `tests/test_audit_041.py` 行为回归，检查真实 SQLite 状态、实际 Provider 替身调用次数、取消和隔离。用基线实现替换相关控制器后，新回归中的 **10 项明确失败**（另有 1 项容错场景原本通过）；修复后通过。新增原生发送集成验证无关铺垫、平台拒绝、成功承诺三种情况；平台未确认时 Provider 核验次数不增加。
+
+最终 Windows 全量 **803 passed, 5 skipped, 12 subtests passed**；VPS 全量 **807 passed, 1 skipped, 12 subtests passed**；真实 AstrBot 源的框架集成 **50 passed**。Ruff 和 diff whitespace 检查通过。Provider/发送替身用于确定性回归，与以下真实调用分开计数。
+
+真实 `gemini-3.8-flash` 在标准 `/v1/chat/completions` 共 **4 次实际 HTTP 请求**：无关问候不激活承诺、明确承诺按送出时刻加六小时、疑问不能确认外部完成、明确完成来信成功更新。证据为 VPS `/root/astrbot_backups/decision_full_audit_20261025/audit041/paid-receipts.json`、`paid.log`。本轮未重复生成付费图片/视频/音频，未向真实 QQ／其他平台外发；多模态功能由已有文件及 Provider/传输替身回归验证，历史真实验证见前文，不把历史调用计为本轮新调用。
+
+发布仅替换本轮跟踪代码，配置逐字节保持，保留全部 `data/`、人格、日程、缓存和数据库；备份、哈希 manifest、单 Decision 热重载、进程连续性和宿主带 token 的页面资产检查记录保存在 `audit041-release/`。不重启 AstrBot、容器或服务器。
+
 ## 生产盘点与边界
 
 - 盘点到的 AstrBot 运行目录为 `/root/yiyin/AstrBot`，插件目录为 `/root/yiyin/AstrBot/data/plugins/astrbot_plugin_decision`，服务单元为 `astrbot.service`，启动方式是 `/root/.local/bin/uv run --project /root/yiyin/AstrBot /root/yiyin/AstrBot/main.py`，由 detached `screen` 托管。

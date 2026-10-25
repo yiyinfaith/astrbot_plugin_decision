@@ -267,6 +267,35 @@ async def test_normal_send_capture_uses_each_actual_ack_not_a_sticky_sent_flag(n
 
 
 @pytest.mark.asyncio
+async def test_native_send_only_starts_commitment_after_its_acknowledged_text(native, monkeypatch):
+    runtime, event = native.runtime, native.event
+    runtime.config["temporal_settings"]["enable"] = True
+    runtime.config["temporal_settings"]["use_native_scheduler"] = False
+    monkeypatch.setattr(event.trace, "record", MagicMock())
+    monkeypatch.setattr("astrbot.core.platform.astr_message_event.Metric.upload", AsyncMock())
+    ident = json.loads(await runtime.temporal.manage(event, action="create", origin="bot",
+        kind="virtual_finish", delay_seconds=21600, note="读完小说", notify=False))["task"]["id"]
+    receipt = AsyncMock(return_value=LLMResponse(role="assistant", completion_text='{"commitments":[]}'))
+    monkeypatch.setattr(native.provider, "text_chat", receipt)
+    runtime.delivery.wrap_event(event, "alice")
+    await event.send(MessageChain().message("先跟你说一件别的事。"))
+    assert runtime.ledger.get_task(ident)["status"] == "awaiting_delivery"
+    native.context.send_message.return_value = False
+    await event.send(MessageChain().message("我六小时后读完小说"))
+    assert receipt.await_count == 1
+    assert runtime.ledger.get_task(ident)["status"] == "awaiting_delivery"
+    native.context.send_message.return_value = True
+    receipt.return_value = LLMResponse(role="assistant", completion_text=json.dumps({"commitments": [{"id": ident, "quote": "我六小时后读完小说"}]}))
+    before = runtime._now().timestamp()
+    await event.send(MessageChain().message("我六小时后读完小说"))
+    stored = runtime.ledger.get_task(ident)
+    assert stored["status"] == "pending" and before + 21600 <= stored["due"] <= runtime._now().timestamp() + 21600
+    assert receipt.await_count == 2
+    await runtime.terminate()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
 async def test_resolved_topic_during_generation_cannot_be_sent(native, monkeypatch):
     runtime = native.runtime
     now = runtime._now().timestamp()

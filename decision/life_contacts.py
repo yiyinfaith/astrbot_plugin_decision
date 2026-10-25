@@ -157,7 +157,7 @@ class ContactControl:
             if not db.execute("INSERT OR IGNORE INTO signals VALUES (?,?,?,?)", (umo, persona, ident, now.timestamp())).rowcount:
                 return
             kind = signal.get("engagement", "neutral")
-            if kind not in {"engaged", "neutral", "closing", "busy"}:
+            if not isinstance(kind, str) or kind not in {"engaged", "neutral", "closing", "busy"}:
                 return
             data["engagement"] = {"kind": kind, "quote": signal["quote"], "at": now.timestamp(), "sender": source["sender"],
                                   "scope": "member" if ":GroupMessage:" in umo else "conversation"}

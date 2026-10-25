@@ -170,7 +170,7 @@ class DecisionFunctionTool(FunctionTool):
     PLUGIN_NAME,
     "yiyinfaith",
     "jev决策综合插件：用 Jev 判断 Tool、MCP、Skill、SubAgent 和主动对话，并保留 AstrBot 主 LLM 的最终控制权。",
-    "0.4.0",
+    "0.4.1",
 )
 class DecisionPlugin(Star):
     """AstrBot integration layer for a provider-neutral decision engine."""
@@ -2664,7 +2664,7 @@ class DecisionPlugin(Star):
                 self._life_runtime._mark_conversation_activity(str(event.unified_msg_origin))
                 return
             await self._life_runtime.temporal.prepare_event(event)
-            if self._life_runtime.config["continuity_settings"]["enable"]:
+            if self._life_runtime.config["continuity_settings"]["enable"] or self._life_runtime.config["temporal_settings"]["enable"]:
                 persona = await self._life_runtime.personas.resolve(str(event.unified_msg_origin))
                 self._life_runtime.delivery.wrap_event(event, persona.id)
             await self._life_runtime.record_incoming(event)
@@ -2816,8 +2816,6 @@ class DecisionPlugin(Star):
     @getattr(filter, "after_message_sent", lambda **kw: lambda fn: fn)()
     async def life_after_send(self, event):
         if self._life_runtime:
-            if not event.get_extra("decision_life_proactive", False) and getattr(event, "__is_llm_reply", False):
-                await self._life_runtime.temporal.activate_from_event(event)
             if self._life_runtime.config["adaptive_settings"]["enable"] and getattr(event, "__is_llm_reply", False):
                 persona = await self._life_runtime.personas.resolve(str(event.unified_msg_origin))
                 self._life_runtime.contacts.normal_reply(event, persona.id, self._life_runtime._now())

@@ -130,7 +130,12 @@ class LifeLedger:
             db.execute("DELETE FROM signals WHERE at<?", (now - 7 * 86400,))
             db.execute("DELETE FROM idea_attempts WHERE at<?", (now - 7 * 86400,))
             db.execute("DELETE FROM conversation_calls WHERE at<?", (now - 7 * 86400,))
-            db.execute("DELETE FROM utterances WHERE at<?", (now - 40 * 86400,))
+            # Duplicate suppression deliberately compares the last four,
+            # regardless of age. Retention must not erase that small baseline.
+            db.execute("""DELETE FROM utterances WHERE at<? AND id NOT IN (
+                SELECT id FROM (SELECT id, ROW_NUMBER() OVER (
+                    PARTITION BY umo,persona ORDER BY at DESC,rowid DESC) AS rank
+                    FROM utterances) WHERE rank<=4)""", (now - 40 * 86400,))
             db.execute("DELETE FROM topics WHERE expires<?", (now - 7 * 86400,))
             db.execute("DELETE FROM contacts WHERE at<? AND status NOT IN ('sending','unknown')", (now - 40 * 86400,))
             db.execute("DELETE FROM shares WHERE thought IN (SELECT id FROM thoughts WHERE expires<?)", (now - 7 * 86400,))

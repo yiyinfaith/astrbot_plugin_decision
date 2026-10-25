@@ -145,7 +145,7 @@ class ConversationContinuity:
             return source if source and isinstance(quote, str) and len(quote.strip()) >= 2 and quote in source["text"] else None
 
         if self.settings["quality_enabled"]:
-            for signal in (data.get("signals") or [])[:16]:
+            for signal in (data.get("signals") if isinstance(data.get("signals"), list) else [])[:16]:
                 if not isinstance(signal, dict) or not (source := evidence(signal)):
                     continue
                 confidence = signal.get("confidence", 0)
@@ -155,7 +155,7 @@ class ConversationContinuity:
         if not self.settings["topics_enabled"]:
             return
         with self.ledger.transaction() as db:
-            for item in (data.get("topics") or [])[:8]:
+            for item in (data.get("topics") if isinstance(data.get("topics"), list) else [])[:8]:
                 if not isinstance(item, dict) or not (source := evidence(item)):
                     continue
                 row = db.execute("SELECT * FROM topics WHERE id=? AND umo=? AND persona=? AND sender=?", (str(item.get("topic_id", "")), umo, persona, source["sender"])).fetchone()
@@ -174,12 +174,21 @@ class ConversationContinuity:
                         continue
                 except ValueError:
                     continue
+                canonical_id = hashlib.sha256(json.dumps([umo, persona, source["sender"], title], ensure_ascii=False).encode()).hexdigest()
+                if not row:
+                    # Keep existing IDs and their asked/resolved state. Only
+                    # the new ID format changes; no history is rewritten.
+                    legacy_id = hashlib.sha256((umo + persona + source["sender"] + title).encode()).hexdigest()
+                    for candidate in (canonical_id, legacy_id):
+                        row = db.execute("SELECT * FROM topics WHERE id=? AND umo=? AND persona=? AND sender=?", (candidate, umo, persona, source["sender"])).fetchone()
+                        if row:
+                            break
                 if row and row["status"] in {"asked", "resolved"}:
                     continue  # No implicit re-opening or repeated unanswered follow-up.
                 count = db.execute("SELECT COUNT(*) FROM topics WHERE umo=? AND persona=? AND status IN ('open','asked') AND expires>?", (umo, persona, now.timestamp())).fetchone()[0]
                 if not row and count >= self.settings["max_open_topics"]:
                     continue
-                ident = row["id"] if row else hashlib.sha256((umo + persona + source["sender"] + title).encode()).hexdigest()
+                ident = row["id"] if row else canonical_id
                 previous = db.execute("SELECT status FROM topics WHERE id=?", (ident,)).fetchone()
                 if previous and previous[0] in {"resolved", "asked"}:
                     continue
