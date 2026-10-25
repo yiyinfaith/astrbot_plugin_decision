@@ -31,6 +31,26 @@
 
 ## 外部依赖边界
 
+### 2026-10-25 完整短视频、收费请求重放与双插件流式保活
+
+本轮以 Decision `76629f8`、AIGen `2d46c80` 为起点，修改范围限制在多模态传输、重试边界、能力说明及 AIGen 流式接收。用户已选择“保持 New API 源码不变，在插件内增加 OpenAI 流式兼容路线”；生产仅新增开启两个对应兼容配置项，其他模型、价格、余额、历史与人格配置保留。
+
+| 验收项 | 实现与证据 | 结果 |
+| --- | --- | --- |
+| 完整短视频 | `inline_video.py`、`openai_transport.py`、`runtime.py`；真实 MP4 1,128,375 字节，SHA256 `0cd83d944a6ca7822b4a8306cecc60a36e859b041f6702c6a1ad9ead78924451`，分别以 Gemini `inline_data` 和 OpenAI 字符串 `video_url` 验收 | 两种格式均正确识别橙红花瓣、黄色花心与开花变化；无 Files/Interactions；不是只检查返回状态 |
+| 长视频 seeking | 实际构造 70 秒 MP4，模型先看 4 张概览帧，再读 12 张目标区间帧 | 两次真实请求；完整长片未进入请求。自动模式下 Google 官方地址也使用此规则；显式原生策略继续独立 |
+| 收费请求重放 | `submissions.py` 使用每次分析的 ContextVar，通用、完整短片与显式原生模型调用均在提交前登记；外层只重试提交前失败 | 回归检查超时、524、空流、缺少最终结果、概览成功后精读失败的实际调用次数；后者恰好 2 次，不重跑概览。独立载入旧 runtime 对照，完整短片 4 项和后续精读失败 1 项均失败，新版本通过 |
+| AIGen 连续心跳 | `utils.read_api_response`、`api_manager.py`、`video_api_manager.py`；实际生图收到了 15、30、45、60、75、90、105、120 秒附近的 8 次心跳 | 首个数据约 123.934 秒，完整接收约 124.345 秒；得到 1,108,367 字节可解码图片，后续真实 Gemini 正确识别绿色正方形和黄色五角星 |
+| Gemini 原生网关限制 | 核对运行 rc.46 对应源码：原生流式分支设置 `DisablePing`，扫描器过滤上游注释；CPA 已热更新启用首 token 前 15 秒心跳，New API 自身设置为 15 秒 | 仅打开网关开关不能证明原生 Gemini 路径持续保活。新增 opt-in 兼容项通过同一网关 OpenAI 分支，沿用模型/Key/计费，不改 New API 源码、不新增常驻服务 |
+| 精确视频传参 | 真实探针发现 rc.46 忽略对象形式 `video_url`；初次探针的宽松文字断言已纠正并保留原始记录，不能算视觉通过 | 字符串形式重新实测通过；回归检查原始字节、MIME、请求路径和调用次数。签名下载 `.bin` 能正确标记 MP4 MIME |
+| 保活资源边界 | 心跳注释不累积为结果；读取长 Base64 行避免反复扫描已有内容；有响应大小预算；取消关闭连接 | 真实 loopback HTTP 覆盖四类生图流、音视频传输、分片、总超时与取消；心跳不绕过配置的总超时；断流不自动重新生成 |
+
+最终 VPS 隔离回归：Decision **735 passed, 1 skipped, 12 subtests passed**；真实 AstrBot 框架集成 **43 passed**。AIGen **390 passed, 1 skipped, 234 subtests passed**；实际宿主配置加载器另外定向执行 **4 passed**。Windows Decision 为 **731 passed, 5 skipped, 12 subtests passed**，AIGen 为 **390 passed, 1 skipped, 234 subtests passed**。Decision 全量 Ruff clean；AIGen 新增/其他变更文件 Ruff clean，`api_manager.py` 的 64 项既有 Ruff 告警与基线一致，没有新增告警，未把全仓库冒充为 clean。
+
+最终兼容链路真实验收为 5 个场景、6 次 HTTP 请求：完整短视频、70 秒长片两轮、英语语音转录、AIGen 生图、生成图片理解。Provider 使用 `gemini-3.8-flash`，生图沿用 AIGen 当前 `gemini-3.1-flash-image`。所有测试资源和审计记录位于 VPS `/root/astrbot_backups/decision_full_audit_20261025/inline-keepalive/`；网关变更前备份位于 API VPS `/root/decision-native-probes/heartbeat-before-20261025T034028Z/`。这些目录含私有材料，不上传 Git。发布后逐文件哈希、目标插件 reload、配置保留及进程/端口校验以同目录 `keepalive-release/deployment.json` 为准。
+
+没有重测纯文字 `send_voice`、真实平台外发或生产余额账本；继续保留现有参考音频克隆配置。以上离线回归中的 Provider/发送替身，与本节单独列出的真实付费 HTTP 验收分别记录。没有上游幂等能力时，不宣称超时请求一定未收费；当前实现保证插件不自动重放可能已处理的收费调用。
+
 ### 2026-10-25 用户保存模型后的真实复验与渠道对照
 
 后续固定反重力渠道验收：通过 New API rc.46 管理员测试令牌的渠道后缀固定到 229（单次尝试，不回退其他渠道），使用生产已部署的 Decision 与实际 AstrBot Provider、隔离缓存，九项 OpenAI 格式用例全部通过：图片、GIF、24 帧视频/静音、音频、混合 PDF、整页 PPTX、DOCX 第二页、XLSX A/B 两个区域。九次 `/v1/chat/completions` 实际调用对应网关消费记录 `767286–767294`，均为 `channel_id=229`。新视频答案正确识别橙红花瓣、黄色花蕊与绿色叶片；此前单次 Interactions 兼容响应的颜色误判记录仍保留。

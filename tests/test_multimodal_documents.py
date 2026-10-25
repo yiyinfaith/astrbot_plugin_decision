@@ -652,7 +652,7 @@ def test_capability_label_requires_a_real_native_route():
     from decision.multimodal import adapters
 
     gemini = GeminiProvider()
-    assert adapters.classify_kind(gemini, "video") == "native"
+    assert adapters.classify_kind(gemini, "video") == "preprocessed"
     frames_only = SimpleNamespace(
         provider_config={"modalities": ["text", "image"], "type": "openai_chat_completion"},
         get_current_key=lambda: "",

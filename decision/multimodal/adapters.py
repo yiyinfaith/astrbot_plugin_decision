@@ -73,10 +73,8 @@ def classify_kind(provider: Any, kind: str) -> str:
 
     declared = _modalities(provider)
     if kind == "video":
-        from .native_video import native_available
-
-        if native_available(provider)[0]:
-            return "native"
+        # Automatic routing is hybrid: short Gemini clips can be inline,
+        # long clips always use local seeking. A native-only badge misleads.
         if declared is None:
             return "preprocessed"
         return "preprocessed" if "image" in declared else "unsupported"
@@ -84,14 +82,6 @@ def classify_kind(provider: Any, kind: str) -> str:
         return "native"
     if kind == "file":
         return "preprocessed"
-    if kind == "video":
-        # A native label is only valid when the native upload route is really
-        # available for this provider, never from a modality declaration alone.
-        from .native_video import native_available
-
-        if native_available(provider)[0]:
-            return "native"
-        return "preprocessed" if "image" in declared else "unsupported"
     if kind == "image":
         return "native" if "image" in declared else "unsupported"
     if kind == "audio":
@@ -100,6 +90,8 @@ def classify_kind(provider: Any, kind: str) -> str:
 
 
 def describe_provider(provider: Any) -> dict[str, Any]:
+    from .inline_video import inline_credentials
+
     meta = None
     try:
         meta = provider.meta()
@@ -123,6 +115,11 @@ def describe_provider(provider: Any) -> dict[str, Any]:
             kind: kind_supported(provider, kind) for kind in KIND_LABELS
         },
         "capability": {kind: classify_kind(provider, kind) for kind in KIND_LABELS},
+        "video_route_label": (
+            "自动：短片完整视频；长片抽帧与 Agentic Seeking"
+            if inline_credentials(provider, model)[0]
+            else "自动：短片抽帧；长片抽帧与 Agentic Seeking"
+        ),
     }
 
 
@@ -205,8 +202,19 @@ async def call_provider(
     model: str | None = None,
     timeout: float = 180.0,
     stream: bool = True,
+    gateway_openai: bool = False,
 ) -> str:
     """Run one multi-modal completion and return the plain text answer."""
+
+    if stream and gateway_openai:
+        from . import openai_transport
+
+        kind = str((getattr(provider, "provider_config", None) or {}).get("type") or "")
+        if ("gemini" in kind or "google" in kind) and openai_transport.credentials(provider, model or "")[0]:
+            return await asyncio.wait_for(openai_transport.generate(
+                provider, model=model or "", prompt=prompt, images=images, audio=audio,
+                timeout=timeout,
+            ), timeout=timeout)
 
     chat = getattr(provider, "text_chat", None)
     if not callable(chat):
@@ -236,6 +244,9 @@ async def call_provider(
     except (TypeError, ValueError):
         pass
 
+    from .submissions import mark_submitted
+
+    mark_submitted()
     if use_stream:
         return await asyncio.wait_for(_stream_final_text(chat(**kwargs)), timeout=timeout)
     response = await asyncio.wait_for(chat(**kwargs), timeout=timeout)

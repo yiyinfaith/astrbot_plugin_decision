@@ -37,7 +37,7 @@ class RecordingProvider:
 def video_pipeline(tmp_path, monkeypatch):
     video = tmp_path / "source.mp4"
     video.write_bytes(b"bounded video fixture")
-    state = {"duration": 5.0, "native_calls": [], "frame_calls": []}
+    state = {"duration": 5.0, "native_calls": [], "frame_calls": [], "inline_calls": []}
 
     async def probe(path):
         assert path == video
@@ -63,6 +63,14 @@ def video_pipeline(tmp_path, monkeypatch):
     monkeypatch.setattr(preprocess, "probe_video", probe)
     monkeypatch.setattr(preprocess, "extract_frames", extract)
     monkeypatch.setattr(native_video, "analyze", native)
+    from decision.multimodal import inline_video
+
+    async def inline(path, prompt, **kwargs):
+        assert path == video
+        state["inline_calls"].append((path.read_bytes(), prompt, kwargs))
+        return "完整视频的红色花朵"
+
+    monkeypatch.setattr(inline_video, "generate", inline)
     return video, state
 
 
@@ -109,7 +117,12 @@ async def test_auto_gateway_uses_provider_frames_without_files(
         item = await runtime.understand(ref, instruction="检查红色花朵")
         assert item.ok, item.error
         assert state["native_calls"] == [], "auto must not probe Files/Interactions on a gateway"
-        assert item.meta["mode"] == ("frames" if duration == 5 else "agentic")
+        inline = provider_type == "googlegenai_chat_completion" and duration == 5
+        assert item.meta["mode"] == ("inline" if inline else "frames" if duration == 5 else "agentic")
+        assert len(state["inline_calls"]) == int(inline)
+        if inline:
+            assert not provider.calls and not state["frame_calls"]
+            return
         assert len(provider.calls) == (1 if duration == 5 else 2)
         assert all(call["image_urls"] for call in provider.calls)
         assert "检查红色花朵" in provider.calls[0]["prompt"]
@@ -121,7 +134,6 @@ async def test_auto_gateway_uses_provider_frames_without_files(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("strategy,base", [
-    ("auto", "https://generativelanguage.googleapis.com/v1beta"),
     ("native", "https://gateway.example"),
 ])
 async def test_official_auto_and_explicit_native_keep_native_route(
@@ -144,7 +156,7 @@ async def test_official_auto_and_explicit_native_keep_native_route(
 @pytest.mark.asyncio
 async def test_auto_route_change_invalidates_video_cache(tmp_path, video_pipeline):
     video, state = video_pipeline
-    provider = RecordingProvider("googlegenai_chat_completion", "https://gateway.example")
+    provider = RecordingProvider("openai_chat_completion", "https://gateway.example/v1")
     runtime = runtime_for(tmp_path, provider)
     ref = MediaRef(kind="video", reference=str(video), urn="v", umo="chat:1")
     try:
@@ -153,12 +165,12 @@ async def test_auto_route_change_invalidates_video_cache(tmp_path, video_pipelin
         assert generic.meta["mode"] == "frames"
         assert (await runtime.understand(ref)).key == generic.key
         assert len(provider.calls) == 1
-        provider.provider_config["api_base"] = "https://generativelanguage.googleapis.com"
+        provider.provider_config["type"] = "googlegenai_chat_completion"
         official = await runtime.understand(ref)
-        assert official.meta["mode"] == "native"
+        assert official.meta["mode"] == "inline"
         assert official.key != generic.key
         assert official.meta["route_signature"] != generic.meta["route_signature"]
-        assert len(state["native_calls"]) == 1
+        assert len(state["inline_calls"]) == 1 and not state["native_calls"]
     finally:
         await runtime.terminate()
 

@@ -30,6 +30,7 @@ def test_defaults_are_conservative():
     assert "mm_auto_enabled" not in settings.values
     assert settings.bool("mm_tools_enabled") is False
     assert settings.bool("mm_stream_enabled") is True
+    assert settings.bool("mm_gateway_openai_stream") is False
     assert settings.auto_kinds == ()
     assert settings.tool_kinds == ()
 
@@ -501,7 +502,7 @@ def test_native_video_label_follows_the_real_route():
             return "k"
 
     gemini = Gemini()
-    assert adapters.classify_kind(gemini, "video") == "native"
+    assert adapters.classify_kind(gemini, "video") == "preprocessed"
     no_key = SimpleNamespace(
         provider_config={"type": "gemini_chat_completion", "modalities": ["text", "image"]},
         get_current_key=lambda: "",

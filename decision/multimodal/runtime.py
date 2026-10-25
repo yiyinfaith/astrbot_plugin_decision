@@ -10,6 +10,7 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import threading
 import time
 from pathlib import Path
@@ -501,6 +502,10 @@ class MultimodalRuntime:
                 "请针对缺失内容核对原媒体，不要重新完整分析或重复已有描述。"
             )
         for attempt in range(attempts):
+            from . import submissions
+
+            submitted = submissions.Submissions()
+            token = submissions.current.set(submitted)
             workdir: Path | None = None
             try:
                 async with self._semaphore:
@@ -550,8 +555,15 @@ class MultimodalRuntime:
             except Exception as exc:
                 last_error = adapters.safe_provider_error(choice.provider, exc)
             finally:
+                submissions.current.reset(token)
                 if workdir is not None:
                     preprocess.cleanup_dir(workdir)
+            # Retrying the pipeline can replay successful audio/overview calls
+            # or a request still running upstream after a timeout/524. Only
+            # local preprocessing failures are safe to retry automatically.
+            if submitted.count:
+                last_error += "；本次已提交模型请求，处理/计费状态可能未确定，未自动重新提交"
+                break
             if attempt + 1 < attempts:
                 await asyncio.sleep(min(2.0, 0.5 * (attempt + 1)))
         item = self._failure(ref, last_error)
@@ -599,15 +611,22 @@ class MultimodalRuntime:
                 f"segment={settings.int('mm_audio_segment_seconds')}"
             )
         if kind == "video":
-            from .native_video import auto_native_available
+            from .inline_video import inline_credentials
 
             strategy = settings.text("mm_video_strategy") or "auto"
-            native_first = strategy == "native" or (
-                strategy == "auto" and auto_native_available(provider)
+            model = ""
+            if provider is not None:
+                try:
+                    model = str(provider.meta().model or "")
+                except Exception:
+                    pass
+            route = "native-first" if strategy == "native" else (
+                "short-inline-long-seeking" if strategy == "auto" and inline_credentials(provider, model)[0] else "frames"
             )
-            route = "native-first" if native_first else "frames"
+            endpoint = str((getattr(provider, "provider_config", None) or {}).get("api_base") or "")
+            endpoint_id = hashlib.sha256(endpoint.encode()).hexdigest()[:16]
             return (
-                f"video:version=3:{strategy}:route={route}:"
+                f"video:version=4:{strategy}:route={route}:endpoint={endpoint_id}:"
                 f"short={settings.int('mm_video_short_seconds')}:"
                 f"max={settings.int('mm_video_max_seconds')}:"
                 f"rounds={settings.int('mm_video_agentic_rounds')}:"
@@ -677,6 +696,7 @@ class MultimodalRuntime:
                 answer = await adapters.call_provider(
                     choice.provider,
                     stream=self._settings.bool("mm_stream_enabled"),
+                    gateway_openai=self._settings.bool("mm_gateway_openai_stream"),
                     prompt=self._compose(prompt, prepared.notes, ""),
                     images=prepared.images,
                     model=choice.model or None,
@@ -699,6 +719,7 @@ class MultimodalRuntime:
                         await adapters.call_provider(
                             choice.provider,
                             stream=self._settings.bool("mm_stream_enabled"),
+                            gateway_openai=self._settings.bool("mm_gateway_openai_stream"),
                             prompt=self._compose(prompt, prepared.notes, ""),
                             audio=[chunk],
                             model=choice.model or None,
@@ -728,9 +749,8 @@ class MultimodalRuntime:
     ) -> tuple[str, dict[str, Any]]:
         settings = self._settings
         strategy = (settings.text("mm_video_strategy") or "auto").lower()
-        # Probe before route selection so the duration limit also applies to
-        # native uploads. Gateway Gemini providers use their ordinary chat
-        # interface in auto mode without requiring Files or Interactions.
+        # Unknown/long clips never use the complete inline route. Explicit
+        # native keeps the separately selected Files/Interactions behavior.
         info: dict[str, Any] = {}
         try:
             info = await preprocess.probe_video(path)
@@ -741,9 +761,7 @@ class MultimodalRuntime:
             limit = float(settings.int("mm_video_max_seconds"))
             if limit and duration > limit:
                 raise ValueError(f"视频时长 {duration:.0f}s 超过上限 {limit:.0f}s")
-            from .native_video import auto_native_available
-
-            if strategy == "native" or auto_native_available(choice.provider):
+            if strategy == "native":
                 native = await self._native_video(
                     ref,
                     choice,
@@ -768,6 +786,24 @@ class MultimodalRuntime:
         timeout = float(settings.int("mm_timeout_seconds"))
         short_limit = float(settings.int("mm_video_short_seconds"))
 
+        if strategy == "auto" and 0 < duration <= short_limit:
+            from . import inline_video
+
+            inline_prompt = (
+                "请理解附带的完整原始视频及其音轨，按时间顺序描述动作和变化。"
+                "这不是抽帧图集；请只报告实际看到/听到的内容，静音时不要编造声音。\n\n"
+                + prompt.replace(PROMPTS["video"], "请概述视频主要内容、事件关系及关键时间点。")
+            )
+            if (inline_video.inline_credentials(choice.provider, choice.model)[0]
+                    and inline_video.request_size(path, inline_prompt) <= inline_video.MAX_REQUEST_BYTES):
+                answer = await inline_video.generate(
+                    path, inline_prompt, provider=choice.provider, model=choice.model,
+                    timeout=timeout, stream=settings.bool("mm_stream_enabled"),
+                    gateway_openai=settings.bool("mm_gateway_openai_stream"),
+                )
+                return answer, {"duration": duration, "frames": 0, "mode": "inline",
+                                "has_audio": bool(info.get("has_audio"))}
+
         if duration <= short_limit or duration <= 0:
             stamps = preprocess.sample_video(info, settings)
             frames = await preprocess.extract_frames(path, workdir, stamps)
@@ -781,6 +817,7 @@ class MultimodalRuntime:
             answer = await adapters.call_provider(
                 choice.provider,
                 stream=self._settings.bool("mm_stream_enabled"),
+                gateway_openai=self._settings.bool("mm_gateway_openai_stream"),
                 prompt=self._compose(
                     prompt,
                     self._stamp_notes(stamps),
@@ -808,6 +845,7 @@ class MultimodalRuntime:
         overview = await adapters.call_provider(
             choice.provider,
             stream=self._settings.bool("mm_stream_enabled"),
+            gateway_openai=self._settings.bool("mm_gateway_openai_stream"),
             prompt=self._compose(
                 f"本次分析目标：{prompt}\n\n" + AGENTIC_PROMPT.format(limit=windows_per_round),
                 self._stamp_notes(stamps),
@@ -844,6 +882,7 @@ class MultimodalRuntime:
                 part = await adapters.call_provider(
                     choice.provider,
                     stream=self._settings.bool("mm_stream_enabled"),
+                    gateway_openai=self._settings.bool("mm_gateway_openai_stream"),
                     prompt=self._compose(
                         f"本次分析目标：{prompt}\n\n"
                         f"这是第 {round_index + 2} 轮。已有发现：\n{seen_text}\n"
@@ -934,6 +973,7 @@ class MultimodalRuntime:
             answer = await adapters.call_provider(
                 choice.provider,
                 stream=self._settings.bool("mm_stream_enabled"),
+                gateway_openai=self._settings.bool("mm_gateway_openai_stream"),
                 prompt=self._compose(
                     prompt,
                     [f"文档结构：\n{outline}"] if outline else [],
@@ -995,6 +1035,7 @@ class MultimodalRuntime:
         answer = await adapters.call_provider(
             choice.provider,
             stream=self._settings.bool("mm_stream_enabled"),
+            gateway_openai=self._settings.bool("mm_gateway_openai_stream"),
             prompt=self._compose(prompt, prepared.notes, prepared.text),
             model=choice.model or None,
             timeout=timeout,
@@ -1171,6 +1212,7 @@ class MultimodalRuntime:
         answer = await adapters.call_provider(
             choice.provider,
             stream=self._settings.bool("mm_stream_enabled"),
+            gateway_openai=self._settings.bool("mm_gateway_openai_stream"),
             prompt=(
                 f"{prompt}\n\n这是扫描版文档的页面图片，PDF 页码为：{page_numbers}。"
                 "请按对应页码逐页转写可见文字并保留章节与表格结构；无法辨认处标注“不清”。"
@@ -1337,6 +1379,7 @@ class MultimodalRuntime:
                     await adapters.call_provider(
                         choice.provider,
                         stream=self._settings.bool("mm_stream_enabled"),
+                        gateway_openai=self._settings.bool("mm_gateway_openai_stream"),
                         prompt=(
                             "请转写并理解这段视频音轨：主要语音内容、说话人变化，"
                             "以及音乐或环境声音。"
@@ -1379,6 +1422,11 @@ class MultimodalRuntime:
             agentic=agentic,
         )
         if result.route != "native" or not result.text:
+            from .submissions import current
+
+            state = current.get()
+            if state is not None and state.count:
+                raise RuntimeError("原生视频请求未完成，未自动改用抽帧再次提交")
             logger.info("Decision Engine 原生视频失败，回退抽帧：%s", result.error)
             return None
         return result.text, {

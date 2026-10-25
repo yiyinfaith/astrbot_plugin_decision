@@ -308,6 +308,19 @@ async def test_multimodal_stream_default_and_save_reload(host):
 
 
 @pytest.mark.asyncio
+async def test_gateway_stream_compat_saves_without_replacing_model_or_other_policy(host):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    assert plugin._multimodal_page_settings()["mm_gateway_openai_stream"] is False
+    host.body.update(always_keep_tools=[], dialogue_enhancement={"multimodal": {
+        "mm_gateway_openai_stream": True, "mm_default_model": "chosen-model",
+    }})
+    assert (await plugin.page_save_settings()).get("saved") is True
+    reloaded = host.module.DecisionPlugin(host.context, host.config)
+    assert reloaded._multimodal_page_settings()["mm_gateway_openai_stream"] is True
+    assert reloaded._multimodal_settings()["mm_default_model"] == "chosen-model"
+
+
+@pytest.mark.asyncio
 async def test_failed_write_does_not_change_live_policy_history_or_previous_file(host, monkeypatch):
     plugin = host.module.DecisionPlugin(host.context, host.config)
     host.body.update(always_keep_tools=["jev_decide"], tool_filter_enabled=False)

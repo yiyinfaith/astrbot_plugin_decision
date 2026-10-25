@@ -689,15 +689,15 @@ AstrBot 会把 `image_urls` 原样交给 Provider，很多 OpenAI 兼容端点�
 
 | 策略 | 行为 |
 |---|---|
-| 自动选择（默认） | OpenAI / Gemini 反代均直接使用所选 Provider 的通用接口；直连 Google Developer API 时优先原生，失败回退抽帧 |
+| 自动选择（默认） | Gemini 短片发送完整原始视频；长片始终使用抽帧概览与 Agentic Seeking 片段精读。未知时长、超过 inline 大小预算或其他模型使用抽帧 |
 | 优先原生 | 强制尝试原生；Provider 不支持时明确报错，不静默降级 |
 | 强制通用处理 | 始终走 FFmpeg 抽帧 + 多轮精读 |
 
 原生路线使用 Gemini Files API：上传 → 轮询 `ACTIVE` → `generateContent`(`fileData`) → **删除服务端文件**。
 API Key 与 `api_base` 直接复用 AstrBot 已配置的 Gemini Provider，不需要二次填写。
-上传失败、超时、取消都会清理并回退到抽帧，取消时同样执行删除。
+未提交模型前的上传失败可回退抽帧；已经提交模型后发生超时/失败，不重新提交或改走其他收费路线。取消时同样尽力删除远端文件。
 
-`capability.video` 根据 Provider 类型和可复用凭据标记是否具备原生调用路线；这不是对第三方网关 Files/Interactions 端点的在线可用性探测。实际调用失败时按视频策略处理。
+自动模式是完整短片与长片预处理的混合路线，`capability.video` 使用 `preprocessed` 表达这一点；模型目录额外提供 `video_route_label`，WebUI 显示短片和长片的具体路线，不再把有 Gemini Key 等同于整条链路原生直传。
 
 #### 反向代理与 CPA 反重力渠道
 
@@ -708,9 +708,15 @@ API Key 与 `api_base` 直接复用 AstrBot 已配置的 Gemini Provider，不�
 | OpenAI 兼容 | `https://your-gateway.example/v1` | `/v1/chat/completions` | 自动选择可用；也可选强制通用处理 |
 | Google Gemini | `https://your-gateway.example` | `/v1beta/models/{model}:generateContent`；流式为 `:streamGenerateContent` | 自动选择可用；不会先探测第三方 Files/Interactions，也可显式强制通用处理 |
 
-Gemini 格式的图片、音频通过 `inline_data` 发送；通用视频使用时间戳帧图、独立音轨理解和按需多轮精读。PDF、PPTX、DOCX、XLSX 继续使用本地解析/OCR/整页渲染和目标范围读取，不依赖 Google 文件上传。自动策略只对标准 Google Developer API 地址优先使用 Files；自建网关若确实实现完整原生协议，仍可显式选择“优先原生”。视频缓存身份记录本次采用的路由策略，切换官方/代理路径不会混用结果，已有缓存与历史索引不会被清空。
+Gemini 格式的图片、音频通过 `inline_data` 发送。自动模式下，已知时长不超过短片阈值（默认 60 秒）、完整 JSON 不超过 20 MiB 的 Gemini 视频直接发送原始字节，包含原始音轨；这也支持 AstrBot 以 OpenAI Provider 配置的 Gemini 模型。长视频只发送时间戳帧图、音轨理解和按需精读窗口，绝不因使用 Google 官方地址而在自动模式上传整个长片。PDF、PPTX、DOCX、XLSX 继续使用本地解析/OCR/整页渲染和目标范围读取。完整 Files/Interactions 仅在显式“优先原生”策略下使用。视频缓存身份升级并记录处理策略与端点指纹；历史索引和数据保留。
 
 “输入增强 → 多模态理解”提供**启用流式理解**（`mm_stream_enabled`，默认开启）。支持宿主流式接口时，OpenAI 请求使用 `stream: true`，Gemini 使用 `streamGenerateContent`；关闭后使用普通非流式请求。插件只使用宿主给出的完整最终结果，不把中间片段或思考内容写入理解缓存；超时/取消会关闭流，传输失败不会自动改走另一接口重复提交。该开关保存后热更新，重载后恢复，不影响 AstrBot 主对话或 Google 原生后台任务；切换接收方式不会丢弃已有理解缓存。
+
+**Gemini 网关流式保活兼容**（`mm_gateway_openai_stream`，默认关闭）用于 New API 等同时提供 OpenAI 接口的网关。开启后，Gemini 网关的流式理解通过同一网关 `/v1/chat/completions` 提交，保留所选模型和 Key；完整短视频使用字符串形式的 `video_url` data URL，图片及音频使用对应多模态字段。Google 官方地址、非流式请求和显式 Files/Interactions 不受此开关影响。网关必须能转换这些媒体类型并正确配置模型映射。此选项在本次用户指定的生产站点已授权开启。
+
+持续保活需要网关向下游真正发送 SSE 心跳。New API rc.46 的 Gemini 原生流式分支关闭自定义 ping，并过滤上游注释；上述兼容路线使用可发送心跳的 OpenAI 分支。生产 New API 和 CPA 的流式心跳已热更新为 15 秒，CPA 同时开启首个 token 前的心跳。没有修改 New API 源码、增加常驻服务或重启现有容器。心跳避免无响应字节的等待，不取消插件配置的总超时，也不保证上游永不失败。
+
+`mm_retries` 只重试提交模型前的失败。一旦分析内任何音轨/概览/精读请求已经提交，后续超时、524、断流、空结果等都不会自动重跑整个流程；SDK 额外重试也被禁用。缺少上游幂等接口时，不能保证已经超时的请求未计费，错误信息会明确这一点。
 
 2026-10-25 在固定 CPA 反重力渠道上完成真实验收：OpenAI 格式九项媒体/文档用例全部通过；Gemini `generateContent` 的图片、音频、完整小视频与混合 PDF 四项全部通过。独立的带语音视频精读验证了音轨转录、概览和重新抽帧三次实际调用。这不保证所有代理或所有媒体输入均可用，长视频仍受时长、帧数、上下文与上游限制；插件多轮精读与 Google 服务端 Agentic Video 是两条不同路线。
 

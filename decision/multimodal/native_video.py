@@ -76,11 +76,9 @@ class NativeResult:
     agentic: bool = False
 
 
-def gemini_credentials(provider: Any) -> tuple[str, str]:
-    """Reuse the provider's own key and base URL; never ask the user twice."""
-
+def provider_api_key(provider: Any) -> str:
+    """Read the active key without logging it or changing the host's key list."""
     config = getattr(provider, "provider_config", None) or {}
-    provider_type = str(config.get("type") or "").lower()
     getter = getattr(provider, "get_current_key", None)
     key = ""
     if callable(getter):
@@ -99,6 +97,15 @@ def gemini_credentials(provider: Any) -> tuple[str, str]:
     if not key:
         value = config.get("key") or ""
         key = str(value[0] if isinstance(value, list) and value else value)
+    return key
+
+
+def gemini_credentials(provider: Any) -> tuple[str, str]:
+    """Reuse the provider's own key and base URL; never ask the user twice."""
+
+    config = getattr(provider, "provider_config", None) or {}
+    provider_type = str(config.get("type") or "").lower()
+    key = provider_api_key(provider)
     base = str(config.get("api_base") or DEFAULT_BASE).rstrip("/")
     for suffix in ("/v1beta", "/v1alpha"):
         if base.endswith(suffix):
@@ -274,6 +281,9 @@ async def generate(
             }
         ]
     }
+    from .submissions import mark_submitted
+
+    mark_submitted()
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{base}/v1beta/models/{model}:generateContent",
@@ -320,6 +330,9 @@ async def agentic_generate(
     }
     deadline = asyncio.get_running_loop().time() + timeout
     interaction_id = ""
+    from .submissions import mark_submitted
+
+    mark_submitted()
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(
@@ -465,7 +478,7 @@ async def analyze(
         raise
     except Exception as exc:
         detail = _safe_error(exc, key)
-        logger.info("Decision Engine 原生视频理解失败，将回退抽帧：%s", detail)
+        logger.info("Decision Engine 原生视频理解失败：%s", detail)
         return NativeResult(text="", route="frames", error=detail)
     finally:
         if name:

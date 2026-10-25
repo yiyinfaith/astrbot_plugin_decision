@@ -794,6 +794,7 @@
               </div>
               <div class="switch-row"><div class="switch-copy"><strong>主动调用工具理解</strong><small>注册 understand_image / understand_video / understand_audio / understand_file 四个工具，由模型自行决定何时分析。</small></div><label class="switch"><input v-model="mm.multimodal.mm_tools_enabled" type="checkbox"><span class="switch-track"></span></label></div>
               <div class="switch-row"><div class="switch-copy"><strong>启用流式理解</strong><small>默认开启，OpenAI / Gemini 通用理解接口流式接收完整结果；关闭则使用非流式。不影响主对话或原生后台任务。</small></div><label class="switch"><input v-model="mm.multimodal.mm_stream_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="switch-row"><div class="switch-copy"><strong>Gemini 网关流式保活兼容</strong><small>适用于 New API 等同时提供 OpenAI 接口的网关：流式理解改用 OpenAI 格式，完整短片仍传原始视频，沿用所选模型和 Key；不影响 Google 官方地址或非流式请求。网关仍需开启 SSE 心跳。</small></div><label class="switch"><input v-model="mm.multimodal.mm_gateway_openai_stream" type="checkbox"><span class="switch-track"></span></label></div>
               <div class="two-col">
                 <div class="field"><label>图片工具</label><label class="switch"><input v-model="mm.multimodal.mm_tool_image" type="checkbox"><span class="switch-track"></span></label></div>
                 <div class="field"><label>视频工具</label><label class="switch"><input v-model="mm.multimodal.mm_tool_video" type="checkbox"><span class="switch-track"></span></label></div>
@@ -813,7 +814,7 @@
               <div class="field"><label>默认理解模型 <span>来自 AstrBot 已配置的模型</span></label><select v-model="mm.multimodal.mm_default_model"><option value="">（未选择）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }} · {{ row.modalities_label }}</option></select></div>
               <div class="two-col">
                 <div class="field"><label>图片理解模型 <span>留空沿用默认</span></label><select v-model="mm.multimodal.mm_model_image"><option value="">（沿用默认）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }}</option></select></div>
-                <div class="field"><label>视频理解模型 <span>需要图像能力</span></label><select v-model="mm.multimodal.mm_model_video"><option value="">（沿用默认）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }}</option></select></div>
+                <div class="field"><label>视频理解模型 <span>需要图像能力</span></label><select v-model="mm.multimodal.mm_model_video"><option value="">（沿用默认）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }}</option></select><small>{{ mmVideoRouteLabel }}</small></div>
                 <div class="field"><label>音频理解模型 <span>需要音频能力</span></label><select v-model="mm.multimodal.mm_model_audio"><option value="">（沿用默认）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }}</option></select></div>
                 <div class="field"><label>文件理解模型 <span>留空沿用默认</span></label><select v-model="mm.multimodal.mm_model_file"><option value="">（沿用默认）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }}</option></select></div>
               </div>
@@ -834,7 +835,7 @@
                 <div class="field"><label>文件文本上限 <span>字符</span></label><input v-model.number="mm.multimodal.mm_file_max_chars" type="number" min="500" max="200000" step="500"></div>
                 <div class="field"><label>理解超时 <span>秒</span></label><input v-model.number="mm.multimodal.mm_timeout_seconds" type="number" min="10" max="900" step="10"></div>
                 <div class="field"><label>并发任务数</label><input v-model.number="mm.multimodal.mm_concurrency" type="number" min="1" max="8" step="1"></div>
-                <div class="field"><label>失败重试次数</label><input v-model.number="mm.multimodal.mm_retries" type="number" min="0" max="3" step="1"></div>
+                <div class="field"><label>提交模型前的失败重试次数</label><input v-model.number="mm.multimodal.mm_retries" type="number" min="0" max="3" step="1"><small>已经提交模型的请求，超时或断流后不会自动重新提交，避免重复计费。</small></div>
                 <div class="field"><label>缓存有效期 <span>小时</span></label><input v-model.number="mm.multimodal.mm_cache_ttl_hours" type="number" min="0" max="720" step="1"></div>
                 <div class="field"><label>缓存条目上限</label><input v-model.number="mm.multimodal.mm_cache_max_entries" type="number" min="10" max="10000" step="10"></div>
                 <div class="field"><label>等待理解完成 <span>秒，0 表示不等待</span></label><input v-model.number="mm.multimodal.mm_auto_wait_seconds" type="number" min="0" max="30" step="1"></div>
@@ -1124,6 +1125,14 @@
           mmModels() {
             const models = this.mm.multimodal && this.mm.multimodal.models;
             return Array.isArray(models) ? models : [];
+          },
+          mmVideoRouteLabel() {
+            const config = this.mm.multimodal || {};
+            if (config.mm_video_strategy === 'frames') return '短片抽帧；长片使用 Agentic Seeking 按需精读。';
+            if (config.mm_video_strategy === 'native') return '显式原生策略：需要上游支持 Google Files / Interactions。';
+            const id = config.mm_model_video || config.mm_default_model;
+            const row = this.mmModels.find(item => item.id === id);
+            return (row && row.video_route_label ? row.video_route_label : '请选择视频理解模型') + '；完整短片超过大小预算时改用抽帧。';
           },
           mmScopeText() {
             const value = this.mm.multimodal && this.mm.multimodal.mm_auto_scope;
