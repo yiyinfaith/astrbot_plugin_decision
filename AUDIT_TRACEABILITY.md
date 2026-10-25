@@ -33,6 +33,18 @@
 
 ### 2026-10-25 用户保存模型后的真实复验与渠道对照
 
+后续固定反重力渠道验收：通过 New API rc.46 管理员测试令牌的渠道后缀固定到 229（单次尝试，不回退其他渠道），使用生产已部署的 Decision 与实际 AstrBot Provider、隔离缓存，九项 OpenAI 格式用例全部通过：图片、GIF、24 帧视频/静音、音频、混合 PDF、整页 PPTX、DOCX 第二页、XLSX A/B 两个区域。九次 `/v1/chat/completions` 实际调用对应网关消费记录 `767286–767294`，均为 `channel_id=229`。新视频答案正确识别橙红花瓣、黄色花蕊与绿色叶片；此前单次 Interactions 兼容响应的颜色误判记录仍保留。
+
+带语音视频另作两项实测：4.095 秒短视频融合音轨通过（两次模型调用）；之后构造 10.01 秒样本，在隔离配置中将短片阈值设为 5 秒以触发多轮分支，音轨转录、概览和 0–3 秒重新抽帧精读三次真实请求全部完成，项目编码 7429 和红/橙红花瓣正确。阈值调整仅属于验收配置，不修改生产阈值，也不代表已验收长时视频的全部质量。
+
+Gemini 原生请求格式同样固定 229：`/v1beta/models/gemini-3.8-flash:generateContent` 以 `inline_data` 分别传入 PNG、WAV、完整 MP4、混合 PDF，四次真实请求均通过内容断言；没有调用 Files 或 Interactions。证据目录为 `/root/astrbot_backups/decision_full_audit_20261025/channel229-standard/`，网关消费记录在 API VPS `/root/decision-native-probes/channel229-standard-receipts.json`。这些结果证明替代路线无需修改 New API 源码、安装插件、增加服务或放行上传路径。
+
+本次进一步修复自动策略：OpenAI 与 Gemini 反代都直接调用所选 Provider 的通用接口，不先探测 Files/Interactions；标准 Google Developer API 地址仍保留原生优先，显式原生选项不变。视频缓存身份增加实际路由策略，避免同一模型从代理切换官方地址时错用缓存。新增回归在修改前复现 Gemini 自动上传的问题，修改后覆盖两种 Provider 的短片、迭代精读、官方原生保留与缓存隔离。
+
+新增 `mm_stream_enabled` 开关，默认开启，页面、默认值、校验、实际 Provider 调用、保存/热更新/重新加载均接通。流式仅接受宿主的完整最终快照，丢弃中间片段及思考字段；断流或取消不会返回部分结果，也不会自动另开非流式付费请求。切换流式不改变已完成理解的缓存身份。实际 AstrBot OpenAI 与 Gemini Provider 固定 229，各执行图片流式开/关及音频流式，共六次真实调用，全部通过并核对 SSE/JSON 响应类型与实际请求路径。Gemini 自动策略的 24 帧真实视频以 `streamGenerateContent` 成功，OpenAI 自动视频也通过；网络追踪确认两者都没有 Files/Interactions 请求。
+
+失败证据不隐去：此前 24 帧 Gemini 非流式自动验收发生一次本地 ReadTimeout、一次 Cloudflare 524；对应一次上游最终耗时 5 分 36 秒才返回。流式修复后相同 24 帧样本通过，不据此保证上游不会再次出现延迟或容量问题。配置保存、重载恢复、超时流关闭及禁止不完整答案回退均有行为测试。最终本地回归 **712 passed, 5 skipped, 12 subtests passed**；VPS 隔离回归 **716 passed, 1 skipped, 12 subtests passed**，真实 AstrBot 原生集成 **43 passed**，ruff 通过。跳过项与常规模型/平台替身不冒充真实验收；以上列出的 Provider HTTP 实测单独保留。
+
 本节为最新外部验收状态，覆盖后文首次盘点时的模型空值、Files 被 WAF 拒绝等历史边界。功能代码基线为 `535d83aaacd30832154b9dd3989077393035342c`；以下请求使用已部署代码及隔离缓存，没有修改生产模型、渠道、余额、价格或发送真实平台消息。
 
 - 用户已将默认及图片、视频、音频、文件模型全部保存为 `吟枢苑API/gemini-3.8-flash`。从实际 Provider Source 与模型条目合并配置，使用真实 AstrBot OpenAI Provider 重新运行九项验收：静态图片、三帧 GIF、24 帧视频和静音音轨、英语音频转录、混合 PDF、整页 PPTX、DOCX 第二页、XLSX A401:A403、XLSX B401:B403，九项均通过，各一次真实 HTTP 请求。XLSX 两列独有内容没有交叉，DOCX 没有返回第一页独有文字。

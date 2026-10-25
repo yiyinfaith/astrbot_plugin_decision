@@ -12,6 +12,7 @@ import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from astrbot import logger
 
@@ -114,6 +115,34 @@ def native_available(provider: Any) -> tuple[bool, str]:
     if not key:
         return False, "该 Provider 不是 Gemini 或缺少可复用的 API Key，无法使用原生视频上传"
     return True, ""
+
+
+def auto_native_available(provider: Any) -> bool:
+    """Only prefer Files automatically on the known Google Developer endpoint.
+
+    Gemini-compatible gateways commonly implement generateContent without
+    Files or Interactions. Their chat provider can handle frames and audio
+    directly, so auto must not probe unsupported upload routes. An operator
+    can still explicitly select the native strategy on a capable gateway.
+    """
+
+    key, base = gemini_credentials(provider)
+    if not key:
+        return False
+    try:
+        parsed = urlsplit(base)
+        return (
+            parsed.scheme.lower() == "https"
+            and parsed.hostname == "generativelanguage.googleapis.com"
+            and parsed.port in (None, 443)
+            and parsed.path in ("", "/")
+            and not parsed.username
+            and not parsed.password
+            and not parsed.query
+            and not parsed.fragment
+        )
+    except ValueError:
+        return False
 
 
 async def _request(

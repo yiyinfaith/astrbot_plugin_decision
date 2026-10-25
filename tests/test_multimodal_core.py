@@ -29,6 +29,7 @@ def test_defaults_are_conservative():
     assert settings.bool("mm_enabled") is False
     assert "mm_auto_enabled" not in settings.values
     assert settings.bool("mm_tools_enabled") is False
+    assert settings.bool("mm_stream_enabled") is True
     assert settings.auto_kinds == ()
     assert settings.tool_kinds == ()
 

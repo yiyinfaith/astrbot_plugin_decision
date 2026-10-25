@@ -689,7 +689,7 @@ AstrBot 会把 `image_urls` 原样交给 Provider，很多 OpenAI 兼容端点�
 
 | 策略 | 行为 |
 |---|---|
-| 自动选择（默认） | 能原生就用原生，否则自动回退抽帧 |
+| 自动选择（默认） | OpenAI / Gemini 反代均直接使用所选 Provider 的通用接口；直连 Google Developer API 时优先原生，失败回退抽帧 |
 | 优先原生 | 强制尝试原生；Provider 不支持时明确报错，不静默降级 |
 | 强制通用处理 | 始终走 FFmpeg 抽帧 + 多轮精读 |
 
@@ -697,7 +697,24 @@ AstrBot 会把 `image_urls` 原样交给 Provider，很多 OpenAI 兼容端点�
 API Key 与 `api_base` 直接复用 AstrBot 已配置的 Gemini Provider，不需要二次填写。
 上传失败、超时、取消都会清理并回退到抽帧，取消时同样执行删除。
 
-`capability.video` 只有在**原生上传通道真实可用**时才为 `native`；仅声明了模态不会得到该标签。
+`capability.video` 根据 Provider 类型和可复用凭据标记是否具备原生调用路线；这不是对第三方网关 Files/Interactions 端点的在线可用性探测。实际调用失败时按视频策略处理。
+
+#### 反向代理与 CPA 反重力渠道
+
+理解多媒体不要求网关实现 Google Files API 或 Interactions API。通用处理把图片/动图帧、视频帧与音轨、文档页图和指定区域文字交给已有模型接口：
+
+| AstrBot Provider | Base URL 示例 | 模型请求接口 | 视频策略 |
+| --- | --- | --- | --- |
+| OpenAI 兼容 | `https://your-gateway.example/v1` | `/v1/chat/completions` | 自动选择可用；也可选强制通用处理 |
+| Google Gemini | `https://your-gateway.example` | `/v1beta/models/{model}:generateContent`；流式为 `:streamGenerateContent` | 自动选择可用；不会先探测第三方 Files/Interactions，也可显式强制通用处理 |
+
+Gemini 格式的图片、音频通过 `inline_data` 发送；通用视频使用时间戳帧图、独立音轨理解和按需多轮精读。PDF、PPTX、DOCX、XLSX 继续使用本地解析/OCR/整页渲染和目标范围读取，不依赖 Google 文件上传。自动策略只对标准 Google Developer API 地址优先使用 Files；自建网关若确实实现完整原生协议，仍可显式选择“优先原生”。视频缓存身份记录本次采用的路由策略，切换官方/代理路径不会混用结果，已有缓存与历史索引不会被清空。
+
+“输入增强 → 多模态理解”提供**启用流式理解**（`mm_stream_enabled`，默认开启）。支持宿主流式接口时，OpenAI 请求使用 `stream: true`，Gemini 使用 `streamGenerateContent`；关闭后使用普通非流式请求。插件只使用宿主给出的完整最终结果，不把中间片段或思考内容写入理解缓存；超时/取消会关闭流，传输失败不会自动改走另一接口重复提交。该开关保存后热更新，重载后恢复，不影响 AstrBot 主对话或 Google 原生后台任务；切换接收方式不会丢弃已有理解缓存。
+
+2026-10-25 在固定 CPA 反重力渠道上完成真实验收：OpenAI 格式九项媒体/文档用例全部通过；Gemini `generateContent` 的图片、音频、完整小视频与混合 PDF 四项全部通过。独立的带语音视频精读验证了音轨转录、概览和重新抽帧三次实际调用。这不保证所有代理或所有媒体输入均可用，长视频仍受时长、帧数、上下文与上游限制；插件多轮精读与 Google 服务端 Agentic Video 是两条不同路线。
+
+采用这些通用路线不需要新增 New API 插件、额外服务或放行 `/upload/v1beta/files`。网关只需已有渠道启用、模型名称/映射正确，并接受对应的图片和音频输入；价格与结算继续沿用网关现有规则。模型固定到哪条上游仍由网关路由配置决定，AstrBot 中选择同名模型不等于固定某个 New API 渠道。
 
 #### OCR 策略（WebUI：多模态理解 → OCR 策略 / 本地 OCR 引擎）
 

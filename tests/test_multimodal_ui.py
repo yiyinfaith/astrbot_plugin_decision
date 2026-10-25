@@ -63,6 +63,7 @@ def test_multimodal_section_is_under_input_enhancement():
     for key in (
         "mm_enabled",
         "mm_tools_enabled",
+        "mm_stream_enabled",
         "mm_auto_image",
         "mm_auto_video",
         "mm_auto_audio",

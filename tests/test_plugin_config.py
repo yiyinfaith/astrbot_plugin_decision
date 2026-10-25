@@ -294,6 +294,20 @@ async def test_removed_auto_switch_is_dropped_on_load_save_and_reload(host):
 
 
 @pytest.mark.asyncio
+async def test_multimodal_stream_default_and_save_reload(host):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    assert plugin._multimodal_page_settings()["mm_stream_enabled"] is True
+    host.body.update(always_keep_tools=[], dialogue_enhancement={"multimodal": {"mm_stream_enabled": False}})
+    result = await plugin.page_save_settings()
+    assert result.get("saved") is True, result
+    assert plugin._multimodal_settings()["mm_stream_enabled"] is False
+    stored = json.loads(host.path.read_text(encoding="utf-8"))
+    assert stored["multimodal"]["mm_stream_enabled"] is False
+    reloaded = host.module.DecisionPlugin(host.context, host.config)
+    assert reloaded._multimodal_page_settings()["mm_stream_enabled"] is False
+
+
+@pytest.mark.asyncio
 async def test_failed_write_does_not_change_live_policy_history_or_previous_file(host, monkeypatch):
     plugin = host.module.DecisionPlugin(host.context, host.config)
     host.body.update(always_keep_tools=["jev_decide"], tool_filter_enabled=False)

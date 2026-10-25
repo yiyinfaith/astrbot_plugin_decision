@@ -793,6 +793,7 @@
                 <div class="field"><label>自动理解文件</label><label class="switch"><input v-model="mm.multimodal.mm_auto_file" type="checkbox"><span class="switch-track"></span></label></div>
               </div>
               <div class="switch-row"><div class="switch-copy"><strong>主动调用工具理解</strong><small>注册 understand_image / understand_video / understand_audio / understand_file 四个工具，由模型自行决定何时分析。</small></div><label class="switch"><input v-model="mm.multimodal.mm_tools_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="switch-row"><div class="switch-copy"><strong>启用流式理解</strong><small>默认开启，OpenAI / Gemini 通用理解接口流式接收完整结果；关闭则使用非流式。不影响主对话或原生后台任务。</small></div><label class="switch"><input v-model="mm.multimodal.mm_stream_enabled" type="checkbox"><span class="switch-track"></span></label></div>
               <div class="two-col">
                 <div class="field"><label>图片工具</label><label class="switch"><input v-model="mm.multimodal.mm_tool_image" type="checkbox"><span class="switch-track"></span></label></div>
                 <div class="field"><label>视频工具</label><label class="switch"><input v-model="mm.multimodal.mm_tool_video" type="checkbox"><span class="switch-track"></span></label></div>
@@ -800,7 +801,7 @@
                 <div class="field"><label>文件工具</label><label class="switch"><input v-model="mm.multimodal.mm_tool_file" type="checkbox"><span class="switch-track"></span></label></div>
               </div>
               <div class="two-col">
-                <div class="field"><label>视频处理策略 <span>原生视频需要 Gemini Provider</span></label><select v-model="mm.multimodal.mm_video_strategy"><option value="auto">自动选择（默认）</option><option value="native">优先原生</option><option value="frames">强制通用处理</option></select></div>
+                <div class="field"><label>视频处理策略 <span>自动兼容 OpenAI / Gemini 反代</span></label><select v-model="mm.multimodal.mm_video_strategy"><option value="auto">自动选择（默认）</option><option value="native">优先原生</option><option value="frames">强制通用处理</option></select></div>
                 <div class="field"><label>OCR 策略</label><select v-model="mm.multimodal.mm_ocr_strategy"><option value="auto">自动（默认）</option><option value="local_first">本地 OCR 优先</option><option value="vision_first">视觉模型优先</option><option value="local_only">仅本地 OCR</option></select></div>
                 <div class="field"><label>本地 OCR 引擎</label><select v-model="mm.multimodal.mm_ocr_engine"><option value="auto">自动（默认）</option><option value="tesseract">Tesseract</option><option value="paddleocr">PaddleOCR</option></select></div>
                 <div class="field"><label>OCR 语言 <span>Tesseract 语言包</span></label><input v-model="mm.multimodal.mm_ocr_lang" type="text" placeholder="chi_sim+eng"></div>

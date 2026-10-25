@@ -25,6 +25,7 @@ MULTIMODAL_DEFAULTS: dict[str, Any] = {
     # --- master switches ---------------------------------------------------
     "mm_enabled": False,
     "mm_tools_enabled": False,
+    "mm_stream_enabled": True,
     # --- per-kind switches -------------------------------------------------
     "mm_auto_image": False,
     "mm_auto_video": False,

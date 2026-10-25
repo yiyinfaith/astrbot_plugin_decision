@@ -397,7 +397,7 @@ class MultimodalRuntime:
             return self._failure(ref, "多模态理解正在关闭或重载，未提交模型请求")
         kind = ref.kind
         choice, error = adapters.pick_provider(self._context(), self._settings, kind)
-        signature = self._route_signature(kind)
+        signature = self._route_signature(kind, getattr(choice, "provider", None))
         target = self._target(ref)
         provider_key = f"{choice.provider_id}:{choice.model}" if choice is not None else error
         key = (
@@ -530,7 +530,7 @@ class MultimodalRuntime:
                         "instruction": str(instruction or "").strip(),
                         "detail": bool(detail),
                         "target": self._target(ref),
-                        "route_signature": self._route_signature(kind),
+                        "route_signature": self._route_signature(kind, choice.provider),
                         "media_version": ref.content_key,
                         "incremental": prior is not None,
                         "overview": (
@@ -584,7 +584,7 @@ class MultimodalRuntime:
             error=error or "未知错误",
         )
 
-    def _route_signature(self, kind: str) -> str:
+    def _route_signature(self, kind: str, provider: Any = None) -> str:
         """Cache-affecting route settings, so options never share a result."""
 
         settings = self._settings
@@ -599,8 +599,15 @@ class MultimodalRuntime:
                 f"segment={settings.int('mm_audio_segment_seconds')}"
             )
         if kind == "video":
+            from .native_video import auto_native_available
+
+            strategy = settings.text("mm_video_strategy") or "auto"
+            native_first = strategy == "native" or (
+                strategy == "auto" and auto_native_available(provider)
+            )
+            route = "native-first" if native_first else "frames"
             return (
-                f"video:version=2:{settings.text('mm_video_strategy') or 'auto'}:"
+                f"video:version=3:{strategy}:route={route}:"
                 f"short={settings.int('mm_video_short_seconds')}:"
                 f"max={settings.int('mm_video_max_seconds')}:"
                 f"rounds={settings.int('mm_video_agentic_rounds')}:"
@@ -669,6 +676,7 @@ class MultimodalRuntime:
                 )
                 answer = await adapters.call_provider(
                     choice.provider,
+                    stream=self._settings.bool("mm_stream_enabled"),
                     prompt=self._compose(prompt, prepared.notes, ""),
                     images=prepared.images,
                     model=choice.model or None,
@@ -690,6 +698,7 @@ class MultimodalRuntime:
                     answers.append(
                         await adapters.call_provider(
                             choice.provider,
+                            stream=self._settings.bool("mm_stream_enabled"),
                             prompt=self._compose(prompt, prepared.notes, ""),
                             audio=[chunk],
                             model=choice.model or None,
@@ -719,9 +728,9 @@ class MultimodalRuntime:
     ) -> tuple[str, dict[str, Any]]:
         settings = self._settings
         strategy = (settings.text("mm_video_strategy") or "auto").lower()
-        # Probe before selecting a native route so the hard duration limit also
-        # applies to Gemini uploads, and long Gemini videos use the official
-        # Interactions API instead of silently falling back to a frame mock.
+        # Probe before route selection so the duration limit also applies to
+        # native uploads. Gateway Gemini providers use their ordinary chat
+        # interface in auto mode without requiring Files or Interactions.
         info: dict[str, Any] = {}
         try:
             info = await preprocess.probe_video(path)
@@ -732,16 +741,19 @@ class MultimodalRuntime:
             limit = float(settings.int("mm_video_max_seconds"))
             if limit and duration > limit:
                 raise ValueError(f"视频时长 {duration:.0f}s 超过上限 {limit:.0f}s")
-            native = await self._native_video(
-                ref,
-                choice,
-                prompt,
-                path,
-                workdir,
-                agentic=bool(duration > float(settings.int("mm_video_short_seconds"))),
-            )
-            if native is not None:
-                return native
+            from .native_video import auto_native_available
+
+            if strategy == "native" or auto_native_available(choice.provider):
+                native = await self._native_video(
+                    ref,
+                    choice,
+                    prompt,
+                    path,
+                    workdir,
+                    agentic=bool(duration > float(settings.int("mm_video_short_seconds"))),
+                )
+                if native is not None:
+                    return native
             if strategy == "native":
                 raise ValueError(
                     "当前模型/Provider 不支持原生视频理解（需要 Gemini 且可复用其 API Key）；"
@@ -768,6 +780,7 @@ class MultimodalRuntime:
             )
             answer = await adapters.call_provider(
                 choice.provider,
+                stream=self._settings.bool("mm_stream_enabled"),
                 prompt=self._compose(
                     prompt,
                     self._stamp_notes(stamps),
@@ -794,6 +807,7 @@ class MultimodalRuntime:
         audio_note = self._video_audio_note(info, transcript)
         overview = await adapters.call_provider(
             choice.provider,
+            stream=self._settings.bool("mm_stream_enabled"),
             prompt=self._compose(
                 f"本次分析目标：{prompt}\n\n" + AGENTIC_PROMPT.format(limit=windows_per_round),
                 self._stamp_notes(stamps),
@@ -829,6 +843,7 @@ class MultimodalRuntime:
                 )
                 part = await adapters.call_provider(
                     choice.provider,
+                    stream=self._settings.bool("mm_stream_enabled"),
                     prompt=self._compose(
                         f"本次分析目标：{prompt}\n\n"
                         f"这是第 {round_index + 2} 轮。已有发现：\n{seen_text}\n"
@@ -918,6 +933,7 @@ class MultimodalRuntime:
                 visual_note += f"\n已附加 {len(visual_paths)} 个视觉材料，其中 {full_pages} 张为完整页面；其余是内嵌资源。"
             answer = await adapters.call_provider(
                 choice.provider,
+                stream=self._settings.bool("mm_stream_enabled"),
                 prompt=self._compose(
                     prompt,
                     [f"文档结构：\n{outline}"] if outline else [],
@@ -978,6 +994,7 @@ class MultimodalRuntime:
                 return scanned
         answer = await adapters.call_provider(
             choice.provider,
+            stream=self._settings.bool("mm_stream_enabled"),
             prompt=self._compose(prompt, prepared.notes, prepared.text),
             model=choice.model or None,
             timeout=timeout,
@@ -1153,6 +1170,7 @@ class MultimodalRuntime:
             raise ValueError("PDF 中没有可渲染的页面")
         answer = await adapters.call_provider(
             choice.provider,
+            stream=self._settings.bool("mm_stream_enabled"),
             prompt=(
                 f"{prompt}\n\n这是扫描版文档的页面图片，PDF 页码为：{page_numbers}。"
                 "请按对应页码逐页转写可见文字并保留章节与表格结构；无法辨认处标注“不清”。"
@@ -1318,6 +1336,7 @@ class MultimodalRuntime:
                 parts.append(
                     await adapters.call_provider(
                         choice.provider,
+                        stream=self._settings.bool("mm_stream_enabled"),
                         prompt=(
                             "请转写并理解这段视频音轨：主要语音内容、说话人变化，"
                             "以及音乐或环境声音。"

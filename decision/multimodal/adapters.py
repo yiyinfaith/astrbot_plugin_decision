@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any
 
@@ -203,12 +204,21 @@ async def call_provider(
     audio: list[str] | None = None,
     model: str | None = None,
     timeout: float = 180.0,
+    stream: bool = True,
 ) -> str:
     """Run one multi-modal completion and return the plain text answer."""
 
     chat = getattr(provider, "text_chat", None)
     if not callable(chat):
         raise RuntimeError("模型不支持文本对话接口")
+    stream_chat = getattr(provider, "text_chat_stream", None)
+    # Receive the host's stream contract (deltas + final snapshot) to avoid a
+    # gateway's buffered-response deadline. Providers without that interface
+    # keep the ordinary completion path; an enabled stream is never retried
+    # through a second paid request just because its transport failed.
+    use_stream = stream and inspect.isasyncgenfunction(stream_chat)
+    if use_stream:
+        chat = stream_chat
 
     kwargs: dict[str, Any] = {"prompt": prompt}
     if images:
@@ -226,8 +236,24 @@ async def call_provider(
     except (TypeError, ValueError):
         pass
 
+    if use_stream:
+        return await asyncio.wait_for(_stream_final_text(chat(**kwargs)), timeout=timeout)
     response = await asyncio.wait_for(chat(**kwargs), timeout=timeout)
     return _extract_text(response)
+
+
+async def _stream_final_text(stream: Any) -> str:
+    """Consume the host's complete snapshot; never cache partial/thought text."""
+
+    final = ""
+    async with aclosing(stream):
+        async for response in stream:
+            is_chunk = response.get("is_chunk", False) if isinstance(response, dict) else getattr(response, "is_chunk", False)
+            if not is_chunk:
+                final = _extract_text(response)
+    if not final:
+        raise RuntimeError("流式理解未返回完整结果")
+    return final
 
 
 def safe_provider_error(provider: Any, exc: BaseException) -> str:
