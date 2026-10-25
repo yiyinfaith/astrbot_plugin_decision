@@ -20,6 +20,92 @@ class PlatformSendError(RuntimeError):
     """The platform rejected or failed one outgoing proactive message."""
 
 
+async def send_prepared_contact(runtime, task):
+    """Send prepared text through the host's decoration/respond hooks, once.
+
+Future contacts never execute another unconstrained Agent at the deadline.
+The reservation and claim have already succeeded before this function runs.
+"""
+    from astrbot.core.cron.events import CronMessageEvent
+    from astrbot.core.message.message_event_result import ResultContentType
+    from astrbot.core.pipeline.context import PipelineContext
+    from astrbot.core.pipeline.respond.stage import RespondStage
+    from astrbot.core.pipeline.result_decorate.stage import ResultDecorateStage
+    from astrbot.core.platform.message_session import MessageSession
+
+    umo = task["umo"]
+    ctx = copy.copy(runtime.context)
+    original_send = runtime.context.send_message
+    session = MessageSession.from_str(umo)
+    event = CronMessageEvent(context=ctx, session=session, message="已约定的未来联系",
+        message_type=session.message_type, extras={"decision_life_proactive": True,
+        "decision_scheduled_contact": task["id"], "decision_life_media_kind": "",
+        "decision_life_media_max": 0})
+    event.role = "member"
+    platform = ctx.get_platform_inst(session.platform_id)
+    if platform is None:
+        raise PlatformUnavailableError("目标平台未连接")
+    event.platform_meta = platform.meta()
+    cfg = ctx.get_config(umo=umo)
+    plugins = cfg.get("plugin_set", ["*"])
+    if plugins != ["*"] and "astrbot_plugin_decision" not in plugins:
+        raise PlatformUnavailableError("当前会话已禁用本插件")
+    event.plugins_name = None if plugins == ["*"] else plugins
+    pipe = PipelineContext(cfg, ctx._star_manager, event.get_platform_id())
+    sent = 0
+
+    async def send(target, chain):
+        nonlocal sent
+        if str(target) != umo or not runtime.enabled or runtime._quiet():
+            raise PlatformSendError("未来联系发送前范围／免打扰检查未通过")
+        current = runtime.ledger.get_task(task["id"])
+        if not current or current["revision"] != task["revision"] or current["status"] != "sending":
+            raise PlatformSendError("未来联系任务已变更")
+        if (await runtime.personas.resolve(umo)).id != task["persona"] or not runtime.policy.is_enabled(umo):
+            raise PlatformSendError("未来联系人格／名单已变更")
+        allowed, reason = runtime.contacts.gate(umo, task["persona"], runtime._now(), agreed=task["origin"] == "user", exclude=task["id"], frequency=False)
+        if not allowed:
+            raise PlatformSendError(reason)
+        if not await original_send(session, chain):
+            raise PlatformSendError("平台未确认未来联系发送成功")
+        sent += 1
+        # Commit the first acknowledged segment immediately. A later decoration
+        # failure must never make a delivered reminder eligible for retry.
+        runtime.contacts.delivered(umo, task["persona"], runtime._now(), task["id"],
+            kind="agreed" if task["origin"] == "user" else "ordinary")
+        event._has_send_oper = True
+        return True
+
+    ctx.send_message = send
+
+    async def event_send(chain):
+        return await send(session, chain)
+
+    event.send = event_send
+    event.context_obj = ctx
+    result = event.plain_result(task["prepared"])
+    result.set_result_content_type(ResultContentType.LLM_RESULT)
+    event.set_result(result)
+    setattr(event, "__is_llm_reply", True)
+    try:
+        for cls in (ResultDecorateStage, RespondStage):
+            stage = cls()
+            await stage.initialize(pipe)
+            step = stage.process(event)
+            if inspect.isasyncgen(step):
+                async for _ in step:
+                    pass
+            else:
+                await step
+            if event.is_stopped():
+                break
+    except Exception:
+        if not sent:
+            raise
+    if not sent:
+        raise PlatformSendError("未来联系未经过实际平台发送")
+
+
 async def dispatch_life_agent(
     runtime,
     umo: str,
@@ -43,7 +129,11 @@ async def dispatch_life_agent(
 
     ctx = runtime.context
     session = MessageSession.from_str(umo)
-    extras = {"decision_life_proactive": True, "decision_life_generation": generation}
+    extras = {
+        "decision_life_proactive": True, "decision_life_generation": generation,
+        "decision_life_media_kind": "", "decision_life_media_max": 0,
+        "decision_life_media_used": 0,
+    }
     if media_choice:
         extras.update(
             decision_life_media_kind=media_choice[0],
@@ -129,6 +219,9 @@ async def dispatch_life_agent(
             raise send_failure from exc
         if not sent:
             runtime.confirm_delivery(umo)
+        temporal = getattr(runtime, "temporal", None)
+        if temporal and delivering_final:
+            await temporal.activate_from_event(event)
         sent += 1
         final_delivery = final_delivery or delivering_final
         event._has_send_oper = True

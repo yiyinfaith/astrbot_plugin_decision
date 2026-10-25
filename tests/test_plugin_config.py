@@ -102,6 +102,27 @@ def host(monkeypatch, tmp_path):
     )
 
 
+@pytest.mark.asyncio
+async def test_life_control_gates_native_and_raw_media_tools_before_jev(host):
+    from decision.life_config import life_defaults
+
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    config = life_defaults()
+    plugin._life_runtime = SimpleNamespace(config=config)
+    names = ["adjust_contact_frequency", "future_contact", "save_life_thought", "future_task",
+             "generate_image", "generate_video", "generate_audio", "take_photo", "take_video", "send_voice", "unrelated_tool"]
+    req = SimpleNamespace(func_tool=SimpleNamespace(tools=[SimpleNamespace(name=n) for n in names]))
+    extras = {"decision_life_proactive": True}
+    event = SimpleNamespace(get_extra=lambda key, default=None: extras.get(key, default))
+    await plugin.life_control_tool_state(event, req)
+    assert {t.name for t in req.func_tool.tools} == {"future_task", "unrelated_tool"}
+    config["temporal_settings"]["enable"] = True
+    req.func_tool.tools = [SimpleNamespace(name=n) for n in names]
+    extras["decision_life_media_kind"] = "photo"
+    await plugin.life_control_tool_state(event, req)
+    assert {t.name for t in req.func_tool.tools} == {"future_contact", "take_photo", "unrelated_tool"}
+
+
 def test_life_tasks_payload_drops_base64_images(host):
     """The polled /life payload must not resend every past screenshot."""
 

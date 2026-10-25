@@ -41,6 +41,9 @@ def life_schema() -> dict[str, Any]:
             },
         },
     }
+    from .life_control_config import control_schema
+
+    schema.update(control_schema())
     # The merged page owns a fixed, user-facing order: the master switch and the
     # private/group scope come first, then the day-to-day life cards, then the
     # remaining advanced groups.
@@ -131,6 +134,9 @@ def normalize_life(value: Any) -> dict[str, Any]:
         return result
 
     out = walk(value, life_schema())
+    from .life_control_config import validate_control
+
+    validate_control(out)
     for group in ("friend_settings", "group_settings"):
         node = out[group]
         for low, high in (

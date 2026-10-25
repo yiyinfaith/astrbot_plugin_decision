@@ -56,6 +56,9 @@ async def perform_life_action(runtime, umo, action, text="", date_range=""):
                 for r in runtime.storage.schedule_requirements.values()
                 if r.persona_id == persona.id
             ],
+            "contact_control": runtime.contacts.summary(umo, persona.id, runtime._now()),
+            "future_contacts": [runtime.temporal.public_task(t, runtime._now()) for t in runtime.ledger.tasks(umo, persona.id, limit=60)],
+            "pending_thought": runtime.temporal.thought(umo, persona.id),
         }
     if action == "add_requirement":
         return await runtime._add_schedule_requirement(event, date_range, text)

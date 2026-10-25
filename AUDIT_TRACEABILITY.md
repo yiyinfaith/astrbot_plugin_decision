@@ -139,6 +139,24 @@ VPS 环境回归额外修正了测试边界：人际网络服务单测显式注�
 
 本次真实 Provider 仅执行了一次低成本纯文本探针：VPS 已配置的 `gemini-3.8-flash` 返回 `DECISION_REAL_API_OK`。没有执行真实图片/视频/音频多模态请求、真实媒体扣费或真实群聊/私聊发送；因此多模态模型理解质量、Office 视觉效果和 AIGen 生产账单仍以本地行为测试与生产运行边界为准。部署保持现有自动发送配置，不主动触发测试消息；若宿主未提供兼容 AstrBot 源，宿主原生测试继续明确标为 skipped。
 
+## 2026-10-25 主动联系与时间一致性增强（0.3.0）
+
+| 验收项 | 实现与证据 |
+| --- | --- |
+| 互动增频、未回应降频、低频保底、暂停 | `life_contacts.py`、`life_runtime.py`；真实来信去重，观察期每次只降频一次，上下限收敛；48 小时保底仍受名单、睡眠和免打扰约束；普通聊天不消耗主动额度 |
+| 群聊强制调频权限 | `group_authorized()`；默认白名单为空，仅 Bot 管理员、平台群主/群管理员有权；白名单 QQ 可额外授权，黑名单模式名单内 QQ 禁止；模型不能传入身份或用主动事件自调强制偏好 |
+| UMO＋人格隔离与恢复 | `life_ledger.py` 的 SQLite 主键、原子任务认领；旧会话状态仅迁移匹配人格的数据，不删除旧 JSON；私聊保存的想法限制在原会话 |
+| 未来计划与额度 | `life_temporal.py`；明确约定与 Bot 自发任务分别预留额度，调用 AstrBot 公开 Basic Cron API，并用精确日期定时器补充秒级时刻；真实宿主 SQLite/Cron 回调及热重绑测试通过 |
+| 时间事实与防穿帮 | 用户约定锚定来信；Bot 相对活动承诺锚定实际发出，Bot 自发惊喜锚定决策时刻；开始、虚拟完成、外部确认分开；关闭主动发送仍注入事实；相关回复在流式发送前缓冲和校验 |
+| 想法与费用控制 | 活动来源、节点去重、失败调用同样占预算、TTL、会话分享去重；准备任务独立 SingleFlight，不等待调用者的长期后台循环；取消/编辑期间旧结果无法提交 |
+| 主动媒体概率 | 未抽中图片/视频/音频时，实际 AIGen 调用次数均为 0；本次 Agent 请求隐藏原始 `generate_*`，所选类型和总数量由包装工具再次校验 |
+
+最终代码回归：Windows **765 passed, 5 skipped, 12 subtests passed**；VPS 隔离源码 **769 passed, 1 skipped, 12 subtests passed**；指定真实 AstrBot 源的宿主集成 **47 passed**。Ruff 与 diff whitespace 检查通过。单元/宿主集成中的 Provider 和平台发送使用替身，不宣称它们验证了上游模型质量。
+
+真实付费验收使用生产同源 Key、`gemini-3.8-flash` 与标准 `/v1/chat/completions`，有效证据共 **8 次实际请求**：原生 Agent 调降频工具及最终回复 2 次；未来联系工具及最终回复 2 次；活动想法 1 次（并发只请求一次）；提前准备提醒、三小时追问、错误完成声明纠正共 3 次。40 秒定时器经过真实 AstrBot 装饰/响应管道，实际调用隔离平台接收器的时刻晚于约定约 **0.032 秒**，重复回调没有再发送。真实回答明确“才过三个小时，还没读完”，错误“已经全部读完”被改为“还没有读完”。
+
+API 证据位于 VPS `/root/astrbot_backups/decision_full_audit_20261025/contact-control/paid-*.json`；包含请求路径、模型、实际调用次数、生成结果和发送时刻，不保存 API Key。为避免干扰生产群聊，外部 QQ/其他平台外发次数为 0；平台接收器为隔离替身，不能据此宣称真实 QQ 投递已验证。代码同步、单插件 reload、版本与数据保护检查以相邻 `contact-release/deployment.json` 和 manifest 为准。
+
 ## 生产盘点与边界
 
 - 盘点到的 AstrBot 运行目录为 `/root/yiyin/AstrBot`，插件目录为 `/root/yiyin/AstrBot/data/plugins/astrbot_plugin_decision`，服务单元为 `astrbot.service`，启动方式是 `/root/.local/bin/uv run --project /root/yiyin/AstrBot /root/yiyin/AstrBot/main.py`，由 detached `screen` 托管。

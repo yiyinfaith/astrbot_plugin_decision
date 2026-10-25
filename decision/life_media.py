@@ -361,6 +361,12 @@ class LifeMedia:
             return "未知的多媒体类型。"
         if not settings.get(f"{kind}_enable", False):
             return f"{KIND_LABELS[kind]}生成已关闭。"
+        if event.get_extra("decision_life_proactive", False):
+            allowed = event.get_extra("decision_life_media_kind", "")
+            if not allowed:
+                return "本次主动发起未抽中多媒体，不提交生成任务。"
+            if kind != allowed:
+                return f"本次主动发起只允许发送{KIND_LABELS.get(allowed, allowed)}。"
         if not settings.get("daily_limit"):
             return "本会话今日生成额度已用完。"
         aigen = self.aigen(kind)

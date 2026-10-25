@@ -3,7 +3,7 @@ display_name: jev决策综合插件
 desc: 基于 Jev/SystemOne 的 Tool、MCP、Skill 与 SubAgent 逐项判断、过滤、推荐，支持消息接话、Jev 审核的虚拟生活主动发起、人格日程穿搭、aigen 拍照/拍视频/生音频联动，并内置按人格管理的人际网络。
 short_desc: 用 Jev 判断 Tool、MCP、Skill、SubAgent 与主动对话，提供日程穿搭、aigen 多媒体生成与内置人际网络，保留 AstrBot 主 LLM 的最终调用和回答决策。
 author: 一吟Faith
-version: 0.2.0
+version: 0.3.0
 repo: https://github.com/yiyinfaith/astrbot_plugin_decision
 logo: logo.png
 astrbot_version: ">=4.28.1"

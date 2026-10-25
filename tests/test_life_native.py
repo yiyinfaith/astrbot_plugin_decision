@@ -214,6 +214,93 @@ def test_token_trim_preserves_policy_and_valid_json():
 
 
 @pytest.mark.asyncio
+async def test_adaptive_ignores_old_unanswered_hard_stop_and_real_send_counts_once(native):
+    runtime = native.runtime
+    runtime.config["adaptive_settings"]["enable"] = True
+    runtime.config["friend_settings"]["daily_hard_max"] = 1
+    state = runtime.storage.sessions[UMO]
+    state.unanswered_count = 99
+    runtime.contacts.summary(UMO, "alice", runtime._now())
+    with runtime.ledger.transaction() as db:
+        data = runtime.contacts.profile(db, UMO, "alice", runtime._now())
+        data["created"] -= 3 * 86400
+        runtime.ledger.save_profile(db, UMO, "alice", data)
+    native.owner._evaluate.return_value = SimpleNamespace(answers={q: {"noul": 0.0} for q in ("initiate", "relevant", "timing")})
+    sent, _ = await runtime._attempt_unsolicited(UMO, native.persona, native.plan, "有意义的读书分享", "adaptive")
+    assert sent
+    assert native.context.send_message.await_count >= 1
+    assert runtime.contacts.summary(UMO, "alice", runtime._now())["today"]["ordinary"] == 1
+    sent, reason = await runtime._attempt_unsolicited(UMO, native.persona, native.plan, "重复", "adaptive")
+    assert not sent and reason == "daily budget exhausted"
+
+
+@pytest.mark.asyncio
+async def test_temporal_facts_injected_when_proactive_is_disabled(native):
+    runtime = native.runtime
+    runtime.config["temporal_settings"]["enable"] = True
+    runtime.config["friend_settings"]["enable"] = False
+    runtime.config["group_settings"]["enable"] = False
+    request = SimpleNamespace(extra_user_content_parts=[])
+    await runtime.inject_cached_state(native.event, request)
+    assert len(request.extra_user_content_parts) == 1
+    assert "程序时间与联系账本" in str(request.extra_user_content_parts)
+
+
+@pytest.mark.asyncio
+async def test_scheduled_contact_uses_real_native_respond_pipeline_once(native):
+    from decision.life_agent import send_prepared_contact
+
+    runtime = native.runtime
+    now = runtime._now()
+    task = dict(id="scheduled-native", umo=UMO, persona="alice", sender="42", due=now.timestamp(),
+        status="sending", origin="user", kind="reminder", note="读书", notify=True, revision=1,
+        created=now.timestamp(), prepared="约好的读书时间到啦。")
+    with runtime.ledger.transaction() as db:
+        runtime.ledger.save_task(db, task)
+    await send_prepared_contact(runtime, task)
+    assert native.context.send_message.await_count == 1
+    assert "约好的读书时间" in str(native.context.send_message.call_args)
+    assert runtime.contacts.summary(UMO, "alice", now)["today"]["agreed"] == 1
+    assert native.provider.requests == []  # deadline sends the prepared text
+
+
+@pytest.mark.asyncio
+async def test_native_cron_public_api_and_ledger_recovery_do_not_duplicate(native, tmp_path):
+    from astrbot.core.cron.manager import CronJobManager
+    from astrbot.core.db.sqlite import SQLiteDatabase
+
+    db = SQLiteDatabase(str(tmp_path / "native-cron.db"))
+    await db.initialize()
+    manager = CronJobManager(db)
+    native.context.cron_manager = manager
+    runtime = native.runtime
+    runtime.config["temporal_settings"]["enable"] = True
+    native.event.message_str = "六小时后提醒我看书"
+    try:
+        result = json.loads(await runtime.temporal.manage(native.event, action="create", delay_seconds=21600, note="看书"))
+        task = runtime.ledger.get_task(result["task"]["id"])
+        assert task["native_id"]
+        # Execute the actual core callback and payload dispatch, not a fake API.
+        job = await db.get_cron_job(task["native_id"])
+        assert job and job.job_type == "basic" and job.persistent is False
+        await manager._run_basic_job(job)
+        native.context.send_message.assert_not_awaited()  # not due yet
+        await runtime.temporal.close()
+        assert await db.get_cron_job(task["native_id"]) is None
+        recovered = type(runtime.temporal)(runtime, runtime.ledger, runtime.contacts)
+        await recovered.recover()
+        # A new public handler is bound after reload, rather than mutating the
+        # host's handler registry or trusting a stale persistent callback.
+        restored = runtime.ledger.get_task(task["id"])
+        assert restored["native_id"] != task["native_id"]
+        assert await db.get_cron_job(restored["native_id"])
+        await recovered.close()
+    finally:
+        await runtime.temporal.close()
+        await db.engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_persona_uses_framework_final_selection(native):
     value = await CurrentPersonaResolver(native.context).resolve(UMO)
     assert value == native.persona
@@ -733,6 +820,9 @@ async def test_dynamic_tools_have_real_plugin_ownership(native, tmp_path, monkey
         plugin = module.DecisionPlugin(native.context, Config())
         assert {t.name for t in tools} == {
             "jev_decide",
+            "adjust_contact_frequency",
+            "future_contact",
+            "save_life_thought",
             "take_photo",
             "take_video",
             "send_voice",

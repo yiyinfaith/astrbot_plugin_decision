@@ -133,7 +133,8 @@ async def make_media(tmp_path, *, settings=None, aigen=None):
 
 
 def proactive_event(**extra):
-    base = {"decision_life_proactive": True, "decision_life_generation": 0}
+    base = {"decision_life_proactive": True, "decision_life_generation": 0,
+            "decision_life_media_kind": "photo", "decision_life_media_max": 10}
     base.update(extra)
     return FakeEvent(extras=base)
 

@@ -12,6 +12,9 @@ from datetime import timedelta
 from astrbot import logger
 
 from .life_agent import PlatformSendError, PlatformUnavailableError, dispatch_life_agent
+from .life_contacts import ContactControl
+from .life_ledger import LifeLedger
+from .life_temporal import TemporalControl
 from .tokens import estimate_request_tokens
 from .virtual_life.core.models import SessionState
 from .virtual_life.core.persona import PersonaContext
@@ -146,6 +149,11 @@ class LifeRuntime(VirtualLifeBase):
         # scheduler callbacks cannot send the same window twice. Manual commands
         # remain explicit one-off requests and are intentionally excluded.
         self._completed_delivery_keys: dict[tuple[str, str, str, str], float] = {}
+        self.ledger = LifeLedger(self.data_dir / "contact_control.sqlite3")
+        self.contacts = ContactControl(self, self.ledger)
+        self.temporal = TemporalControl(self, self.ledger, self.contacts)
+        self._contact_attempts = {}
+        self._delivery_contact_ids = {}
 
     def spawn(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -179,6 +187,9 @@ class LifeRuntime(VirtualLifeBase):
     async def initialize(self):
         await self.storage.load()
         await self.long_term.load()
+        for umo, state in self.storage.sessions.items():
+            if state.persona_id:
+                self.contacts.seed_legacy(umo, state.persona_id, state, self._now())
         self._loaded = True
         await self.image_renderer.cleanup()
         if self.enabled:
@@ -186,6 +197,10 @@ class LifeRuntime(VirtualLifeBase):
                 self.config["schedule_settings"]["generate_time"], self._daily_refresh
             )
             self.spawn(self._refresh_all(force=False))
+        elif self.config["temporal_settings"]["enable"]:
+            self.runtime.scheduler.start()
+        if any(self.config[key]["enable"] for key in ("adaptive_settings", "temporal_settings", "thought_settings")):
+            self.spawn(self._control_loop())
 
     @property
     def enabled(self):
@@ -207,6 +222,7 @@ class LifeRuntime(VirtualLifeBase):
 
     async def terminate(self):
         self.closed = True
+        await self.temporal.close()
         self.runtime.stop()
         self.reply_delay_coordinator.clear()
         for task in tuple(self.tasks):
@@ -231,9 +247,50 @@ class LifeRuntime(VirtualLifeBase):
             await asyncio.gather(*tuple(self._schedule_tasks.values()), return_exceptions=True)
         self._schedule_tasks.clear()
         self._completed_delivery_keys.clear()
+        self._contact_attempts.clear()
+        self._delivery_contact_ids.clear()
         self.audit.clear()
         if self._loaded:
             await super().terminate()
+
+    async def _control_loop(self):
+        """Cheap recovery ticks; date timers provide precise scheduled delivery."""
+        last_prune = ""
+        while not self.closed:
+            try:
+                day = self._now().date().isoformat()
+                if day != last_prune:
+                    self.ledger.prune(self._now().timestamp())
+                    last_prune = day
+                if self.config["temporal_settings"]["enable"]:
+                    await self.temporal.recover()
+                if self.enabled:
+                    for umo in self.policy.enabled_sessions():
+                        try:
+                            persona = await self.personas.resolve(umo)
+                            now = self._now()
+                            plan = self.visible_plan(self.storage.get_plan(now.date().isoformat(), persona.id))
+                            if not plan or not plan.has_schedule:
+                                continue
+                            if self.config["thought_settings"]["enable"]:
+                                await self.temporal.activity_thought(umo, persona, plan)
+                            if self.config["adaptive_settings"]["enable"]:
+                                allowed, _ = self.contacts.gate(umo, persona.id, now)
+                                # Failed model/Jev calls must not be retried every
+                                # tick. One retry per 15 min, not a paid busy loop.
+                                key = (umo, persona.id)
+                                if allowed and time.monotonic() - self._contact_attempts.get(key, -1e9) >= 900:
+                                    self._contact_attempts[key] = time.monotonic()
+                                    await self._attempt_unsolicited(umo, persona, plan, "根据联系偏好自然联系；若有合适的暂存想法可择机分享", "adaptive")
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as exc:
+                            self.record_audit(umo, False, "联系控制恢复失败：" + type(exc).__name__)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Decision 联系账本恢复失败：%s", type(exc).__name__)
+            await asyncio.sleep(30)
 
     def _trim_session_state(self, keep: int = 2000) -> None:
         """Bound the umo-keyed caches so a long-lived bot cannot grow forever.
@@ -327,6 +384,17 @@ class LifeRuntime(VirtualLifeBase):
         self.record_audit(umo, False, text)
 
     async def record_incoming(self, event):
+        now = self._now()
+        event.set_extra("decision_contact_received_at", now.timestamp())
+        if str(event.get_sender_id()) != str(event.get_self_id()) and not self.owner._command_handler_matched(event):
+            if self.config["adaptive_settings"]["enable"]:
+                umo = str(event.unified_msg_origin)
+                targeted = ":FriendMessage:" in umo
+                if not targeted:
+                    at_bot, reply_bot, _, _ = self.owner._message_address_flags(event)
+                    targeted = at_bot or reply_bot
+                persona = await self.personas.resolve(umo)
+                self.contacts.observe(event, persona.id, now, targeted=targeted)
         if not self.enabled or self.owner._command_handler_matched(event):
             return
         umo = str(event.unified_msg_origin)
@@ -468,11 +536,17 @@ class LifeRuntime(VirtualLifeBase):
     async def validate_commit(self, umo, generation, persona_id):
         if not self.can_commit(umo, generation):
             return False
+        if self.config["adaptive_settings"]["enable"]:
+            ident = self._delivery_contact_ids.get(umo, "")
+            allowed, _ = self.contacts.gate(umo, persona_id, self._now(), exclude=ident, frequency=False)
+            if not allowed:
+                return False
         return (await self.personas.resolve(umo)).id == persona_id
 
     def confirm_delivery(self, umo):
         state = self.storage.sessions[umo]
         self.policy.record_delivery(state, self._now())
+        self.contacts.delivered(umo, state.persona_id, self._now(), self._delivery_contact_ids.get(umo))
 
     async def _attempt_unsolicited(self, umo, persona, plan, intent, trigger, *, attempt_key=""):
         if not self.enabled:
@@ -516,6 +590,14 @@ class LifeRuntime(VirtualLifeBase):
                 if trigger != "manual" and delivery_key in self._completed_delivery_keys:
                     self._sleep_sessions().discard(umo)
                     return False, "duplicate trigger"
+                adaptive = self.config["adaptive_settings"]["enable"]
+                if adaptive:
+                    allowed, reason = self.contacts.gate(umo, persona.id, now)
+                    if not allowed:
+                        return False, reason
+                    current_item = timeline_item_at(plan, now)
+                    if current_item and (current_item.state == "sleep" or current_item.availability == "blocked") and trigger != "sleep":
+                        return False, "sleeping or unavailable"
                 decision = self.policy.evaluate(
                     umo=umo,
                     state=state,
@@ -524,10 +606,11 @@ class LifeRuntime(VirtualLifeBase):
                     trigger=trigger,
                     attempt_key=attempt_key,
                 )
-                if not decision.allowed:
+                if not adaptive and not decision.allowed:
                     self._sleep_sessions().discard(umo)
                     return False, decision.reason
                 try:
+                    self._delivery_contact_ids[umo] = self.ledger.new_id()
                     delivered = await self._deliver(
                         umo,
                         persona,
@@ -546,6 +629,7 @@ class LifeRuntime(VirtualLifeBase):
                                 self._completed_delivery_keys.pop(key, None)
                 finally:
                     self._sleep_sessions().discard(umo)
+                    self._delivery_contact_ids.pop(umo, None)
                 return delivered, "sent" if delivered else "Jev 未通过或候选已失效"
         except PlatformUnavailableError as exc:
             failures += 1
@@ -609,6 +693,9 @@ class LifeRuntime(VirtualLifeBase):
             "unanswered_count": unanswered_count,
             "history": history,
         }
+        contact = self.contacts.summary(umo, persona.id, now)
+        state["contact_control"] = contact
+        floor_due = self.config["adaptive_settings"]["enable"] and now.timestamp() - (contact["last_sent"] or contact["created"]) >= self.config["adaptive_settings"]["max_interval_minutes"] * 60
         try:
             result = await self.owner._evaluate(
                 state=fit_life_state(state, questions, self.owner._context_budget()),
@@ -616,10 +703,12 @@ class LifeRuntime(VirtualLifeBase):
             )
         except Exception as exc:
             self.record_audit(umo, False, f"Jev 判断失败：{str(exc)[:100]}")
-            return False
-        scores = [result.answers.get(q, {}).get("noul", 0) for q in questions]
+            if not floor_due:
+                return False
+            result = None
+        scores = [result.answers.get(q, {}).get("noul", 0) for q in questions] if result else []
         threshold = settings["jev_threshold"]
-        if not all(
+        if not floor_due and not all(
             isinstance(score, (int, float))
             and not isinstance(score, bool)
             and 0 <= score <= 1
@@ -646,6 +735,10 @@ class LifeRuntime(VirtualLifeBase):
         prompt += (
             "\n这是内部主动发起事件，请沿用当前 AstrBot 人格。不要把触发说明当作用户说过的话。"
         )
+        prompt += "\n[程序记录的联系状态，必须遵守]\n" + json.dumps(contact, ensure_ascii=False)
+        thought = self.temporal.thought(umo, persona.id) if self.config["thought_settings"]["enable"] else None
+        if thought:
+            prompt += "\n可择机分享的想法（来源时间是真实记录，勿说成刚刚发生，不要编造亲身经历）：\n" + json.dumps({k: thought[k] for k in ("text", "source", "created")}, ensure_ascii=False)
         if delivery["proactive_timeline_context"]:
             prompt += "\n" + self.smart_context_injector.build_proactive_context(
                 plan, now, self.long_term
@@ -666,6 +759,8 @@ class LifeRuntime(VirtualLifeBase):
         )
         if sent:
             self.offline.pop(umo.split(":", 1)[0], None)
+            if thought:
+                self.temporal.mark_shared(thought["id"], umo)
         self.record_audit(
             umo, sent, f"Jev 通过，候选：{intent}" if sent else "生成期间会话更新或消息未发送"
         )
@@ -698,6 +793,16 @@ class LifeRuntime(VirtualLifeBase):
         return instruction, choice
 
     async def inject_cached_state(self, event, req):
+        if self.config["temporal_settings"]["enable"] or self.config["adaptive_settings"]["enable"]:
+            umo = str(event.unified_msg_origin)
+            persona = await self.personas.resolve(umo)
+            text = "[程序时间与联系账本：数据事实优先，禁止猜测进度]\n"
+            text += self.temporal.describe(umo, persona.id, self._now())
+            text += "\n联系状态：" + json.dumps(self.contacts.summary(umo, persona.id, self._now()), ensure_ascii=False)
+            text += "\n用户要求调整频率时使用 adjust_contact_frequency；创建未来联系或承诺某时开始/完成前，必须先用 future_contact 持久化。start=到时开始，virtual_finish=虚拟活动到时可完成，external_finish=外部任务必须另有完成确认。普通回复不消耗主动额度。不要用原生 future_task 绕过这些规则。"
+            if event.get_extra("decision_contact_feedback", ""):
+                text += "\n本条真实来信已由程序保存偏好：" + event.get_extra("decision_contact_feedback") + "，不要重复调整。"
+            req.extra_user_content_parts.append(temporary_text(text))
         if not self.enabled:
             return
         self._apply_reply_delay_batch(event, req)
@@ -739,4 +844,11 @@ class LifeRuntime(VirtualLifeBase):
                 for key, value in self.storage.sessions.items()
                 if umo is None or key == umo
             },
+            "contact_profiles": self._contact_profiles(umo),
+            "future_contacts": [self.temporal.public_task(t, self._now()) | {"umo": t["umo"], "persona": t["persona"]} for t in self.ledger.tasks(umo, limit=100)],
         }
+
+    def _contact_profiles(self, umo):
+        with self.ledger.transaction() as db:
+            rows = db.execute("SELECT umo,persona,data FROM profiles" + (" WHERE umo=?" if umo else "") + " LIMIT 200", (umo,) if umo else ()).fetchall()
+            return [{"umo": row["umo"], "persona": row["persona"], **json.loads(row["data"])} for row in rows]

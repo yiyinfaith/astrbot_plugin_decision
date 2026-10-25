@@ -191,6 +191,16 @@ async def make_media(tmp_path, *, settings=None, aigen=None, outfit=True, with_r
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["photo", "video", "audio"])
+async def test_no_proactive_media_draw_submits_zero_aigen_requests(tmp_path, kind):
+    media, aigen = await make_media(tmp_path)
+    event = FakeEvent({"decision_life_proactive": True})
+    result = await media.capture(event, kind=kind, audio_text="你好")
+    assert "未抽中" in result
+    assert not aigen.image_calls and not aigen.video_calls and not aigen.audio_calls
+
+
+@pytest.mark.asyncio
 async def test_proactive_audio_spends_its_budget_across_calls(tmp_path):
     """The audio range caps the whole proactive run, not a single call."""
 

@@ -170,7 +170,7 @@ class DecisionFunctionTool(FunctionTool):
     PLUGIN_NAME,
     "yiyinfaith",
     "jev决策综合插件：用 Jev 判断 Tool、MCP、Skill、SubAgent 和主动对话，并保留 AstrBot 主 LLM 的最终控制权。",
-    "0.2.0",
+    "0.3.0",
 )
 class DecisionPlugin(Star):
     """AstrBot integration layer for a provider-neutral decision engine."""
@@ -340,6 +340,14 @@ class DecisionPlugin(Star):
             tool = DecisionFunctionTool(
                 name=name, description=description, parameters=parameters, handler=handler
             )
+            self._life_tools.append(tool)
+            self.context.add_llm_tools(tool)
+        from .decision.life_control_tools import control_tools
+
+        for name, description, handler, properties, required in control_tools(self):
+            tool = DecisionFunctionTool(name=name, description=description,
+                parameters={"type": "object", "properties": properties, "required": required},
+                handler=handler)
             self._life_tools.append(tool)
             self.context.add_llm_tools(tool)
         # The merged Personal Network tools keep their upstream names so stored
@@ -920,6 +928,9 @@ class DecisionPlugin(Star):
             "get_virtual_daily_schedule",
             "get_long_term_timeline",
             "add_schedule_requirement",
+            "adjust_contact_frequency",
+            "future_contact",
+            "save_life_thought",
             "update_personal_network",
             "query_personal_network",
         }:
@@ -1275,6 +1286,12 @@ class DecisionPlugin(Star):
             for name in (self._setting("always_keep_tools", []) or [])
             if str(name).strip()
         }
+        # A stochastic tool decision cannot remove the persistence mechanism
+        # required to honour this turn's explicit time/preference request.
+        if event is not None and event.get_extra("decision_temporal_guard", False):
+            always_keep.add("future_contact")
+        if event is not None and event.get_extra("decision_contact_feedback", ""):
+            always_keep.add("adjust_contact_frequency")
         if not self._bool("always_keep_tools_customized", False):
             always_keep.update(self._builtin_tool_names())
             # jev_decide is registered by this plugin rather than AstrBot's
@@ -2573,6 +2590,68 @@ class DecisionPlugin(Star):
         runtime = await self._get_life_runtime()
         return await runtime._add_schedule_requirement(event, date_range, requirement)
 
+    async def _adjust_contact_frequency(self, event, action="status", interval_minutes=0, pause_until=""):
+        from .decision.life_temporal import parse_time
+
+        runtime = await self._get_life_runtime()
+        persona = await runtime.personas.resolve(str(event.unified_msg_origin))
+        try:
+            until = parse_time(pause_until, runtime.timezone).timestamp() if pause_until else 0
+            return runtime.contacts.preference(event, persona.id, action, interval_minutes, until)
+        except (ValueError, TypeError) as exc:
+            return "未修改联系偏好：" + str(exc)
+
+    async def _future_contact(self, event, action="list", task_id="", run_at="", delay_seconds=0,
+                              note="", origin="user", kind="reminder", notify=True):
+        runtime = await self._get_life_runtime()
+        try:
+            return await runtime.temporal.manage(event, action=action, task_id=task_id, run_at=run_at,
+                delay_seconds=delay_seconds, note=note, origin=origin, kind=kind, notify=notify)
+        except (ValueError, TypeError) as exc:
+            return "未来任务未修改：" + str(exc)
+
+    async def _save_life_thought(self, event, text):
+        from .decision.virtual_life.core.utils import timeline_item_at
+
+        runtime = await self._get_life_runtime()
+        persona = await runtime.personas.resolve(str(event.unified_msg_origin))
+        plan = runtime.visible_plan(runtime.storage.get_plan(runtime._now().date().isoformat(), persona.id))
+        item = timeline_item_at(plan, runtime._now()) if plan else None
+        if not item:
+            return "没有可验证的当前日程活动，未保存想法。"
+        try:
+            ident = await runtime.temporal.save_thought(persona.id, text,
+                {"activity": item.activity, "location": item.location, "at": runtime._now().isoformat()}, scope=str(event.unified_msg_origin))
+            return "想法已暂存，是否分享由限频与偏好决定。记录 " + ident
+        except ValueError as exc:
+            return str(exc)
+
+    @filter.on_llm_request(priority=1300)
+    async def life_control_tool_state(self, event, req):
+        runtime = self._life_runtime
+        tools = getattr(req, "func_tool", None)
+        if runtime is None or tools is None:
+            return
+        settings = runtime.config
+        hide = set()
+        for name, group, flag in (("adjust_contact_frequency", "adaptive_settings", "preference_tool_enable"),
+            ("future_contact", "temporal_settings", "task_tool_enable"),
+            ("save_life_thought", "thought_settings", "share_tool_enable")):
+            if not settings[group]["enable"] or not settings[group][flag]:
+                hide.add(name)
+        if settings["temporal_settings"]["enable"]:
+            hide.add("future_task")
+        if event.get_extra("decision_life_proactive", False):
+            # Only Decision wrappers can enforce the one-kind/count budget.
+            hide.update({"generate_image", "generate_video", "generate_audio"})
+            kind = event.get_extra("decision_life_media_kind", "")
+            for name, media_kind in (("take_photo", "photo"), ("take_video", "video"), ("send_voice", "audio")):
+                if kind != media_kind:
+                    hide.add(name)
+        if event.get_extra("decision_temporal_guard", False):
+            hide.add("send_message_to_user")
+        tools.tools = [tool for tool in tools.tools if getattr(tool, "name", "") not in hide]
+
     @filter.event_message_type(
         EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE, priority=1100
     )
@@ -2583,6 +2662,7 @@ class DecisionPlugin(Star):
             if self._command_handler_matched(event):
                 self._life_runtime._mark_conversation_activity(str(event.unified_msg_origin))
                 return
+            await self._life_runtime.temporal.prepare_event(event)
             await self._life_runtime.record_incoming(event)
 
     @filter.event_message_type(
@@ -2731,12 +2811,19 @@ class DecisionPlugin(Star):
 
     @getattr(filter, "after_message_sent", lambda **kw: lambda fn: fn)()
     async def life_after_send(self, event):
+        if self._life_runtime:
+            if not event.get_extra("decision_life_proactive", False) and getattr(event, "__is_llm_reply", False):
+                await self._life_runtime.temporal.activate_from_event(event)
+            if self._life_runtime.config["adaptive_settings"]["enable"] and getattr(event, "__is_llm_reply", False):
+                persona = await self._life_runtime.personas.resolve(str(event.unified_msg_origin))
+                self._life_runtime.contacts.normal_reply(event, persona.id, self._life_runtime._now())
         if self._life_runtime and not event.get_extra("decision_life_proactive", False):
             await self._life_runtime.mark_active_conversation(event)
 
     @filter.on_llm_response()
     async def life_track_response(self, event, response):
         if self._life_runtime:
+            await self._life_runtime.temporal.guard_response(event, response)
             await self._life_runtime.track_delayed_llm_response(event, response)
             if not hasattr(filter, "on_agent_done"):
                 await self.life_agent_done(event, None, response)
