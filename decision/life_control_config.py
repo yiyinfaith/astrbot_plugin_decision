@@ -7,6 +7,20 @@ def _field(kind, description, default, hint="", **extra):
 
 def control_schema():
     return {
+        "continuity_settings": {
+            "type": "object", "description": "对话连续性与生活状态",
+            "items": {
+                "enable": _field("bool", "启用话题跟进与连续状态", True, "按会话＋人格记录真实话题；生活状态按人格共享。"),
+                "quality_enabled": _field("bool", "根据互动质量调节联系", True, "结合真实内容判断热情、忙碌、收尾；无关群聊不参与，不推测已读状态。"),
+                "topics_enabled": _field("bool", "自然跟进未结束的话题", True, "话题到期只是普通主动候选，仍遵守限频、名单和免打扰，不替代明确提醒。"),
+                "state_enabled": _field("bool", "保持生活状态前后连贯", True),
+                "max_semantic_calls_day": _field("int", "每会话人格每日语义分析上限", 12, "包括互动分析与发送后分享确认；失败也占预算，不自动重复提交。"),
+                "analysis_interval_seconds": _field("int", "互动分析最小间隔（秒）", 120, "期间的新消息合并分析，不延迟正常聊天回复。"),
+                "topic_retention_days": _field("int", "未结束话题保留天数", 14),
+                "max_open_topics": _field("int", "每会话人格未结束话题上限", 20),
+                "temporary_quiet_minutes": _field("int", "临时忙碌最长避让（分）", 240, "普通群成员的忙碌只影响其本人话题，不修改群频率。"),
+            },
+        },
         "adaptive_settings": {
             "type": "object", "description": "📈 自动联系频率与权限",
             "items": {
@@ -55,6 +69,12 @@ def control_schema():
 
 
 def validate_control(settings):
+    continuity = settings["continuity_settings"]
+    for key, low, high in (("max_semantic_calls_day", 0, 200), ("analysis_interval_seconds", 0, 3600),
+                           ("topic_retention_days", 1, 90), ("max_open_topics", 1, 100),
+                           ("temporary_quiet_minutes", 1, 1440)):
+        if not low <= continuity[key] <= high:
+            raise ValueError(f"{key} 须在 {low} 到 {high} 之间")
     adaptive = settings["adaptive_settings"]
     if not 1 <= adaptive["friend_min_minutes"] <= adaptive["max_interval_minutes"] <= 43200:
         raise ValueError("私聊最短间隔须为 1 分钟以上且不大于最长间隔；最长不超过 30 天")

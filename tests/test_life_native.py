@@ -242,8 +242,47 @@ async def test_temporal_facts_injected_when_proactive_is_disabled(native):
     runtime.config["group_settings"]["enable"] = False
     request = SimpleNamespace(extra_user_content_parts=[])
     await runtime.inject_cached_state(native.event, request)
-    assert len(request.extra_user_content_parts) == 1
+    assert len(request.extra_user_content_parts) == 2
     assert "程序时间与联系账本" in str(request.extra_user_content_parts)
+    assert "连续生活与真实对话记录" in str(request.extra_user_content_parts)
+
+
+@pytest.mark.asyncio
+async def test_normal_send_capture_uses_each_actual_ack_not_a_sticky_sent_flag(native, monkeypatch):
+    runtime, event = native.runtime, native.event
+    # Trace persistence belongs to the host's application-wide event loop; this
+    # test isolates sends and acknowledgements on a short pytest loop.
+    monkeypatch.setattr(event.trace, "record", MagicMock())
+    monkeypatch.setattr("astrbot.core.platform.astr_message_event.Metric.upload", AsyncMock())
+    runtime.delivery.wrap_event(event, "alice")
+    await event.send(MessageChain().message("这是一条真实确认发出的普通回复。"))
+    assert len(runtime.conversation.recent(UMO, "alice")) == 1
+    assert event._has_send_oper
+    native.context.send_message.return_value = False
+    await event.send(MessageChain().message("这条未被平台确认，不能记录成发出。"))
+    records = runtime.conversation.recent(UMO, "alice")
+    assert len(records) == 1 and "真实确认" in records[0]["text"]
+    assert event._has_send_oper  # preserve the host's previous-send indication
+    await asyncio.sleep(0)  # let the host's detached metrics coroutine finish
+
+
+@pytest.mark.asyncio
+async def test_resolved_topic_during_generation_cannot_be_sent(native, monkeypatch):
+    runtime = native.runtime
+    now = runtime._now().timestamp()
+    topic = {"id": "pending-interview", "title": "面试", "note": "询问进展"}
+    with runtime.ledger.transaction() as db:
+        db.execute("INSERT INTO topics VALUES (?,?,?,?,?,?,?,?)", (topic["id"], UMO, "alice", "42", now - 1, now + 86400, "open", json.dumps(topic)))
+
+    async def generate(**kwargs):
+        with runtime.ledger.transaction() as db:
+            db.execute("UPDATE topics SET status='resolved' WHERE id=?", (topic["id"],))
+        return LLMResponse(role="assistant", completion_text="你之前的面试怎么样了？")
+
+    monkeypatch.setattr(native.provider, "text_chat", generate)
+    assert not await dispatch_life_agent(runtime, UMO, "询问面试进展", 0, "alice", "followup", offered_topics=[topic])
+    native.context.send_message.assert_not_awaited()
+    assert runtime.conversation.recent(UMO, "alice") == []
 
 
 @pytest.mark.asyncio

@@ -43,6 +43,19 @@ class LifeLedger:
                 CREATE TABLE IF NOT EXISTS idea_attempts (
                     persona TEXT, node TEXT, at REAL,
                     PRIMARY KEY(persona,node));
+                CREATE TABLE IF NOT EXISTS conversation_calls (
+                    id TEXT PRIMARY KEY, umo TEXT, persona TEXT, at REAL,
+                    kind TEXT, status TEXT);
+                CREATE INDEX IF NOT EXISTS conversation_call_scope ON conversation_calls(umo,persona,at);
+                CREATE TABLE IF NOT EXISTS topics (
+                    id TEXT PRIMARY KEY, umo TEXT, persona TEXT, sender TEXT,
+                    due REAL, expires REAL, status TEXT, data TEXT);
+                CREATE INDEX IF NOT EXISTS topic_scope ON topics(umo,persona,status,due);
+                CREATE TABLE IF NOT EXISTS utterances (
+                    id TEXT PRIMARY KEY, umo TEXT, persona TEXT, at REAL, data TEXT);
+                CREATE INDEX IF NOT EXISTS utterance_scope ON utterances(umo,persona,at);
+                CREATE TABLE IF NOT EXISTS persona_states (
+                    persona TEXT PRIMARY KEY, data TEXT);
             """)
 
     @contextmanager
@@ -116,6 +129,9 @@ class LifeLedger:
         with self.transaction() as db:
             db.execute("DELETE FROM signals WHERE at<?", (now - 7 * 86400,))
             db.execute("DELETE FROM idea_attempts WHERE at<?", (now - 7 * 86400,))
+            db.execute("DELETE FROM conversation_calls WHERE at<?", (now - 7 * 86400,))
+            db.execute("DELETE FROM utterances WHERE at<?", (now - 40 * 86400,))
+            db.execute("DELETE FROM topics WHERE expires<?", (now - 7 * 86400,))
             db.execute("DELETE FROM contacts WHERE at<? AND status NOT IN ('sending','unknown')", (now - 40 * 86400,))
             db.execute("DELETE FROM shares WHERE thought IN (SELECT id FROM thoughts WHERE expires<?)", (now - 7 * 86400,))
             db.execute("DELETE FROM thoughts WHERE expires<?", (now - 7 * 86400,))

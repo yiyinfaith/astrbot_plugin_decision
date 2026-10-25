@@ -53,6 +53,7 @@ The reservation and claim have already succeeded before this function runs.
     event.plugins_name = None if plugins == ["*"] else plugins
     pipe = PipelineContext(cfg, ctx._star_manager, event.get_platform_id())
     sent = 0
+    actual_texts = []
 
     async def send(target, chain):
         nonlocal sent
@@ -69,6 +70,11 @@ The reservation and claim have already succeeded before this function runs.
         if not await original_send(session, chain):
             raise PlatformSendError("平台未确认未来联系发送成功")
         sent += 1
+        from .life_delivery import plain_text
+
+        text = plain_text(chain)
+        if text:
+            actual_texts.append(text)
         # Commit the first acknowledged segment immediately. A later decoration
         # failure must never make a delivered reminder eligible for retry.
         runtime.contacts.delivered(umo, task["persona"], runtime._now(), task["id"],
@@ -104,6 +110,9 @@ The reservation and claim have already succeeded before this function runs.
             raise
     if not sent:
         raise PlatformSendError("未来联系未经过实际平台发送")
+    delivery = getattr(runtime, "delivery", None)
+    if delivery and actual_texts:
+        await delivery.record(umo, task["persona"], "scheduled:" + task["id"], "\n".join(actual_texts), kind="scheduled")
 
 
 async def dispatch_life_agent(
@@ -114,6 +123,8 @@ async def dispatch_life_agent(
     persona_id: str,
     intent: str,
     media_choice: tuple[str, int, int] | None = None,
+    offered_ideas=(),
+    offered_topics=(),
 ) -> bool:
     from astrbot import logger
     from astrbot.api.message_components import Plain
@@ -199,6 +210,7 @@ async def dispatch_life_agent(
     send_failure = None
     delivering_final = False
     final_delivery = False
+    actual_texts = []
     original_send = ctx.send_message
     delivery_context = copy.copy(ctx)
 
@@ -208,6 +220,10 @@ async def dispatch_life_agent(
             raise RuntimeError("主动发起只能发送到本次已订阅的目标会话")
         if not await runtime.validate_commit(umo, generation, persona_id):
             raise RuntimeError("主动候选已过期或会话已更新")
+        if offered_topics and getattr(runtime, "conversation", None):
+            open_ids = {t["id"] for t in runtime.conversation.topics(umo, persona_id) if t["status"] == "open"}
+            if any(topic["id"] not in open_ids for topic in offered_topics):
+                raise RuntimeError("候选话题已经结束或已经询问，不再重复发送")
         try:
             if not await original_send(session, chain):
                 raise PlatformSendError("平台未确认主动消息发送成功")
@@ -219,6 +235,11 @@ async def dispatch_life_agent(
             raise send_failure from exc
         if not sent:
             runtime.confirm_delivery(umo)
+        from .life_delivery import plain_text
+
+        delivered_text = plain_text(chain)
+        if delivered_text:
+            actual_texts.append(delivered_text)
         temporal = getattr(runtime, "temporal", None)
         if temporal and delivering_final:
             await temporal.activate_from_event(event)
@@ -294,6 +315,15 @@ async def dispatch_life_agent(
             # it again would apply other plugins' state changes twice.
             if response and getattr(response, "role", "assistant") == "assistant":
                 text = str(response.completion_text or "").strip()
+                if text and offered_topics and getattr(runtime, "conversation", None):
+                    open_ids = {t["id"] for t in runtime.conversation.topics(umo, persona_id) if t["status"] == "open"}
+                    if any(topic["id"] not in open_ids for topic in offered_topics):
+                        runtime.record_audit(umo, False, "生成期间话题已经结束或已经询问，取消本次候选")
+                        text = ""
+                delivery = getattr(runtime, "delivery", None)
+                if text and delivery and delivery.repeated(umo, persona_id, text):
+                    runtime.record_audit(umo, False, "候选与最近实际发出的内容重复，已抑制重复发送")
+                    text = ""
                 if text and runtime.can_commit(umo, generation):
                     delivering_final = True
                     result_chain = event.plain_result(text)
@@ -331,6 +361,14 @@ async def dispatch_life_agent(
             logger.warning("Decision Engine 主动消息已部分发送，后续处理失败：%s", str(exc)[:200])
             return True
         finally:
+            delivery = getattr(runtime, "delivery", None)
+            if actual_texts and delivery:
+                ident = runtime._delivery_contact_ids.get(umo) or runtime.ledger.new_id()
+                try:
+                    await delivery.record(umo, persona_id, ident, "\n".join(actual_texts),
+                                          ideas=offered_ideas, topics=offered_topics)
+                except Exception as exc:
+                    logger.warning("Decision 主动消息已经发送，记录保存失败：%s", type(exc).__name__)
             if sent and runner:
                 # Persist the actual tool-loop messages, including photo/video
                 # tool status. Do not invent a user message or discard tools.

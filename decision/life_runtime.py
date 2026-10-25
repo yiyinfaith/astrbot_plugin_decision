@@ -13,7 +13,11 @@ from astrbot import logger
 
 from .life_agent import PlatformSendError, PlatformUnavailableError, dispatch_life_agent
 from .life_contacts import ContactControl
+from .life_conversation import ConversationContinuity
+from .life_delivery import LifeDelivery
+from .life_ideas import LifeIdeas
 from .life_ledger import LifeLedger
+from .life_state import PersonaLifeState
 from .life_temporal import TemporalControl
 from .tokens import estimate_request_tokens
 from .virtual_life.core.models import SessionState
@@ -152,6 +156,10 @@ class LifeRuntime(VirtualLifeBase):
         self.ledger = LifeLedger(self.data_dir / "contact_control.sqlite3")
         self.contacts = ContactControl(self, self.ledger)
         self.temporal = TemporalControl(self, self.ledger, self.contacts)
+        self.ideas = LifeIdeas(self, self.ledger)
+        self.life_state = PersonaLifeState(self, self.ledger)
+        self.conversation = ConversationContinuity(self, self.ledger)
+        self.delivery = LifeDelivery(self, self.ledger)
         self._contact_attempts = {}
         self._delivery_contact_ids = {}
 
@@ -222,6 +230,7 @@ class LifeRuntime(VirtualLifeBase):
 
     async def terminate(self):
         self.closed = True
+        await self.conversation.close()
         await self.temporal.close()
         self.runtime.stop()
         self.reply_delay_coordinator.clear()
@@ -272,8 +281,9 @@ class LifeRuntime(VirtualLifeBase):
                             plan = self.visible_plan(self.storage.get_plan(now.date().isoformat(), persona.id))
                             if not plan or not plan.has_schedule:
                                 continue
+                            self.life_state.current(persona.id, plan, now)
                             if self.config["thought_settings"]["enable"]:
-                                await self.temporal.activity_thought(umo, persona, plan)
+                                await self.ideas.activity_thought(umo, persona, plan)
                             if self.config["adaptive_settings"]["enable"]:
                                 allowed, _ = self.contacts.gate(umo, persona.id, now)
                                 # Failed model/Jev calls must not be retried every
@@ -394,7 +404,16 @@ class LifeRuntime(VirtualLifeBase):
                     at_bot, reply_bot, _, _ = self.owner._message_address_flags(event)
                     targeted = at_bot or reply_bot
                 persona = await self.personas.resolve(umo)
-                self.contacts.observe(event, persona.id, now, targeted=targeted)
+                continuity = self.config["continuity_settings"]
+                self.contacts.observe(event, persona.id, now, targeted=targeted,
+                                      quality_pending=continuity["enable"] and continuity["quality_enabled"])
+                if self.policy.is_enabled(umo):
+                    self.conversation.enqueue(event, persona.id, targeted=targeted)
+            elif self.config["continuity_settings"]["enable"] and self.policy.is_enabled(str(event.unified_msg_origin)):
+                umo = str(event.unified_msg_origin)
+                targeted = ":FriendMessage:" in umo or any(self.owner._message_address_flags(event)[:2])
+                persona = await self.personas.resolve(umo)
+                self.conversation.enqueue(event, persona.id, targeted=targeted)
         if not self.enabled or self.owner._command_handler_matched(event):
             return
         umo = str(event.unified_msg_origin)
@@ -695,6 +714,10 @@ class LifeRuntime(VirtualLifeBase):
         }
         contact = self.contacts.summary(umo, persona.id, now)
         state["contact_control"] = contact
+        topic = self.conversation.due_topic(umo, persona.id) if self.config["continuity_settings"]["enable"] and self.config["continuity_settings"]["topics_enabled"] else None
+        thought = self.ideas.thought(umo, persona.id) if self.config["thought_settings"]["enable"] else None
+        state["follow_up_candidate"] = topic
+        state["idea_candidate"] = {"text": thought["text"], "source": thought["source"]} if thought else None
         floor_due = self.config["adaptive_settings"]["enable"] and now.timestamp() - (contact["last_sent"] or contact["created"]) >= self.config["adaptive_settings"]["max_interval_minutes"] * 60
         try:
             result = await self.owner._evaluate(
@@ -736,7 +759,14 @@ class LifeRuntime(VirtualLifeBase):
             "\n这是内部主动发起事件，请沿用当前 AstrBot 人格。不要把触发说明当作用户说过的话。"
         )
         prompt += "\n[程序记录的联系状态，必须遵守]\n" + json.dumps(contact, ensure_ascii=False)
-        thought = self.temporal.thought(umo, persona.id) if self.config["thought_settings"]["enable"] else None
+        continuous_state = self.life_state.current(persona.id, plan, now)
+        if continuous_state:
+            prompt += "\n[当前活动的连续状态，不能推断真实外部操作完成]\n" + json.dumps(continuous_state, ensure_ascii=False)
+        recent = self.conversation.recent_text(umo, persona.id)
+        if recent:
+            prompt += "\n[最近实际发出的内容；不要重复开场、重复追问或换句话重复同一分享]\n" + json.dumps(recent, ensure_ascii=False)
+        if topic:
+            prompt += "\n[可自然跟进的一件未结束事项；用户尚未说明结果，只能询问，不能假定结果；群聊只面向原发言者]\n" + json.dumps(topic, ensure_ascii=False)
         if thought:
             prompt += "\n可择机分享的想法（来源时间是真实记录，勿说成刚刚发生，不要编造亲身经历）：\n" + json.dumps({k: thought[k] for k in ("text", "source", "created")}, ensure_ascii=False)
         if delivery["proactive_timeline_context"]:
@@ -755,12 +785,11 @@ class LifeRuntime(VirtualLifeBase):
         if media:
             prompt += "\n" + media
         sent = await dispatch_life_agent(
-            self, umo, prompt, generation, persona.id, intent, media_choice=media_choice
+            self, umo, prompt, generation, persona.id, intent, media_choice=media_choice,
+            offered_ideas=[thought] if thought else [], offered_topics=[topic] if topic else [],
         )
         if sent:
             self.offline.pop(umo.split(":", 1)[0], None)
-            if thought:
-                self.temporal.mark_shared(thought["id"], umo)
         self.record_audit(
             umo, sent, f"Jev 通过，候选：{intent}" if sent else "生成期间会话更新或消息未发送"
         )
@@ -793,6 +822,27 @@ class LifeRuntime(VirtualLifeBase):
         return instruction, choice
 
     async def inject_cached_state(self, event, req):
+        if self.config["continuity_settings"]["enable"]:
+            umo = str(event.unified_msg_origin)
+            persona = await self.personas.resolve(umo)
+            plan = self.visible_plan(self.storage.get_plan(self._now().date().isoformat(), persona.id))
+            facts = {"life": self.life_state.current(persona.id, plan, self._now()),
+                     **self.conversation.context(umo, persona.id)}
+            budget = min(12000, max(1000, self.config["smart_context_injection"]["max_chars"]))
+            while len(json.dumps(facts, ensure_ascii=False)) > budget:
+                if facts["recent_actual_bot_messages"]:
+                    facts["recent_actual_bot_messages"].pop(0)
+                elif len(facts["topics"]) > 1:
+                    facts["topics"].pop()
+                elif facts["life"].get("events"):
+                    facts["life"]["events"].pop(0)
+                elif facts["topics"]:
+                    facts["topics"].pop()
+                else:
+                    facts["life"] = {k: str(v)[:150] for k, v in facts["life"].items() if k in {"activity", "phase", "tone", "planned_end", "source"}}
+                    break
+            if facts["life"] or facts["topics"] or facts["recent_actual_bot_messages"]:
+                req.extra_user_content_parts.append(temporary_text("[连续生活与真实对话记录：已问过的问题不重复追问；已知结果不再当作未知；禁止捏造新见闻]\n" + json.dumps(facts, ensure_ascii=False)))
         if self.config["temporal_settings"]["enable"] or self.config["adaptive_settings"]["enable"]:
             umo = str(event.unified_msg_origin)
             persona = await self.personas.resolve(umo)

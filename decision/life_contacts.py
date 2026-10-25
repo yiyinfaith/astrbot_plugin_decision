@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from datetime import datetime, time, timedelta
 
@@ -99,6 +100,8 @@ class ContactControl:
         data = self.profile(db, umo, persona, self.runtime._now())
         if data["paused_until"] == -1 or data["paused_until"] > now.timestamp():
             return False, "用户已暂停主动联系"
+        if frequency and not agreed and data.get("defer_until", 0) > now.timestamp():
+            return False, "用户暂时忙碌或已结束本轮话题"
         counts = self.counts(db, umo, persona, now, exclude)
         hard = self.runtime.policy.settings_for(umo).get("daily_hard_max", 0)
         if agreed:
@@ -113,7 +116,7 @@ class ContactControl:
                 return False, "自适应主动间隔未到"
         return True, "allowed"
 
-    def observe(self, event, persona, now, *, targeted):
+    def observe(self, event, persona, now, *, targeted, quality_pending=False):
         umo = str(event.unified_msg_origin)
         raw_id = str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")
         # Adapter events without IDs use one event-local token, not content alone:
@@ -131,7 +134,7 @@ class ContactControl:
             if targeted:
                 data["last_incoming"] = now.timestamp()
                 active_exchange = (data["awaiting"] and now.timestamp() - data["last_sent"] <= self.settings["response_window_minutes"] * 60) or (data.get("last_normal_reply", 0) and now.timestamp() - data["last_normal_reply"] <= self.settings["response_window_minutes"] * 60)
-                if active_exchange and now.timestamp() - data["last_positive"] >= self.settings["adjustment_cooldown_minutes"] * 60:
+                if not quality_pending and active_exchange and now.timestamp() - data["last_positive"] >= self.settings["adjustment_cooldown_minutes"] * 60:
                     low, _ = self.bounds(umo)
                     # Explicit preference remains the baseline: an enthusiastic
                     # reply cannot immediately undo a request to be quieter.
@@ -145,6 +148,36 @@ class ContactControl:
                 event.set_extra("decision_contact_feedback", action)
             self.ledger.save_profile(db, umo, persona, data)
         return action if authority else ""
+
+    def apply_quality(self, umo, persona, source, signal, now):
+        """Automatic evidence only; this never grants a force-adjust privilege."""
+        with self.ledger.transaction() as db:
+            data = self.profile(db, umo, persona, now)
+            ident = "quality:" + source["id"]
+            if not db.execute("INSERT OR IGNORE INTO signals VALUES (?,?,?,?)", (umo, persona, ident, now.timestamp())).rowcount:
+                return
+            kind = signal.get("engagement", "neutral")
+            if kind not in {"engaged", "neutral", "closing", "busy"}:
+                return
+            data["engagement"] = {"kind": kind, "quote": signal["quote"], "at": now.timestamp(), "sender": source["sender"],
+                                  "scope": "member" if ":GroupMessage:" in umo else "conversation"}
+            if kind == "engaged" and self.settings["enable"] and now.timestamp() - data["last_positive"] >= self.settings["adjustment_cooldown_minutes"] * 60 and now.timestamp() - data.get("feedback_at", 0) >= self.settings["adjustment_cooldown_minutes"] * 60:
+                low, _ = self.bounds(umo)
+                data["interval"] = max(low, data["baseline"] * 0.8, data["interval"] * self.settings["positive_factor"])
+                data["last_positive"] = now.timestamp()
+            if kind in {"busy", "closing"}:
+                minutes = signal.get("busy_minutes", 20 if kind == "closing" else 60)
+                if isinstance(minutes, bool) or not isinstance(minutes, (int, float)) or not math.isfinite(minutes):
+                    minutes = 20
+                minutes = max(1, min(self.runtime.config["continuity_settings"]["temporary_quiet_minutes"], minutes))
+                until = now.timestamp() + minutes * 60
+                if ":GroupMessage:" in umo:
+                    members = data.setdefault("member_busy", {})
+                    members[source["sender"]] = until
+                    data["member_busy"] = dict(sorted(members.items(), key=lambda x: x[1], reverse=True)[:50])
+                else:
+                    data["defer_until"] = max(data.get("defer_until", 0), until)
+            self.ledger.save_profile(db, umo, persona, data)
 
     def normal_reply(self, event, persona, now):
         if event.get_extra("decision_life_proactive", False) or event.get_extra("decision_contact_reply_recorded", False):

@@ -170,7 +170,7 @@ class DecisionFunctionTool(FunctionTool):
     PLUGIN_NAME,
     "yiyinfaith",
     "jev决策综合插件：用 Jev 判断 Tool、MCP、Skill、SubAgent 和主动对话，并保留 AstrBot 主 LLM 的最终控制权。",
-    "0.3.0",
+    "0.4.0",
 )
 class DecisionPlugin(Star):
     """AstrBot integration layer for a provider-neutral decision engine."""
@@ -460,6 +460,7 @@ class DecisionPlugin(Star):
         for endpoint, handler, methods in (
             ("life", self.page_life, ["GET"]),
             ("life/action", self.page_life_action, ["POST"]),
+            ("life/control", self.page_life_control, ["POST"]),
             ("life/appearance", self.page_life_appearance, ["POST"]),
             ("life/personas", self.page_life_personas, ["GET"]),
             ("life/sessions", self.page_life_sessions, ["GET"]),
@@ -2620,7 +2621,7 @@ class DecisionPlugin(Star):
         if not item:
             return "没有可验证的当前日程活动，未保存想法。"
         try:
-            ident = await runtime.temporal.save_thought(persona.id, text,
+            ident = await runtime.ideas.save_thought(persona.id, text,
                 {"activity": item.activity, "location": item.location, "at": runtime._now().isoformat()}, scope=str(event.unified_msg_origin))
             return "想法已暂存，是否分享由限频与偏好决定。记录 " + ident
         except ValueError as exc:
@@ -2663,6 +2664,9 @@ class DecisionPlugin(Star):
                 self._life_runtime._mark_conversation_activity(str(event.unified_msg_origin))
                 return
             await self._life_runtime.temporal.prepare_event(event)
+            if self._life_runtime.config["continuity_settings"]["enable"]:
+                persona = await self._life_runtime.personas.resolve(str(event.unified_msg_origin))
+                self._life_runtime.delivery.wrap_event(event, persona.id)
             await self._life_runtime.record_incoming(event)
 
     @filter.event_message_type(
@@ -3306,6 +3310,23 @@ class DecisionPlugin(Star):
                     }
                 )
         except (ValueError, OSError, TypeError) as exc:
+            return error_response(_safe_error(exc), status_code=400)
+
+    async def page_life_control(self):
+        from astrbot.api.web import error_response, json_response, request
+
+        from .decision.life_actions import perform_control_action
+
+        payload = await request.json(default={})
+        if not isinstance(payload, Mapping):
+            return error_response("请求必须是对象", status_code=400)
+        if not isinstance(payload.get("action"), str) or payload["action"] not in {"create_task", "edit_task", "cancel_task", "resolve_topic", "dismiss_idea"}:
+            return error_response("未知会话控制操作", status_code=400)
+        try:
+            umo = validate_umo(str(payload.get("umo", "")))
+            runtime = await self._get_life_runtime()
+            return json_response(await perform_control_action(runtime, umo, payload))
+        except (ValueError, TypeError) as exc:
             return error_response(_safe_error(exc), status_code=400)
 
     async def page_life_action(self):

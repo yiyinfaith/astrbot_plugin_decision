@@ -157,6 +157,27 @@ VPS 环境回归额外修正了测试边界：人际网络服务单测显式注�
 
 API 证据位于 VPS `/root/astrbot_backups/decision_full_audit_20261025/contact-control/paid-*.json`；包含请求路径、模型、实际调用次数、生成结果和发送时刻，不保存 API Key。为避免干扰生产群聊，外部 QQ/其他平台外发次数为 0；平台接收器为隔离替身，不能据此宣称真实 QQ 投递已验证。代码同步、单插件 reload、版本与数据保护检查以相邻 `contact-release/deployment.json` 和 manifest 为准。
 
+## 2026-10-25 工作台归并与对话连续性（0.4.0）
+
+界面分为“联系与打扰／人格与生活／提醒与承诺／多媒体／状态与记录”，高级参数单独搜索。`life-workspace.js` 只映射展示位置，不修改配置键或默认值；Node 实际执行映射，逐项验证所有原有与新增配置均有入口、无重复归属，隐藏能力与切换单位不清空原值。Playwright 验证六个入口、小时/分钟转换、百分比与原始概率转换、关闭视频隐藏关联项、模型参数搜索；编辑再恢复后全量配置 JSON 一致。390px 手机视口的页面宽度为 390px，无横向溢出；预览数据来自已脱敏的 WebUI API，测试未保存生产配置。
+
+| 职责 | 实现与验收 |
+| --- | --- |
+| 互动质量与话题 | `life_conversation.py` 依据真实来信的逐字证据提取 engaged/neutral/closing/busy 和软跟进事项；无关群聊不参与，短回复不盲目增频；普通群成员的忙碌只影响其本人话题，不暂停全群 |
+| 频率与权限 | `life_contacts.py` 继续独占上下限、额度、强制权限与暂停；临时避让有期限，明确提醒不被普通收尾自动取消；已保存的明确偏好不会立即被积极聊天覆盖 |
+| 连续生活 | `life_state.py` 按人格持久化活动进入/进度/计划结束与情绪原因，专注活动后有放松过渡；日程推演不能冒充真实外部完成 |
+| 想法管理 | 从 `life_temporal.py` 提取到 `life_ideas.py`，保留原内部转发入口；日程、来源、预算、TTL 和私聊范围保持原有约束 |
+| 真实发送确认 | `life_delivery.py` 区分“提供给模型”和“真正发出”；精确原文无需新请求，改写必须有实际发送文字的逐字证据；无关问候不消耗想法，失败/预算不足不假装确认 |
+| 避免重复 | 记录真实正文，主模型只看到实际文字摘要，不把未分享候选混入历史；近期高度重复正文不再发送；话题已问过/已结束不重复追问，生成期间结束的候选在发送前失效 |
+| 状态管理与恢复 | 已认证 `life/control` 支持提醒创建/编辑/取消、话题结束与按会话放弃想法；作用域由服务端解析，不接受模型自报身份；编辑不改变原始 notify 和开始/完成语义；SQLite 只新增表，不清数据 |
+| 预算与隔离 | 语义请求按 UMO＋人格计数，真实来源去重，失败同样占预算，不盲目重试；模型请求身份包含 UMO＋人格；分析合并在后台，不增加普通回复等待；上下文摘要有长度预算 |
+
+新增回归包括真实 Provider 调用次数、批次/重载去重、不同人格/会话/群成员隔离、忙碌期限、未回应软跟进、实际分享证据、外部结果不可伪造、管理接口范围、普通发送的逐次确认与宿主资源清理。最终 Windows 为 **781 passed, 5 skipped, 12 subtests passed**，VPS 为 **785 passed, 1 skipped, 12 subtests passed**，指定真实 AstrBot 源的宿主集成为 **49 passed**，Ruff 和 diff whitespace 检查通过。宿主指标上传在短生命周期测试中隔离，避免把应用级后台指标线程留给下一测试循环，生产宿主未修改。
+
+真实付费验收使用 `gemini-3.8-flash` 标准 `/v1/chat/completions`，两项端到端用例共记录 **9 次实际 HTTP 请求**：提取“明天下午三点面试、晚点聊”并临时避让、原生 Agent 自然询问、按实际文字确认已问过、用户反馈通过后结束话题；另一项先发送普通问候，验证阅读想法仍未分享，再由真实 Agent 改写观点，取得实际正文证据后才标为已分享。证据为 VPS `life-continuity/paid-followup.json`、`paid-share-receipt.json` 与 `paid.log`（2 passed）。Provider 为真实网关，发送末端为隔离接收器，真实 QQ/其他外部平台外发次数为 0，不宣称真实 QQ 投递已验证。
+
+本次只发布 Decision。生产代码、逐文件哈希、目标插件 reload、配置差异、SQLite 备份、端口与进程连续性以 `/root/astrbot_backups/decision_full_audit_20261025/workspace-release/` 的 manifest 和部署报告为准。
+
 ## 生产盘点与边界
 
 - 盘点到的 AstrBot 运行目录为 `/root/yiyin/AstrBot`，插件目录为 `/root/yiyin/AstrBot/data/plugins/astrbot_plugin_decision`，服务单元为 `astrbot.service`，启动方式是 `/root/.local/bin/uv run --project /root/yiyin/AstrBot /root/yiyin/AstrBot/main.py`，由 detached `screen` 托管。
