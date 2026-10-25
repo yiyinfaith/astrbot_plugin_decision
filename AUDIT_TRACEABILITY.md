@@ -31,6 +31,30 @@
 
 ## 外部依赖边界
 
+### 2026-10-25 用户保存模型后的真实复验与渠道对照
+
+本节为最新外部验收状态，覆盖后文首次盘点时的模型空值、Files 被 WAF 拒绝等历史边界。功能代码基线为 `535d83aaacd30832154b9dd3989077393035342c`；以下请求使用已部署代码及隔离缓存，没有修改生产模型、渠道、余额、价格或发送真实平台消息。
+
+- 用户已将默认及图片、视频、音频、文件模型全部保存为 `吟枢苑API/gemini-3.8-flash`。从实际 Provider Source 与模型条目合并配置，使用真实 AstrBot OpenAI Provider 重新运行九项验收：静态图片、三帧 GIF、24 帧视频和静音音轨、英语音频转录、混合 PDF、整页 PPTX、DOCX 第二页、XLSX A401:A403、XLSX B401:B403，九项均通过，各一次真实 HTTP 请求。XLSX 两列独有内容没有交叉，DOCX 没有返回第一页独有文字。
+- `https://api.yiyinfaith.com/v1beta/models/gemini-3.8-flash:generateContent` 直接传入完整 MP4 的 `inline_data` 成功，使用量包含 VIDEO 和 AUDIO，最终结果描述花朵绽放。这与抽帧验证分开记录。
+- WAF 放行后，站点 `/upload/v1beta/files` 返回 HTTP 200、`text/html`、标题 New API，缺少 `X-Goog-Upload-URL`，不能视为上传成功；`/v1beta/interactions` 仍返回 `Invalid URL` 404。网关实际为官方镜像 `v1.0.0-rc.46`，镜像 revision 为 `7d8b91268dab69d7150f345c448b5e250163146a`。镜像对应公开路由与插件 API 已核对；宿主项目目录的 Git 源码版本较旧，不能据此代替运行镜像版本。
+
+真实上游对照不经过 New API 站点，不能用来宣称站点已打通相同能力：
+
+| 渠道与请求 | 实际结果 | 验收结论 |
+| --- | --- | --- |
+| 330 Gemini Developer API，最初按名称选取，用户随后明确目标为 331 | 官方 `generativelanguage.googleapis.com` 上传初始化、完整 MP4 上传、ACTIVE、文件引用 generateContent、文字 Interactions、后台视频 Agentic Interactions 均成功 | 证明现有 Decision 原生实现可与真实官方服务完成调用；不代表用户指定的 331 或站点路由成功 |
+| 330 远端资源清理 | Files DELETE 200；删除后 GET 403（不存在或无权限）；同一凭据完整 LIST 200、0 个文件。两条测试 Interactions DELETE 均为 200 | 通过实际删除响应与完整认证列表确认文件不再存在，不能把 Google 删除后 403 误报为删除失败 |
+| 331，Google Agent platform，类型 41，启用状态 | `aiplatform.googleapis.com` 普通 `/v1/publishers/google/models/gemini-3.8-flash:generateContent` 200，返回校验文字；按 2026-10-22 官方文档的 Express 路径 `/v1beta1/locations/global/interactions`，文字与完整视频均 404 | 普通模型调用成功；指定渠道的 Interactions 远端成功未验证。Developer API 的 `/upload/v1beta/files` 及 `/v1beta/interactions` 也不能直接套到该域名 |
+| 229，CPA 反重力渠道，启用状态，沿用模型映射 `gemini-3.8-flash-high` | 直接请求同一 CPA 容器，Files 初始化 404；Interactions 文字与完整 MP4 请求 200/completed；返回 ID 的 GET 与 DELETE 404；generateContent 文字对照 200 | 存在单次 Interactions 兼容入口，未证明原生后台执行、查询、取消和文件管理能力 |
+| 229 实际视频内容对照 | 与官方测试视频大小及 SHA256 相同；实际画面为红/橙红花瓣，回答却描述为粉红到乳白渐变 | 传输和返回格式可用，但本次视觉理解质量验收失败，不能仅凭 HTTP 200 或答案含“花”记为通过 |
+
+331 与 229 均按用户明确指定重新验收，渠道启用状态保持原样。330 的既有停用状态也未修改。所有测试凭据仅在受保护的 SSH/进程内传递，没有写入公开证据。
+
+New API 插件可行性：rc.46 `meta.routes` 支持自定义原生路由、任务归属与计费，并可热加载；其解码器只接收 JSON、表单和 multipart 引用，原始二进制不暴露给 JS；原生 presenter 返回 JSON，不提供完整 HTTP 响应头/状态的透明代理接口，`utils.fetch` 只允许 GET/HEAD。因此可以实现需要客户端适配的多模态任务入口，不能把普通 JS 任务插件直接等同于完整 Google resumable Files 与 Interactions 协议代理。特别是兼容转换不能凭空补出上游缺少的 Agentic 执行能力。当前未修改 New API 源码、安装新插件或变更 Nginx 路由。
+
+证据在 AstrBot VPS 的 `/root/astrbot_backups/decision_full_audit_20261025/followup-current-models/`（`current-config-summary.json`、各 `live-*.json`、`native-inline-video.json`、`native-endpoints*.json`、`official-direct-*.json`、`official-cleanup.json`、`vertex331-*.json`）；229 的独立结果在 API VPS `/root/decision-native-probes/`。以上目录含私有测试记录，不上传 GitHub。用户要求跳过纯文字 `send_voice` 实测，继续保留原有参考音频克隆配置。
+
 ### 2026-10-25 全量审计与真实调用追加记录
 
 以下为本轮新增证据；上表和后面的 2026-10-24 记录保留为历史，不代表当前仍未进行外部验证。审计使用最新 main `69ef953` 起点，无回退、无宿主升级、无生产会话外发。
