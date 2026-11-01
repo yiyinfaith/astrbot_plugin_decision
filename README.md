@@ -481,7 +481,7 @@ aigen 按「平台名 + 发送者 ID」记账（`["aiocqhttp","123456"]` 这样�
 
 只有「主动发起」的多媒体会使用这个明确指定的账户，普通聊天仍按原有 aigen 规则计费。插件不会按余额自动挑选账户，也不会改变普通聊天计费。
 
-### 人际网络（已并入本插件）
+### 人际网络
 
 原独立插件 `astrbot_plugin_personal_network` 已并入本插件，**不需要再单独安装**；重复安装两套会各自维护一份数据。
 
@@ -490,78 +490,6 @@ aigen 按「平台名 + 发送者 ID」记账（`["aiocqhttp","123456"]` 这样�
 - LLM 工具名保持不变：`update_personal_network` 与 `query_personal_network`；聊天命令仍是 `/关系查询`（别名 `查询关系`、`人际关系`）。工具与命令都受 **人际网络** 分组中的开关控制，`enable` 关闭时 `/关系查询` 会提示先到 WebUI 开启。
 - 管理工作已并入插件主页 `pages/dashboard/`：**主动发起 → 人际网络详情**（页面倒数第二张卡片，默认收起）。关系图、人物卡片、批量生成、头像与导入导出都在那张卡片里，修改即时保存，不再需要单独打开 `network` 视图。
 - 配置位于 WebUI 的 **人际网络** 分组（`personal_network_integration`），默认关闭；虚拟生活生成新人物时也写入同一份数据。
-
-## 配置文件和插件更新
-
-插件代码位于：
-
-```text
-<AstrBot>/data/plugins/astrbot_plugin_decision/
-```
-
-配置不保存在插件目录。通常会保存为：
-
-```text
-<AstrBot>/data/config/astrbot_plugin_decision_config.json
-<AstrBot>/data/config/astrbot_plugin_decision_settings.json
-<AstrBot>/data/plugin_data/astrbot_plugin_decision/virtual_life/
-<AstrBot>/data/plugin_data/astrbot_plugin_decision/personal_network/
-```
-
-第一个由 AstrBot 管理原生全局配置，第二个由插件 WebUI 管理详细策略；第三个保存生活日程、长期阶段、会话计数、人格参考图及媒体提交次数；第四个保存人际网络的 sqlite 数据库、头像与导出文件。实际路径以 AstrBot 当前实例的数据目录为准。更新或覆盖插件目录不会覆盖这些配置和生活数据。
-
-WebUI 点击“保存全部设置”后，详细策略原子写入数据目录并立即用于后续请求；原生服务参数由插件初始化时读取，修改后使用插件热重载。
-
-## 日志与排查
-
-正常决策只输出两类摘要：
-
-- `因为……所以主动对话/不主动对话`；
-- `共筛选出如下工具……`。
-
-Jev 超时、网络错误、重试和最终错误也会输出。管理员诊断命令：
-
-```text
-/decision status
-/decision test
-/decision tools
-```
-
-| 现象 | 检查项 |
-| --- | --- |
-| 主 LLM 仍看到全部 Tools | 确认原生“Tool/MCP/Skill/SubAgent 决策”开启，并确认对应类别的“判断”和“过滤”都开启 |
-| 有判断但没有自动推荐 | 检查判断开关、阈值、Jev 返回，以及后置提示词中的 `{tools}` / `{mcps}` / `{skills}` / `{subagents}` |
-| 主动对话不触发 | 确认原生“主动对话”总开关；主动发起还要确认“启用私聊主动 / 启用群聊主动”至少一个为开，并检查名单模式与名单内容（白名单为空时全部不发起）；检查是否同时开启 AstrBot 原生 active_reply |
-| 主动发起不附带照片 / 视频 / 音频 | 检查多媒体总开关与对应按类型开关，确认该种类概率大于 `0`；概率只是掷骰，不保证每次命中 |
-| `send_voice` 直接返回说明 | 确认 aigen 已安装且提供 `generate_audio`，并已打开“启用生音频工具 send_voice” |
-| 拍照提示没有今日穿搭 | 打开“无今日穿搭时沿用参考图穿搭”，或先生成今日穿搭 |
-| 人际网络页面打不开 / 无数据 | 确认“人际网络”分组中的启用开关已开；旧插件数据会在首次加载时迁移到 `plugin_data/astrbot_plugin_decision/personal_network/` |
-| Jev 请求失败 | 检查 AstrBot 模型提供方中的 Decision/Jev Provider 是否可用、插件选择的 Provider ID，以及插件重试日志 |
-| Tool/MCP/Skill/SubAgent 决策页面为空 | 确认插件已启用并热重载；页面读取当前已注册 Tool、MCP、Skill 和动态 SubAgent handoff |
-| 保存后设置消失 | 检查 AstrBot `data/config` 是否可写，不要把设置文件放进插件目录 |
-
-## 来源与许可
-
-- [Virtual Life](https://github.com/FloranceYeh/astrbot_plugin_virtual_life)：按 v1.12.2（`a3dbbb7`）整合核心、模板与完整配置，保留 GPL-3.0 许可证及 [修改说明](decision/virtual_life/NOTICE.md)。
-- [Personal Network](https://github.com/FloranceYeh/astrbot_plugin_personal_network)（作者 Florance）：按 v1.1.1 整合 `storage.py`、`generation.py` 与管理页，并入后由本插件统一注册 LLM 工具、聊天命令与 WebAPI。管理页内置的 Cytoscape.js 3.33.1 按 MIT 许可证分发，许可证位于 `pages/network/vendor/`。
-- [Conversa](https://github.com/Luna-channel/astrbot_plugin_Conversa)：参考原生 CronMessageEvent / Agent、结果阶段和离线保护思路。
-- [Private Companion](https://github.com/menglimi/astrbot_plugin_private_companion)：参考候选过期、发送前复查、人格参考图结合当日穿搭的思路；后两者没有直接复制源代码。
-
-本插件按根目录 AGPL-3.0 许可分发，保留各来源的许可证与署名。
-
-## 开发检查
-
-```bash
-PYTHONPATH=. python -m pytest -q
-ruff check .
-ruff format --check main.py decision/life*.py decision/virtual_life tests/test_life*.py tests/virtual_life
-python -m py_compile main.py decision/routing.py
-git diff --check
-```
-
-原生宿主集成测试需另行设置 `DECISION_REAL_ASTRBOT_SOURCE` 指向 AstrBot 源码，并设置 `ASTRBOT_ROOT` 指向临时测试数据目录，然后单独运行 `tests/test_life_native.py`。该套测试使用真实 Builder、ToolLoopAgentRunner、工具执行器和发送阶段，模型与平台用本地替身，不提交付费任务或真实消息。浏览器测试使用本地桥接预览，不能替代服务器适配器实测。
-
-插件仓库：<https://github.com/yiyinfaith/astrbot_plugin_decision>
 
 ## 多模态理解（对话流增强 → 输入增强）
 
@@ -635,23 +563,6 @@ AstrBot 会把 `image_urls` 原样交给 Provider，很多 OpenAI 兼容端点�
 - 插件停用或热重载时取消后台理解任务并保存缓存。
 - 文件解析不执行脚本或宏；下载仅允许 http(s) 且有体积上限。
 
-### 修复与能力分级（第二轮）
-
-- **配置持久化**：`multimodal` 已注册进 `DETAIL_DEFAULTS`，WebUI 保存 → 热更新 → 重启恢复全链路可用。
-- **工具独立**：多模态工具不再依赖 `proactive_reply_enabled`；关闭开关时通过 `func_tool.remove_tool`
-  在**每次请求**上真正移除（AstrBot 没有反注册 API），工具列表也不再展示已关闭的工具。
-- **缓存身份与复用**：缓存键 = 会话 + 媒体版本 + 文件 target + 所选模型 + 分析指令 + 分析深度 + 处理策略；自动理解的通用概览可被工具调用复用，只有明确缺失的问题才增量精读，SingleFlight 会合并同一进行中的任务。
-- **跨轮追问**：后续纯文字提问会按 `mm_recall_items`（默认 3）召回本会话最近的理解摘要，受数量与长度上限约束。
-- **GIF**：改为把多帧拼成 3×3 拼图后作为**一张图**送入模型（与 AstrBot 自身的动图预览拼图思路一致），
-  模型真实获得多帧视觉内容，同时附加帧时间说明，不再只传首帧。
-- **视频**：`mm_video_agentic_rounds` 现在控制真实迭代轮次，每轮由模型给出新窗口并重新抽帧精读；
-  若模型支持音频，会同时提取音轨做转写/环境声理解并融合进结论。
-- **SSRF**：下载前解析主机并把 HTTP 连接绑定到已校验的公网地址（覆盖 DNS 重绑定），禁用环境代理和重定向，拒绝内网、回环、链路本地与元数据地址。
-- **依赖检测**：ffmpeg/ffprobe 缺失时在 WebUI 载荷与日志中明确提示；扫描版 PDF 通过 PyMuPDF 渲染页面交给视觉模型 OCR
-  （`mm_file_ocr` 默认开，`mm_file_ocr_max_pages` 默认 5），无可用视觉模型时给出明确错误。
-- **能力分级**：模型目录新增 `capability`，区分 `native`（原生支持）、`preprocessed`（预处理兼容）、`unsupported`（不可用），
-  不再仅凭声明假定可用。
-
 ### 原生视频、本地 OCR 与 Office 深度解析
 
 #### 视频策略（WebUI：多模态理解 → 视频处理策略）
@@ -667,29 +578,6 @@ API Key 与 `api_base` 直接复用 AstrBot 已配置的 Gemini Provider，不�
 未提交模型前的上传失败可回退抽帧；已经提交模型后发生超时/失败，不重新提交或改走其他收费路线。取消时同样尽力删除远端文件。
 
 自动模式是完整短片与长片预处理的混合路线，`capability.video` 使用 `preprocessed` 表达这一点；模型目录额外提供 `video_route_label`，WebUI 显示短片和长片的具体路线，不再把有 Gemini Key 等同于整条链路原生直传。
-
-#### 反向代理与 CPA 反重力渠道
-
-理解多媒体不要求网关实现 Google Files API 或 Interactions API。通用处理把图片/动图帧、视频帧与音轨、文档页图和指定区域文字交给已有模型接口：
-
-| AstrBot Provider | Base URL 示例 | 模型请求接口 | 视频策略 |
-| --- | --- | --- | --- |
-| OpenAI 兼容 | `https://your-gateway.example/v1` | `/v1/chat/completions` | 自动选择可用；也可选强制通用处理 |
-| Google Gemini | `https://your-gateway.example` | `/v1beta/models/{model}:generateContent`；流式为 `:streamGenerateContent` | 自动选择可用；不会先探测第三方 Files/Interactions，也可显式强制通用处理 |
-
-Gemini 格式的图片、音频通过 `inline_data` 发送。自动模式下，已知时长不超过短片阈值（默认 60 秒）、完整 JSON 不超过 20 MiB 的 Gemini 视频直接发送原始字节，包含原始音轨；这也支持 AstrBot 以 OpenAI Provider 配置的 Gemini 模型。长视频只发送时间戳帧图、音轨理解和按需精读窗口，绝不因使用 Google 官方地址而在自动模式上传整个长片。PDF、PPTX、DOCX、XLSX 继续使用本地解析/OCR/整页渲染和目标范围读取。完整 Files/Interactions 仅在显式“优先原生”策略下使用。视频缓存身份升级并记录处理策略与端点指纹；历史索引和数据保留。
-
-“输入增强 → 多模态理解”提供**启用流式理解**（`mm_stream_enabled`，默认开启）。支持宿主流式接口时，OpenAI 请求使用 `stream: true`，Gemini 使用 `streamGenerateContent`；关闭后使用普通非流式请求。插件只使用宿主给出的完整最终结果，不把中间片段或思考内容写入理解缓存；超时/取消会关闭流，传输失败不会自动改走另一接口重复提交。该开关保存后热更新，重载后恢复，不影响 AstrBot 主对话或 Google 原生后台任务；切换接收方式不会丢弃已有理解缓存。
-
-**Gemini 网关流式保活兼容**（`mm_gateway_openai_stream`，默认关闭）用于 New API 等同时提供 OpenAI 接口的网关。开启后，Gemini 网关的流式理解通过同一网关 `/v1/chat/completions` 提交，保留所选模型和 Key；完整短视频使用字符串形式的 `video_url` data URL，图片及音频使用对应多模态字段。Google 官方地址、非流式请求和显式 Files/Interactions 不受此开关影响。网关必须能转换这些媒体类型并正确配置模型映射。此选项在本次用户指定的生产站点已授权开启。
-
-持续保活需要网关向下游真正发送 SSE 心跳。New API rc.46 的 Gemini 原生流式分支关闭自定义 ping，并过滤上游注释；上述兼容路线使用可发送心跳的 OpenAI 分支。生产 New API 和 CPA 的流式心跳已热更新为 15 秒，CPA 同时开启首个 token 前的心跳。没有修改 New API 源码、增加常驻服务或重启现有容器。心跳避免无响应字节的等待，不取消插件配置的总超时，也不保证上游永不失败。
-
-`mm_retries` 只重试提交模型前的失败。一旦分析内任何音轨/概览/精读请求已经提交，后续超时、524、断流、空结果等都不会自动重跑整个流程；SDK 额外重试也被禁用。缺少上游幂等接口时，不能保证已经超时的请求未计费，错误信息会明确这一点。
-
-2026-10-25 在固定 CPA 反重力渠道上完成真实验收：OpenAI 格式九项媒体/文档用例全部通过；Gemini `generateContent` 的图片、音频、完整小视频与混合 PDF 四项全部通过。独立的带语音视频精读验证了音轨转录、概览和重新抽帧三次实际调用。这不保证所有代理或所有媒体输入均可用，长视频仍受时长、帧数、上下文与上游限制；插件多轮精读与 Google 服务端 Agentic Video 是两条不同路线。
-
-采用这些通用路线不需要新增 New API 插件、额外服务或放行 `/upload/v1beta/files`。网关只需已有渠道启用、模型名称/映射正确，并接受对应的图片和音频输入；价格与结算继续沿用网关现有规则。模型固定到哪条上游仍由网关路由配置决定，AstrBot 中选择同名模型不等于固定某个 New API 渠道。
 
 #### OCR 策略（WebUI：多模态理解 → OCR 策略 / 本地 OCR 引擎）
 
@@ -721,4 +609,76 @@ pip install paddleocr paddlepaddle
 
 `understand_file` 新增 `target` 参数，可指定页码、幻灯片、章节、工作表或单元格区域，只读取该部分。
 公式只读取不计算，宏与外部链接不会被执行。
+
+## 配置文件和插件更新
+
+插件代码位于：
+
+```text
+<AstrBot>/data/plugins/astrbot_plugin_decision/
+```
+
+配置不保存在插件目录。通常会保存为：
+
+```text
+<AstrBot>/data/config/astrbot_plugin_decision_config.json
+<AstrBot>/data/config/astrbot_plugin_decision_settings.json
+<AstrBot>/data/plugin_data/astrbot_plugin_decision/virtual_life/
+<AstrBot>/data/plugin_data/astrbot_plugin_decision/personal_network/
+```
+
+第一个由 AstrBot 管理原生全局配置，第二个由插件 WebUI 管理详细策略；第三个保存生活日程、长期阶段、会话计数、人格参考图及媒体提交次数；第四个保存人际网络的 sqlite 数据库、头像与导出文件。实际路径以 AstrBot 当前实例的数据目录为准。更新或覆盖插件目录不会覆盖这些配置和生活数据。
+
+WebUI 点击“保存全部设置”后，详细策略原子写入数据目录并立即用于后续请求；原生服务参数由插件初始化时读取，修改后使用插件热重载。
+
+## 日志与排查
+
+正常决策只输出两类摘要：
+
+- `因为……所以主动对话/不主动对话`；
+- `共筛选出如下工具……`。
+
+Jev 超时、网络错误、重试和最终错误也会输出。管理员诊断命令：
+
+```text
+/decision status
+/decision test
+/decision tools
+```
+
+| 现象 | 检查项 |
+| --- | --- |
+| 主 LLM 仍看到全部 Tools | 确认原生“Tool/MCP/Skill/SubAgent 决策”开启，并确认对应类别的“判断”和“过滤”都开启 |
+| 有判断但没有自动推荐 | 检查判断开关、阈值、Jev 返回，以及后置提示词中的 `{tools}` / `{mcps}` / `{skills}` / `{subagents}` |
+| 主动对话不触发 | 确认原生“主动对话”总开关；主动发起还要确认“启用私聊主动 / 启用群聊主动”至少一个为开，并检查名单模式与名单内容（白名单为空时全部不发起）；检查是否同时开启 AstrBot 原生 active_reply |
+| 主动发起不附带照片 / 视频 / 音频 | 检查多媒体总开关与对应按类型开关，确认该种类概率大于 `0`；概率只是掷骰，不保证每次命中 |
+| `send_voice` 直接返回说明 | 确认 aigen 已安装且提供 `generate_audio`，并已打开“启用生音频工具 send_voice” |
+| 拍照提示没有今日穿搭 | 打开“无今日穿搭时沿用参考图穿搭”，或先生成今日穿搭 |
+| 人际网络页面打不开 / 无数据 | 确认“人际网络”分组中的启用开关已开；旧插件数据会在首次加载时迁移到 `plugin_data/astrbot_plugin_decision/personal_network/` |
+| Jev 请求失败 | 检查 AstrBot 模型提供方中的 Decision/Jev Provider 是否可用、插件选择的 Provider ID，以及插件重试日志 |
+| Tool/MCP/Skill/SubAgent 决策页面为空 | 确认插件已启用并热重载；页面读取当前已注册 Tool、MCP、Skill 和动态 SubAgent handoff |
+| 保存后设置消失 | 检查 AstrBot `data/config` 是否可写，不要把设置文件放进插件目录 |
+
+## 来源与许可
+
+- [Virtual Life](https://github.com/FloranceYeh/astrbot_plugin_virtual_life)：按 v1.12.2（`a3dbbb7`）整合核心、模板与完整配置，保留 GPL-3.0 许可证及 [修改说明](decision/virtual_life/NOTICE.md)。
+- [Personal Network](https://github.com/FloranceYeh/astrbot_plugin_personal_network)（作者 Florance）：按 v1.1.1 整合 `storage.py`、`generation.py` 与管理页，并入后由本插件统一注册 LLM 工具、聊天命令与 WebAPI。管理页内置的 Cytoscape.js 3.33.1 按 MIT 许可证分发，许可证位于 `pages/network/vendor/`。
+- [Conversa](https://github.com/Luna-channel/astrbot_plugin_Conversa)：参考原生 CronMessageEvent / Agent、结果阶段和离线保护思路。
+- [Private Companion](https://github.com/menglimi/astrbot_plugin_private_companion)：参考候选过期、发送前复查、人格参考图结合当日穿搭的思路；后两者没有直接复制源代码。
+
+本插件按根目录 AGPL-3.0 许可分发，保留各来源的许可证与署名。
+
+## 开发检查
+
+```bash
+PYTHONPATH=. python -m pytest -q
+ruff check .
+ruff format --check main.py decision/life*.py decision/virtual_life tests/test_life*.py tests/virtual_life
+python -m py_compile main.py decision/routing.py
+git diff --check
+```
+
+原生宿主集成测试需另行设置 `DECISION_REAL_ASTRBOT_SOURCE` 指向 AstrBot 源码，并设置 `ASTRBOT_ROOT` 指向临时测试数据目录，然后单独运行 `tests/test_life_native.py`。该套测试使用真实 Builder、ToolLoopAgentRunner、工具执行器和发送阶段，模型与平台用本地替身，不提交付费任务或真实消息。浏览器测试使用本地桥接预览，不能替代服务器适配器实测。
+
+插件仓库：<https://github.com/yiyinfaith/astrbot_plugin_decision>
 
