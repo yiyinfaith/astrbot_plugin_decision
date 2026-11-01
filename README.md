@@ -662,7 +662,7 @@ Jev 超时、网络错误、重试和最终错误也会输出。管理员诊断�
 ## 来源与许可
 
 - [Virtual Life](https://github.com/FloranceYeh/astrbot_plugin_virtual_life)：参考 v1.12.2（`a3dbbb7`）整合核心、模板与完整配置，保留 GPL-3.0 许可证及 [修改说明](decision/virtual_life/NOTICE.md)。
-- [Personal Network](https://github.com/FloranceYeh/astrbot_plugin_personal_network)（作者 Florance）：参考 v1.1.1 整合 `storage.py`、`generation.py` 与管理页，并入后由本插件统一注册 LLM 工具、聊天命令与 WebAPI。管理页内置的 Cytoscape.js 3.33.1 按 MIT 许可证分发，许可证位于 `pages/network/vendor/`。
+- [Personal Network](https://github.com/FloranceYeh/astrbot_plugin_personal_network)（作者 Florance）：参考 v1.1.1 整合 `storage.py`、`generation.py` 与管理页，并入后由本插件统一注册 LLM 工具、聊天命令与 WebAPI。管理页内置的 Cytoscape.js 3.33.1 按 MIT 许可证分发，许可证位于 `pages/dashboard/vendor/cytoscape.LICENSE`。
 - [Conversa](https://github.com/Luna-channel/astrbot_plugin_Conversa)：参考原生 CronMessageEvent / Agent、结果阶段和离线保护思路。
 - [Private Companion](https://github.com/menglimi/astrbot_plugin_private_companion)：参考候选过期、发送前复查、人格参考图结合当日穿搭的思路。
 
