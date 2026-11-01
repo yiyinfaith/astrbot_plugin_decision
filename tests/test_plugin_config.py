@@ -415,6 +415,27 @@ def test_native_provider_selection_falls_back_only_when_native_value_is_empty(ho
     assert plugin._setting("decision_provider_id") == ""
 
 
+def test_native_provider_schema_uses_live_decision_provider_ids(host):
+    class NativeProvider:
+        def meta(self):
+            return SimpleNamespace(
+                id="production-jev",
+                model="jev-live",
+                type="system_one_decision",
+            )
+
+    host.config.schema = host.schema
+    host.context.provider_manager = SimpleNamespace(
+        decision_provider_insts=[NativeProvider()]
+    )
+    host.module.DecisionPlugin(host.context, host.config)
+    assert host.schema["decision_provider_id"]["options"] == ["", "production-jev"]
+    assert host.schema["decision_provider_id"]["labels"] == [
+        "使用 AstrBot 默认判断 Provider",
+        "production-jev · jev-live · system_one_decision",
+    ]
+
+
 def test_legacy_live_detail_keys_are_preserved_then_removed_from_native_config(host):
     host.config.update(jev_pre_prompt="legacy policy", proactive_whitelist=["group-1"])
     plugin = host.module.DecisionPlugin(host.context, host.config)

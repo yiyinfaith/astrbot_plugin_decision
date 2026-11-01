@@ -242,6 +242,7 @@ class DecisionPlugin(Star):
                             "Decision Engine kept the migrated JEV Provider selection but could not clean the legacy copy: %s",
                             _safe_error(exc),
                         )
+        self._refresh_native_provider_schema()
         # The host owns the JEV transport, credentials and model.  This
         # adapter only translates the plugin's questions to AstrBot's native
         # DecisionService.
@@ -639,6 +640,46 @@ class DecisionPlugin(Star):
         if key in DETAIL_DEFAULTS:
             return self._detail_settings.get(key, default)
         return self.config.get(key, default)
+
+    def _refresh_native_provider_schema(self) -> None:
+        """Populate the host config dropdown from live Decision Providers.
+
+        AstrBot's generic config renderer supports static ``options`` but does
+        not yet have a Decision-specific Provider selector.  Keep the schema
+        fallback limited to the host default, then replace it in memory with
+        the actual provider IDs exposed by the host manager.  This never writes
+        provider credentials or changes the plugin config file's shape.
+        """
+
+        schema = getattr(self.config, "schema", None)
+        if not isinstance(schema, dict):
+            return
+        field = schema.get("decision_provider_id")
+        if not isinstance(field, dict):
+            return
+        rows = decision_provider_catalog(self.context)
+        options = [""]
+        labels = ["使用 AstrBot 默认判断 Provider"]
+        subtitles = ["由 AstrBot 当前默认 Decision Provider 处理"]
+        for row in rows:
+            provider_id = str(row.get("id", "") or "").strip()
+            if not provider_id or provider_id in options:
+                continue
+            options.append(provider_id)
+            labels.append(str(row.get("name") or provider_id))
+            subtitles.append(
+                " · ".join(
+                    value
+                    for value in (
+                        str(row.get("model", "") or "").strip(),
+                        str(row.get("type", "") or "").strip(),
+                    )
+                    if value
+                )
+            )
+        field["options"] = options
+        field["labels"] = labels
+        field["subtitles"] = subtitles
 
     async def initialize(self) -> None:
         self.provider = AstrBotDecisionProvider(
@@ -3453,6 +3494,7 @@ class DecisionPlugin(Star):
     async def page_settings(self):
         from astrbot.api.web import json_response
 
+        self._refresh_native_provider_schema()
         always_keep = [str(item) for item in (self._setting("always_keep_tools", []) or [])]
         if not self._bool("always_keep_tools_customized", False):
             always_keep.extend(sorted(self._builtin_tool_names()))
@@ -3541,6 +3583,7 @@ class DecisionPlugin(Star):
     async def page_save_settings(self):
         from astrbot.api.web import error_response, json_response, request
 
+        self._refresh_native_provider_schema()
         payload = await request.json(default={})
         if not isinstance(payload, Mapping):
             return error_response("request body must be an object", status_code=400)
