@@ -11,6 +11,7 @@
   const common = {
     integration_settings: {contact:['quiet_start','quiet_end']},
     adaptive_settings: {contact:['enable','friend_min_minutes','group_min_minutes','max_interval_minutes','group_adjust_blacklist','group_adjust_users']},
+    humanization_settings: {contact:['enable','relationship_memory_enable','content_diversity_enable','group_addressing_enable','response_rhythm_enable','intent_cooldown_minutes']},
     continuity_settings: {contact:['enable','quality_enabled'],life:['state_enabled'],reminders:['topics_enabled']},
     reply_delay_settings: {contact:['enable','notify_user','max_delay_seconds','active_conversation_seconds']},
     schedule_settings: {life:['daily_schedule_generation_enable','daily_outfit_generation_enable','generate_time']},
@@ -23,7 +24,7 @@
     media_settings: {media:['enable','photo_enable','video_enable','audio_enable','image_aspect_ratio','video_aspect_ratio','video_duration','cooldown_seconds','daily_limit','proactive_billing_mode','proactive_billing_platform','proactive_billing_user_id','photo_probability','video_probability','audio_probability','photo_count_min','photo_count_max','video_count_min','video_count_max','audio_count_min','audio_count_max','audio_mode','audio_voice']}
   };
   const audienceMain = ['enable','session_blacklist','session_list','daily_hard_max'];
-  const names = {integration_settings:'免打扰', adaptive_settings:'联系频率与权限',continuity_settings:'对话连续性',reply_delay_settings:'回复节奏',schedule_settings:'每日日程与穿搭',thought_settings:'活动想法与分享',long_term_settings:'长期生活计划',smart_context_injection:'让 Bot 了解当前生活状态',personal_network_integration:'人际关系',appearance_settings:'外貌参考与补充',temporal_settings:'明确提醒与时间校验',media_settings:'照片、视频与音频',creative_pool:'日程素材与风格',prompt_settings:'模型提示词与模板',image_settings:'日程卡片外观',delivery_settings:'主动候选与发送策略',friend_settings:'私聊传统规则',group_settings:'群聊传统规则'};
+  const names = {integration_settings:'免打扰', adaptive_settings:'联系频率与权限',humanization_settings:'拟人化节奏',continuity_settings:'对话连续性',reply_delay_settings:'回复节奏',schedule_settings:'每日日程与穿搭',thought_settings:'活动想法与分享',long_term_settings:'长期生活计划',smart_context_injection:'让 Bot 了解当前生活状态',personal_network_integration:'人际关系',appearance_settings:'外貌参考与补充',temporal_settings:'明确提醒与时间校验',media_settings:'照片、视频与音频',creative_pool:'日程素材与风格',prompt_settings:'模型提示词与模板',image_settings:'日程卡片外观',delivery_settings:'主动候选与发送策略',friend_settings:'私聊传统规则',group_settings:'群聊传统规则'};
   function keysFor(key, panel, schema) {
     const all=Object.keys(schema?.[key]?.items || {});
     if (key==='friend_settings' || key==='group_settings') return panel==='advanced' ? all.filter(k=>!audienceMain.includes(k)) : [];
@@ -48,6 +49,7 @@
   }
   function enabledField(group,key,value) {
     if(group==='adaptive_settings' && value.enable===false && ['friend_min_minutes','group_min_minutes','max_interval_minutes'].includes(key)) return false;
+    if(group==='humanization_settings' && value.enable===false && key!=='enable') return false;
     if(group==='continuity_settings' && value.enable===false && key!=='enable') return false;
     if(group==='media_settings') {
       const kind=key.startsWith('photo_') || key==='image_aspect_ratio'?'photo':key.startsWith('video_')?'video':key.startsWith('audio_')?'audio':null;

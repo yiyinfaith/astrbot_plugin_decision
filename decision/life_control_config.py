@@ -38,6 +38,19 @@ def control_schema():
                 "preference_tool_enable": _field("bool", "启用联系偏好工具", True),
             },
         },
+        "humanization_settings": {
+            "type": "object", "description": "🫧 拟人化节奏",
+            "items": {
+                "enable": _field("bool", "启用拟人化节奏优化", True, "只影响普通主动候选的语气、内容多样性和时间选择；不改变硬上限、暂停、名单或明确提醒。"),
+                "relationship_memory_enable": _field("bool", "记住关系阶段", True, "根据有证据的互动缓慢变化；不会把模型猜测当成关系事实。"),
+                "content_diversity_enable": _field("bool", "避免连续使用同一种主动话题", True, "在普通问候、想法分享、生活更新和话题跟进之间做有限轮换。"),
+                "group_addressing_enable": _field("bool", "群聊对象感保护", True, "无明确 @ 或回复对象时使用群体表达，不把成员私聊信息带入群聊。"),
+                "response_rhythm_enable": _field("bool", "参考用户回复节奏", True, "只用于选择消息长度和候选时机，不突破现有频率上下限。"),
+                "intent_cooldown_minutes": _field("int", "同类主动内容冷却（分）", 240, "普通主动内容使用；明确提醒、用户手动请求和已到期话题不受此项阻断。"),
+                "relationship_decay_days": _field("int", "关系记忆衰减周期（天）", 30, "长时间没有有效互动时逐步回到中性，避免永久记住过时的亲近程度。"),
+                "rhythm_history_days": _field("int", "回复节奏参考天数", 30, "只保留粗粒度节奏，不保存完整消息副本。"),
+            },
+        },
         "temporal_settings": {
             "type": "object", "description": "🕰️ 时间承诺与未来联系",
             "items": {
@@ -74,6 +87,12 @@ def validate_control(settings):
                            ("topic_retention_days", 1, 90), ("max_open_topics", 1, 100),
                            ("temporary_quiet_minutes", 1, 1440)):
         if not low <= continuity[key] <= high:
+            raise ValueError(f"{key} 须在 {low} 到 {high} 之间")
+    human = settings["humanization_settings"]
+    for key, low, high in (("intent_cooldown_minutes", 0, 43200),
+                           ("relationship_decay_days", 1, 3650),
+                           ("rhythm_history_days", 1, 3650)):
+        if not low <= human[key] <= high:
             raise ValueError(f"{key} 须在 {low} 到 {high} 之间")
     adaptive = settings["adaptive_settings"]
     if not 1 <= adaptive["friend_min_minutes"] <= adaptive["max_interval_minutes"] <= 43200:

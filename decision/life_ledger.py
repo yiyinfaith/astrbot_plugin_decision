@@ -86,6 +86,9 @@ class LifeLedger:
             "last_sent": 0, "last_incoming": 0, "last_positive": 0,
             "unanswered": 0, "awaiting": False, "negative_applied": False,
             "feedback": "", "feedback_at": 0,
+            "relationship_score": 20.0, "relationship_updated_at": now,
+            "response_latency_seconds": 0.0, "response_samples": 0, "response_last_at": 0,
+            "recent_intents": [],
         }
         data["baseline"] = min(maximum, max(minimum, data["baseline"]))
         data["interval"] = min(maximum, max(minimum, data["interval"]))

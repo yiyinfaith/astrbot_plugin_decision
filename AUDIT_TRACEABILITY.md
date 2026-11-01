@@ -204,6 +204,22 @@ API 证据位于 VPS `/root/astrbot_backups/decision_full_audit_20261025/contact
 
 发布仅替换本轮跟踪代码，配置逐字节保持，保留全部 `data/`、人格、日程、缓存和数据库；备份、哈希 manifest、单 Decision 热重载、进程连续性和宿主带 token 的页面资产检查记录保存在 `audit041-release/`。不重启 AstrBot、容器或服务器。
 
+## 2026-11-01 主动发起人格隔离与拟人化节奏（0.4.2）
+
+本轮先修复主动状态没有完全按人格隔离的问题，再增加拟人化增强。版本继续保持 `0.4.x`。没有改变现有名单、暂停、免打扰、频率上下限、每日硬上限、明确提醒额度或计费规则。
+
+| 项目 | 实现与验收 |
+| --- | --- |
+| UMO＋人格状态隔离 | `virtual_life/core/storage.py` 增加复合会话键和旧 `sessions.json` 迁移；`proactive.py`、`life_runtime.py`、`engine.py` 所有预算、未回复和上次主动读取都使用当前人格。旧状态只迁移到其记录的人格，不合并到新人格。 |
+| 关系阶段 | `life_contacts.py` 在有证据的来信、互动质量和明确偏好上维护有界关系分数，按配置周期向中性衰减；只作为主动消息分寸提示，不改变硬规则。 |
+| 主动内容多样性 | `recent_intents` 记录实际成功主动的有限类别；相同普通类别在冷却期内被抑制，话题跟进、睡眠唤醒、明确提醒和手动请求不被错误阻断。 |
+| 群聊对象感 | `life_runtime.py` 把最近明确 @／回复对象传给 Jev，并在生成提示中禁止无对象点名、私聊信息入群和凭空猜测成员。 |
+| 回复节奏 | `life_contacts.py` 只保存粗粒度平均响应时间和样本数，超过配置历史周期自动重新采样；提示只调整消息长度和分寸，不改变频率边界。 |
+| WebUI | `humanization_settings` 加入“拟人化节奏”卡片；常用四个开关和同类冷却集中在“联系与打扰”，衰减/样本周期保留在高级搜索；状态页显示关系阶段和回复节奏。 |
+| 其他审计修正 | OCR 缺少 Tesseract 可执行程序时同时给出系统安装命令和 `pip install pytesseract`，避免诊断信息不完整。 |
+
+新增 `tests/test_humanization_042.py`，覆盖旧会话迁移、同一 UMO 切换人格后的预算隔离、关系/回复节奏、同类主动冷却和群聊无关消息隔离。Windows 全量回归为 **807 passed, 5 skipped, 12 subtests passed**，Ruff 与 diff whitespace 检查通过。真实 AstrBot 宿主集成和生产热重载在提交后单独验证；本地测试中的 Provider 和平台发送仍使用替身。
+
 ## 生产盘点与边界
 
 - 盘点到的 AstrBot 运行目录为 `/root/yiyin/AstrBot`，插件目录为 `/root/yiyin/AstrBot/data/plugins/astrbot_plugin_decision`，服务单元为 `astrbot.service`，启动方式是 `/root/.local/bin/uv run --project /root/yiyin/AstrBot /root/yiyin/AstrBot/main.py`，由 detached `screen` 托管。

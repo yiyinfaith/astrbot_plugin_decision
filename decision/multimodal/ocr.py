@@ -38,7 +38,7 @@ def _tesseract_ready() -> tuple[bool, str]:
     except ImportError:
         return False, "未安装 pytesseract（pip install pytesseract）"
     if shutil.which("tesseract") is None:
-        return False, "未安装 tesseract 可执行程序（apt install tesseract-ocr tesseract-ocr-chi-sim）"
+        return False, "未安装 tesseract 可执行程序（apt install tesseract-ocr tesseract-ocr-chi-sim）；Python 包安装命令：pip install pytesseract"
     return True, ""
 
 

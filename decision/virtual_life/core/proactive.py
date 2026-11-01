@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .models import DailyPlan, SessionState, TimelineItem
+from .storage import split_session_key
 from .utils import deterministic_int, deterministic_probability, parse_datetime
 
 
@@ -58,7 +59,9 @@ class ProactivePolicy:
                 if str(value).strip()
             ]
             if settings.get("session_blacklist", False):
-                candidates.extend(self.storage.sessions.keys())
+                for stored_key in self.storage.sessions.keys():
+                    parsed = split_session_key(stored_key)
+                    candidates.append(parsed[0] if parsed is not None else str(stored_key))
             sessions.extend(
                 umo
                 for umo in candidates
@@ -86,7 +89,8 @@ class ProactivePolicy:
         self, umo: str, persona_id: str, plan: DailyPlan, now: datetime
     ) -> SessionState:
         date_str = now.date().isoformat()
-        state = self.storage.sessions.get(umo)
+        getter = getattr(self.storage.sessions, "get_for", None)
+        state = getter(umo, persona_id) if callable(getter) else self.storage.sessions.get(umo)
         if not state or state.date != date_str:
             settings = self.settings_for(umo)
             minimum = max(0, int(settings.get("daily_budget_min", 0)))
@@ -101,16 +105,28 @@ class ProactivePolicy:
                 daily_budget=min(hard_max, base + bonus),
                 last_user_message_at=now.isoformat(),
             )
-            self.storage.sessions[umo] = state
+            setter = getattr(self.storage.sessions, "set_for", None)
+            if callable(setter):
+                setter(umo, persona_id, state)
+            else:
+                self.storage.sessions[umo] = state
         else:
             state.persona_id = persona_id
         return state
 
     def record_incoming(self, umo: str, now: datetime) -> None:
-        state = self.storage.sessions.get(umo)
+        # This compatibility method is used only by older callers that do not
+        # have a persona.  Keep the legacy/default scope explicit rather than
+        # guessing between multiple persona states.
+        getter = getattr(self.storage.sessions, "get_for", None)
+        state = getter(umo, "default") if callable(getter) else self.storage.sessions.get(umo)
         if not state:
             state = SessionState(date=now.date().isoformat(), last_user_message_at=now.isoformat())
-            self.storage.sessions[umo] = state
+            setter = getattr(self.storage.sessions, "set_for", None)
+            if callable(setter):
+                setter(umo, "default", state)
+            else:
+                self.storage.sessions[umo] = state
         state.last_user_message_at = now.isoformat()
         state.unanswered_count = 0
 

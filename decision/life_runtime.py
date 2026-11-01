@@ -98,7 +98,7 @@ class JevLifePolicy(ProactivePolicy):
     """Keep unanswered counts across midnight and persona changes."""
 
     def ensure_state(self, umo, persona_id, plan, now):
-        old = self.storage.sessions.get(umo)
+        old = self.storage.sessions.get_for(umo, persona_id)
         old_unanswered = old.unanswered_count if old else 0
         old_incoming = old.last_user_message_at if old else ""
         old_proactive = old.last_proactive_at if old else ""
@@ -162,6 +162,7 @@ class LifeRuntime(VirtualLifeBase):
         self.delivery = LifeDelivery(self, self.ledger)
         self._contact_attempts = {}
         self._delivery_contact_ids = {}
+        self._delivery_persona_ids = {}
 
     def spawn(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -195,9 +196,12 @@ class LifeRuntime(VirtualLifeBase):
     async def initialize(self):
         await self.storage.load()
         await self.long_term.load()
-        for umo, state in self.storage.sessions.items():
-            if state.persona_id:
-                self.contacts.seed_legacy(umo, state.persona_id, state, self._now())
+        for key, state in self.storage.sessions.items():
+            from .virtual_life.core.storage import split_session_key
+
+            parsed = split_session_key(key)
+            if parsed and state.persona_id:
+                self.contacts.seed_legacy(parsed[0], state.persona_id, state, self._now())
         self._loaded = True
         await self.image_renderer.cleanup()
         if self.enabled:
@@ -258,6 +262,7 @@ class LifeRuntime(VirtualLifeBase):
         self._completed_delivery_keys.clear()
         self._contact_attempts.clear()
         self._delivery_contact_ids.clear()
+        self._delivery_persona_ids.clear()
         self.audit.clear()
         if self._loaded:
             await super().terminate()
@@ -443,10 +448,15 @@ class LifeRuntime(VirtualLifeBase):
             )
         self.offline.pop(umo.split(":", 1)[0], None)
         now = self._now()
-        state = self.storage.sessions.get(umo)
+        persona = await self.personas.resolve(umo)
+        state = self.storage.sessions.get_for(umo, persona.id)
         if state is None:
-            state = SessionState(date=now.date().isoformat(), last_user_message_at=now.isoformat())
-            self.storage.sessions[umo] = state
+            state = SessionState(
+                date=now.date().isoformat(),
+                persona_id=persona.id,
+                last_user_message_at=now.isoformat(),
+            )
+            self.storage.sessions.set_for(umo, persona.id, state)
         state.last_user_message_at = now.isoformat()
         # In a group, unrelated human conversation is not a reply to the Bot.
         targeted = ":FriendMessage:" in umo
@@ -563,7 +573,10 @@ class LifeRuntime(VirtualLifeBase):
         return (await self.personas.resolve(umo)).id == persona_id
 
     def confirm_delivery(self, umo):
-        state = self.storage.sessions[umo]
+        persona_id = self._delivery_persona_ids.get(umo, "")
+        state = self.storage.sessions.get_for(umo, persona_id)
+        if state is None:
+            raise RuntimeError("主动发起确认时找不到当前人格的会话状态")
         self.policy.record_delivery(state, self._now())
         self.contacts.delivered(umo, state.persona_id, self._now(), self._delivery_contact_ids.get(umo))
 
@@ -617,6 +630,11 @@ class LifeRuntime(VirtualLifeBase):
                     current_item = timeline_item_at(plan, now)
                     if current_item and (current_item.state == "sleep" or current_item.availability == "blocked") and trigger != "sleep":
                         return False, "sleeping or unavailable"
+                intent_allowed, intent_reason = self.contacts.intent_allowed(
+                    umo, persona.id, intent, trigger, now
+                )
+                if not intent_allowed:
+                    return False, intent_reason
                 decision = self.policy.evaluate(
                     umo=umo,
                     state=state,
@@ -630,6 +648,7 @@ class LifeRuntime(VirtualLifeBase):
                     return False, decision.reason
                 try:
                     self._delivery_contact_ids[umo] = self.ledger.new_id()
+                    self._delivery_persona_ids[umo] = persona.id
                     delivered = await self._deliver(
                         umo,
                         persona,
@@ -639,6 +658,7 @@ class LifeRuntime(VirtualLifeBase):
                         self._conversation_generation(umo),
                     )
                     if delivered and trigger != "manual":
+                        self.contacts.record_intent(umo, persona.id, intent, trigger, self._now())
                         self._completed_delivery_keys[delivery_key] = time.monotonic()
                         if len(self._completed_delivery_keys) > 1000:
                             oldest = sorted(
@@ -649,6 +669,7 @@ class LifeRuntime(VirtualLifeBase):
                 finally:
                     self._sleep_sessions().discard(umo)
                     self._delivery_contact_ids.pop(umo, None)
+                    self._delivery_persona_ids.pop(umo, None)
                 return delivered, "sent" if delivered else "Jev 未通过或候选已失效"
         except PlatformUnavailableError as exc:
             failures += 1
@@ -714,6 +735,23 @@ class LifeRuntime(VirtualLifeBase):
         }
         contact = self.contacts.summary(umo, persona.id, now)
         state["contact_control"] = contact
+        human = self.config.get("humanization_settings", {}) or {}
+        if human.get("response_rhythm_enable", True):
+            state["response_rhythm_rule"] = (
+                "用户回复较快时可以自然多说一点；回复较慢时优先短消息并留出空间，"
+                "不能因此突破频率上限或把未回复当成已读。"
+            )
+        if ":GroupMessage:" in umo and human.get("group_addressing_enable", True):
+            state["group_addressing_rule"] = (
+                "这是群聊。只有最近资料中明确出现的 @ 或回复对象才可以被直接称呼；"
+                "没有明确对象时使用群体表达，不引用任何成员私聊信息。"
+            )
+            state["explicit_group_targets"] = sorted({
+                str(target)
+                for row in observed
+                for target in row.get("targets", [])
+                if str(target).strip()
+            })
         topic = self.conversation.due_topic(umo, persona.id) if self.config["continuity_settings"]["enable"] and self.config["continuity_settings"]["topics_enabled"] else None
         thought = self.ideas.thought(umo, persona.id) if self.config["thought_settings"]["enable"] else None
         state["follow_up_candidate"] = topic
@@ -759,6 +797,16 @@ class LifeRuntime(VirtualLifeBase):
             "\n这是内部主动发起事件，请沿用当前 AstrBot 人格。不要把触发说明当作用户说过的话。"
         )
         prompt += "\n[程序记录的联系状态，必须遵守]\n" + json.dumps(contact, ensure_ascii=False)
+        if human.get("relationship_memory_enable", True) and contact.get("relationship"):
+            prompt += "\n[关系阶段仅用于调整分寸，不得编造关系事实]\n" + json.dumps(contact["relationship"], ensure_ascii=False)
+        if human.get("response_rhythm_enable", True) and contact.get("response_rhythm"):
+            prompt += "\n[用户回复节奏，仅用于调整消息长度和时机]\n" + json.dumps(contact["response_rhythm"], ensure_ascii=False)
+        if ":GroupMessage:" in umo and human.get("group_addressing_enable", True):
+            prompt += (
+                "\n[群聊对象边界]\n没有明确 @ 或回复对象时只使用群体表达；"
+                "不要把私聊内容带入群聊，不要凭空点名成员。"
+            )
+            prompt += "\n[最近明确出现的群聊对象]\n" + json.dumps(state.get("explicit_group_targets", []), ensure_ascii=False)
         continuous_state = self.life_state.current(persona.id, plan, now)
         if continuous_state:
             prompt += "\n[当前活动的连续状态，不能推断真实外部操作完成]\n" + json.dumps(continuous_state, ensure_ascii=False)
@@ -890,9 +938,12 @@ class LifeRuntime(VirtualLifeBase):
                 if umo is None or key.startswith(f"pvd:{self._umo_hash(umo)}:")
             ],
             "sessions": {
-                key: value.to_dict()
+                key: value.to_dict() | {
+                    "umo": key.rsplit("\x00", 1)[0] if "\x00" in key else key,
+                    "persona": value.persona_id,
+                }
                 for key, value in self.storage.sessions.items()
-                if umo is None or key == umo
+                if umo is None or key.rsplit("\x00", 1)[0] == umo
             },
             "contact_profiles": self._contact_profiles(umo),
             "future_contacts": [self.temporal.public_task(t, self._now()) | {"umo": t["umo"], "persona": t["persona"]} for t in self.ledger.tasks(umo, limit=100)],

@@ -855,7 +855,7 @@ class VirtualLifeBase:
         elif reason == "agent task active":
             run_at = now + timedelta(minutes=30)
         elif reason == "conversation is not idle enough":
-            state = self.storage.sessions.get(umo)
+            state = self.storage.sessions.get_for(umo, plan.persona_id)
             delivery = self.config.get("delivery_settings", {}) or {}
             idle_required = max(0, int(delivery.get("minimum_idle_for_window_minutes", 20)))
             activity_times = []
@@ -868,7 +868,7 @@ class VirtualLifeBase:
             target = max(activity_times) + timedelta(minutes=idle_required)
             run_at = max(target, now) + timedelta(minutes=random.randint(1, 5))
         elif reason == "cooldown active":
-            state = self.storage.sessions.get(umo)
+            state = self.storage.sessions.get_for(umo, plan.persona_id)
             if not state or not state.last_proactive_at:
                 return None
             settings = self.policy.settings_for(umo)

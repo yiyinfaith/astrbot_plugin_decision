@@ -11,6 +11,74 @@ from typing import Any
 
 from .models import DailyPlan, ScheduleRequirement, SessionState
 
+SESSION_KEY_SEPARATOR = "\x00"
+
+
+def session_key(umo: str, persona_id: str) -> str:
+    """Return the durable key for one conversation and one persona.
+
+    UMO values are platform supplied strings; a NUL cannot occur in a valid
+    UMO, so it is a safe separator that cannot collide with a user/persona
+    value.  The old sessions.json used bare UMO keys and is migrated on load.
+    """
+
+    return f"{str(umo)}{SESSION_KEY_SEPARATOR}{str(persona_id or 'default')}"
+
+
+def split_session_key(value: str) -> tuple[str, str] | None:
+    if SESSION_KEY_SEPARATOR not in str(value):
+        return None
+    umo, persona = str(value).rsplit(SESSION_KEY_SEPARATOR, 1)
+    return (umo, persona or "default") if umo else None
+
+
+class SessionStore(dict[str, SessionState]):
+    """Persona-scoped session map with a narrow legacy lookup fallback.
+
+    The fallback keeps older integrations/tests that access ``sessions[umo]``
+    working while runtime code uses ``get_for``/``set_for`` exclusively.  It
+    only returns a bare-UMO value when exactly one persona state exists, so it
+    can never silently choose between two personas.
+    """
+
+    def key_for(self, umo: str, persona_id: str) -> str:
+        return session_key(umo, persona_id)
+
+    def get_for(self, umo: str, persona_id: str, default=None):
+        value = dict.get(self, session_key(umo, persona_id))
+        if value is not None:
+            return value
+        # Compatibility for callers that inserted a pre-migration bare UMO
+        # key directly into the map.  It is only accepted when its recorded
+        # persona matches the requested scope.
+        legacy = dict.get(self, str(umo))
+        if legacy is not None and (legacy.persona_id or "default") == str(persona_id or "default"):
+            return legacy
+        return default
+
+    def set_for(self, umo: str, persona_id: str, value: SessionState):
+        self[session_key(umo, persona_id)] = value
+
+    def _legacy_match(self, umo: str):
+        prefix = f"{str(umo)}{SESSION_KEY_SEPARATOR}"
+        matches = [value for key, value in dict.items(self) if key.startswith(prefix)]
+        return matches[0] if len(matches) == 1 else None
+
+    def __getitem__(self, key):
+        try:
+            return dict.__getitem__(self, key)
+        except KeyError:
+            value = self._legacy_match(str(key))
+            if value is None:
+                raise
+            return value
+
+    def get(self, key, default=None):
+        value = dict.get(self, key)
+        if value is not None:
+            return value
+        return self._legacy_match(str(key)) or default
+
 
 class JsonRepository:
     def __init__(self, path: Path, default: dict[str, Any]):
@@ -66,7 +134,7 @@ class PluginStorage:
         )
         self.plans: dict[str, DailyPlan] = {}
         self.schedule_requirements: dict[str, ScheduleRequirement] = {}
-        self.sessions: dict[str, SessionState] = {}
+        self.sessions: SessionStore = SessionStore()
 
     async def load(self) -> None:
         plans = await self.plans_repo.load()
@@ -84,10 +152,22 @@ class PluginStorage:
                 self.schedule_requirements[requirement.id] = requirement
             except (TypeError, ValueError):
                 continue
-        self.sessions = {
-            key: SessionState.from_dict(value)
-            for key, value in sessions.get("sessions", {}).items()
-        }
+        self.sessions = SessionStore()
+        for raw_key, value in sessions.get("sessions", {}).items():
+            try:
+                state = SessionState.from_dict(value)
+            except (TypeError, ValueError):
+                continue
+            # Legacy files keyed states by UMO.  Their stored persona_id is
+            # the only safe migration scope; never merge a legacy state into a
+            # newly selected persona.
+            parsed = split_session_key(str(raw_key))
+            if parsed is None:
+                umo, persona = str(raw_key), state.persona_id or "default"
+            else:
+                umo, persona = parsed
+            state.persona_id = persona
+            self.sessions.set_for(umo, persona, state)
 
     @staticmethod
     def plan_key(date_str: str, persona_id: str) -> str:
