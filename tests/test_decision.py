@@ -887,12 +887,7 @@ def test_public_schema_contains_only_global_settings_and_master_switches():
         (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
     )
     assert set(schema) == {
-        "provider",
-        "base_url",
-        "systemone_path",
-        "api_key",
-        "model",
-        "timeout_sec",
+        "decision_provider_id",
         "retries",
         "retry_backoff_seconds",
         "model_context_tokens",
@@ -911,7 +906,8 @@ def test_public_schema_contains_only_global_settings_and_master_switches():
     assert schema["retry_backoff_seconds"]["default"] == 0.0
     assert "默认 1" in schema["retries"]["hint"]
     assert schema["model_context_tokens"]["default"] == 32000
-    assert schema["timeout_sec"]["default"] == 5.0
+    assert schema["decision_provider_id"]["options"][0] == ""
+    assert "请求超时" not in str(schema)
     detailed_fields = {
         "jev_pre_prompt",
         "main_llm_post_prompt",

@@ -1,8 +1,8 @@
 # jev决策综合插件
 
-当前版本 **0.4.2**；后续发布继续使用 **0.4.x** 版本号。
+当前版本 **0.4.3**；后续发布继续使用 **0.4.x** 版本号。
 
-`jev决策综合插件` 是一个适用于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的 Jev/SystemOne 决策插件。它在 AstrBot 把请求交给主 LLM 之前，先判断当前场景真正需要哪些 Tool、MCP 工具、Skill 和 SubAgent，必要时过滤掉无关能力，或者把候选写入主 LLM 的推荐提示词；它也能判断机器人是否适合接话，并为当前 AstrBot 人格生成日程、穿搭与长期生活阶段，在指定会话中经 Jev 判断后主动联系。
+`jev决策综合插件` 是一个适用于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的 AstrBot 原生 JEV 决策插件。它在 AstrBot 把请求交给主 LLM 之前，先判断当前场景真正需要哪些 Tool、MCP 工具、Skill 和 SubAgent，必要时过滤掉无关能力，或者把候选写入主 LLM 的推荐提示词；它也能判断机器人是否适合接话，并为当前 AstrBot 人格生成日程、穿搭与长期生活阶段，在指定会话中经 Jev 判断后主动联系。
 
 最终回答、工具执行和人格沿用 AstrBot 原生 Agent。新增的虚拟生活负责维护日程与状态，由 Jev 判断主动发起是否合适；拍照、拍视频与生音频统一通过 aigen 的公开工具接口生成。原独立的人际网络插件已并入本插件，人物、关系与共同经历按人格保存，并在对话前注入关系上下文。插件不会替换 AstrBot 的人格提示词，也不会覆盖其他插件追加到 system prompt 的内容。
 
@@ -10,18 +10,18 @@
 
 这个插件有两层配置：
 
-- AstrBot 原生插件配置页只放全局服务参数和三个总开关。
+- AstrBot 原生插件配置页只放 JEV Provider 选择、重试/上下文参数和三个总开关。
 - 插件详情页 WebUI 放 Tool、MCP、Skill、SubAgent、提示词、消息接话范围、主动发起开关与名单、虚拟生活、多媒体生成、外貌参考图、人际网络和详细策略。
 
 安装后的推荐顺序是：
 
 1. 安装并启用插件。
-2. 在 AstrBot 原生配置页填写 Jev 服务地址、路径、API 密钥和模型。
+2. 在 AstrBot「模型提供方」中配置原生 Decision/Jev Provider；插件配置页或插件 WebUI 只选择 Provider，不填写地址、路径、密钥、模型或请求超时。
 3. 打开需要使用的总开关：“Tool/MCP/Skill/SubAgent 决策”“主动对话”“对话流增强”。
 4. 进入插件 WebUI，保存 Tool/MCP/Skill/SubAgent 和主动对话的详细规则。
 5. 用 AstrBot 的插件热重载使原生全局参数重新初始化；WebUI 详细设置保存后会立即用于后续请求。
 
-服务地址默认留空，不会预置任何第三方地址。API 密钥只应填写在 AstrBot 的密钥字段中，不要写进 README、截图、日志或 Git 提交。
+JEV 的地址、路径、密钥、模型和 Provider 级超时全部由 AstrBot 管理。插件不会读取、保存或记录这些连接字段；插件的最大重试次数和重试间隔只负责在 AstrBot DecisionService 调用失败后进行外层重试。
 
 ## 功能概览
 
@@ -146,24 +146,18 @@ AstrBot 原生插件配置页中的项目如下：
 
 | 配置项 | 默认值 | 作用 |
 | --- | ---: | --- |
-| 决策服务 | `systemone_jev` | 当前使用的决策 Provider |
-| 服务地址 | 空 | Jev 服务基础 URL，例如 `https://example.com` |
-| API 路径 | `/v1/systemone` | SystemOne 请求路径 |
-| API 密钥 | 空 | Jev 服务密钥，AstrBot 会遮罩保存 |
-| Jev 模型 | `jev-latest` | 发送给服务端的模型名 |
-| 请求超时 | `5` 秒 | 每次 Jev 请求的超时时间 |
-| 最大重试次数 | `1` | 首次失败后的额外重试次数；`0` 表示不重试 |
-| 重试间隔 | `0` 秒 | 默认失败后立即重试 |
+| Jev 模型提供商 | 空 | 从 AstrBot 已配置的原生 Decision/Jev Provider 中选择；留空使用 AstrBot 默认判断 Provider |
+| 最大重试次数 | `1` | AstrBot DecisionService 失败后的额外重试次数；`0` 表示不重试 |
+| 重试间隔 | `0` 秒 | 外层重试之间的等待时间 |
 | 上下文上限 | `32000` Token | 主动对话超限时裁剪旧历史；Tool/MCP/Skill/SubAgent 超限时分批 |
 | 上下文消息数 | `8` | Tool/MCP/Skill/SubAgent 判断使用的最多历史消息数 |
 | 上下文字符数 | `6000` | Tool/MCP/Skill/SubAgent 判断状态中的历史字符上限 |
 | Tool/MCP/Skill/SubAgent 决策 | 开启 | 整个 Tool/MCP/Skill/SubAgent 决策链总开关，不影响主动对话 |
-| 主动对话 | 关闭 | 消息接话与主动发起的模块总开关；主动发起本身还要由 WebUI 的“启用私聊主动 / 启用群聊主动”决定，详细规则在 WebUI |
-| 对话流增强 | 开启 | 输入增强和输出增强的总开关，详细配置在 WebUI |
+| 主动对话 | 关闭 | 消息接话与主动发起的模块总开关 |
+| 对话流增强 | 开启 | 输入增强和输出增强的总开关 |
 
-服务地址和 API 路径会直接拼接成请求地址。服务地址填写 `https://example.com` 时，API 路径填写 `/v1/systemone`，不要把完整路径重复填写两次。
 
-SystemOne 客户端默认只对超时、网络错误、429 和 5xx 重试；401/403、其他 4xx 和响应解析错误不会盲目重试。客户端会把单次请求超时至少限制为 1 秒。
+插件不再拼接 JEV URL，也不接触 Provider 密钥。连接超时、Provider 级重试和模型选择由 AstrBot 原生 Decision Provider 负责；插件保留的重试参数只包裹原生 DecisionService 调用。
 
 ## 第二步：配置插件 WebUI
 
@@ -610,7 +604,7 @@ Jev 超时、网络错误、重试和最终错误也会输出。管理员诊断�
 | `send_voice` 直接返回说明 | 确认 aigen 已安装且提供 `generate_audio`，并已打开“启用生音频工具 send_voice” |
 | 拍照提示没有今日穿搭 | 打开“无今日穿搭时沿用参考图穿搭”，或先生成今日穿搭 |
 | 人际网络页面打不开 / 无数据 | 确认“人际网络”分组中的启用开关已开；旧插件数据会在首次加载时迁移到 `plugin_data/astrbot_plugin_decision/personal_network/` |
-| Jev 请求失败 | 检查服务地址、API 路径、API 密钥、模型和重试日志 |
+| Jev 请求失败 | 检查 AstrBot 模型提供方中的 Decision/Jev Provider 是否可用、插件选择的 Provider ID，以及插件重试日志 |
 | Tool/MCP/Skill/SubAgent 决策页面为空 | 确认插件已启用并热重载；页面读取当前已注册 Tool、MCP、Skill 和动态 SubAgent handoff |
 | 保存后设置消失 | 检查 AstrBot `data/config` 是否可写，不要把设置文件放进插件目录 |
 

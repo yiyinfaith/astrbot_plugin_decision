@@ -217,12 +217,7 @@ def test_life_job_limit_evicts_a_finished_job_first(host):
 
 def test_native_schema_contains_only_globals_and_module_switches(host):
     assert set(host.schema) == {
-        "provider",
-        "base_url",
-        "systemone_path",
-        "api_key",
-        "model",
-        "timeout_sec",
+        "decision_provider_id",
         "retries",
         "retry_backoff_seconds",
         "model_context_tokens",
@@ -232,7 +227,7 @@ def test_native_schema_contains_only_globals_and_module_switches(host):
         "proactive_reply_enabled",
         "conversation_flow_enabled",
     }
-    assert not (host.schema.keys() & host.module.DETAIL_DEFAULTS.keys())
+    assert (host.schema.keys() & host.module.DETAIL_DEFAULTS.keys()) == {"decision_provider_id"}
 
 
 @pytest.mark.asyncio
@@ -267,7 +262,7 @@ async def test_save_reload_keeps_native_config_clean_and_webui_settings_intact(h
     assert host.path.parent == Path(host.config.config_path).parent
     assert not host.path.is_relative_to(ROOT)
     persisted = json.loads(host.path.read_text(encoding="utf-8"))
-    assert not (persisted.keys() & host.schema.keys())
+    assert (persisted.keys() & host.schema.keys()) == {"decision_provider_id"}
     reloaded = host.module.DecisionPlugin(host.context, host.config)
     settings = await reloaded.page_settings()
     assert settings["jev_pre_prompt"] == "custom policy"
@@ -281,6 +276,24 @@ async def test_save_reload_keeps_native_config_clean_and_webui_settings_intact(h
     assert settings["always_keep_tools"] == ["jev_decide"]
     assert settings["always_keep_subagents"] == ["agent_alpha"]
     assert host.config == original
+
+
+@pytest.mark.asyncio
+async def test_provider_save_failure_rolls_back_detail_and_native_selection(host):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    original_detail = copy.deepcopy(plugin._detail_settings)
+    original_native = host.config.get("decision_provider_id")
+    host.body.update(
+        always_keep_tools=[],
+        decision_provider_id="",
+    )
+
+    host.config.save_config = Mock(side_effect=OSError("simulated native write failure"))
+    result = await plugin.page_save_settings()
+
+    assert result["status_code"] == 500
+    assert host.config["decision_provider_id"] == original_native
+    assert plugin._detail_settings == original_detail
 
 
 @pytest.mark.asyncio
@@ -376,13 +389,30 @@ async def test_detail_file_cannot_override_globals_or_module_switches(host):
         encoding="utf-8",
     )
     plugin = host.module.DecisionPlugin(host.context, host.config)
-    assert plugin._setting("model") == "jev-latest"
+    assert plugin._setting("model") is None
     settings = await plugin.page_settings()
     assert settings["jev_pre_prompt"] == "my policy"
     assert settings["proactive_reply_enabled"] is False
     host.config["proactive_reply_enabled"] = True
     assert (await plugin.page_settings())["proactive_reply_enabled"] is True
     assert set(host.config) == set(host.schema)
+
+
+def test_native_provider_selection_falls_back_only_when_native_value_is_empty(host):
+    host.path.parent.mkdir(parents=True)
+    host.path.write_text(
+        json.dumps({"decision_provider_id": "legacy-jev"}),
+        encoding="utf-8",
+    )
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    assert plugin._setting("decision_provider_id") == "legacy-jev"
+
+    host.config["decision_provider_id"] = "native-jev"
+    assert plugin._setting("decision_provider_id") == "native-jev"
+
+    host.config["decision_provider_id"] = ""
+    plugin._detail_settings["decision_provider_id"] = ""
+    assert plugin._setting("decision_provider_id") == ""
 
 
 def test_legacy_live_detail_keys_are_preserved_then_removed_from_native_config(host):
@@ -723,7 +753,7 @@ async def test_dynamic_subagent_is_listed_saved_and_restored_without_global_regi
     settings = await reloaded.page_settings()
     assert settings["always_keep_subagents"] == [agent.name]
     assert settings["always_keep_recommend_subagents"] == [agent.name]
-    assert not set(host.module.DETAIL_DEFAULTS).intersection(host.config)
+    assert set(host.module.DETAIL_DEFAULTS).intersection(host.config) == {"decision_provider_id"}
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,6 @@
-from .systemone import SystemOneProvider
+from .astrbot import AstrBotDecisionProvider, decision_provider_catalog
 
-__all__ = ["SystemOneProvider"]
+__all__ = [
+    "AstrBotDecisionProvider",
+    "decision_provider_catalog",
+]

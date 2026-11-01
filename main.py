@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import math
 import os
@@ -47,7 +48,10 @@ from .decision.proactive import (
     parse_noul_scores,
     text_matches_prefix,
 )
-from .decision.providers.systemone import SystemOneProvider
+from .decision.providers.astrbot import (
+    AstrBotDecisionProvider,
+    decision_provider_catalog,
+)
 from .decision.routing import (
     DECISION_TOOL_NAME,
     DEFAULT_MAIN_LLM_POST_PROMPT,
@@ -122,6 +126,11 @@ DEFAULT_POLICY = (
     "不要生成最终回答，不要执行工具，不要发明候选名称。"
 )
 DETAIL_DEFAULTS: dict[str, Any] = {
+    # AstrBot's config renderer currently only exposes a chat-completion
+    # ProviderSelector.  Keep the native Decision Provider choice in this
+    # plugin's dashboard, where it is populated from AstrBot's live decision
+    # Provider instances and can therefore never select a chat model by mistake.
+    "decision_provider_id": "",
     "message_interjection_enabled": True,
     # Multi-modal understanding lives under 对话流增强 → 输入增强. It is a
     # first-class detail section so load, save and reload all see it.
@@ -170,7 +179,7 @@ class DecisionFunctionTool(FunctionTool):
     PLUGIN_NAME,
     "yiyinfaith",
     "jev决策综合插件：用 Jev 判断 Tool、MCP、Skill、SubAgent 和主动对话，并保留 AstrBot 主 LLM 的最终控制权。",
-    "0.4.2",
+    "0.4.3",
 )
 class DecisionPlugin(Star):
     """AstrBot integration layer for a provider-neutral decision engine."""
@@ -181,9 +190,17 @@ class DecisionPlugin(Star):
         self.config = config
         self._settings_path = self._get_settings_path(config)
         self._detail_settings = self._load_detail_settings()
+        legacy_provider_id = self._detail_settings.get("decision_provider_id")
         # AstrBot also renders live config keys. Never merge WebUI settings
         # into this framework-owned object, even only in memory.
-        legacy = {key: config[key] for key in DETAIL_DEFAULTS if key in config}
+        # decision_provider_id is also exposed in AstrBot's native plugin
+        # schema. Preserve a legacy dashboard selection until it has been
+        # migrated into that native field.
+        legacy = {
+            key: config[key]
+            for key in DETAIL_DEFAULTS
+            if key != "decision_provider_id" and key in config
+        }
         if legacy:
             try:
                 self._save_detail_settings({**legacy, **self._detail_settings})
@@ -199,7 +216,36 @@ class DecisionPlugin(Star):
             else:
                 for key in legacy:
                     config.pop(key, None)
-        self.provider: SystemOneProvider | None = None
+        native_provider_id = str(config.get("decision_provider_id", "") or "").strip()
+        legacy_provider_id = str(legacy_provider_id or "").strip()
+        if not native_provider_id and legacy_provider_id:
+            # One-time migration for a provider selected by older WebUI builds.
+            # Once copied into AstrBot's native config, clearing that config
+            # value later remains an explicit request to use AstrBot's default.
+            config["decision_provider_id"] = legacy_provider_id
+            save_config = getattr(config, "save_config", None)
+            if callable(save_config):
+                try:
+                    save_config()
+                except Exception as exc:
+                    logger.warning(
+                        "Decision Engine could not persist the migrated JEV Provider selection: %s",
+                        _safe_error(exc),
+                    )
+                else:
+                    migrated_settings = dict(self._detail_settings)
+                    migrated_settings.pop("decision_provider_id", None)
+                    try:
+                        self._save_detail_settings(migrated_settings)
+                    except OSError as exc:
+                        logger.warning(
+                            "Decision Engine kept the migrated JEV Provider selection but could not clean the legacy copy: %s",
+                            _safe_error(exc),
+                        )
+        # The host owns the JEV transport, credentials and model.  This
+        # adapter only translates the plugin's questions to AstrBot's native
+        # DecisionService.
+        self.provider: AstrBotDecisionProvider | None = None
         self._ready = False
         self._active_reply_warning_emitted = False
         self._output_runtime: Any | None = None
@@ -227,7 +273,7 @@ class DecisionPlugin(Star):
             name=DECISION_TOOL_NAME,
             description=(
                 "Use the configured Decision Engine for one fast structured noul, choice, "
-                "or score judgment. It currently uses Jev/SystemOne and never executes a tool."
+                "or score judgment. It uses AstrBot native JEV and never executes a tool."
             ),
             parameters=decision_tool_parameters(),
             handler=self._run_decision_tool,
@@ -578,37 +624,39 @@ class DecisionPlugin(Star):
         self._detail_settings = payload
 
     def _setting(self, key: str, default: Any = None) -> Any:
+        if key == "decision_provider_id":
+            # A non-empty native value is authoritative.  An empty schema
+            # default can coexist with a Provider ID saved by an older
+            # dashboard, so retain that legacy value until the dashboard
+            # writes an explicit clear to both stores.
+            native_value = self.config.get(key, default)
+            if isinstance(native_value, str) and native_value.strip():
+                return native_value
+            detail_value = self._detail_settings.get(key, default)
+            if isinstance(detail_value, str) and detail_value.strip():
+                return detail_value
+            return native_value if key in self.config else detail_value
         if key in DETAIL_DEFAULTS:
             return self._detail_settings.get(key, default)
         return self.config.get(key, default)
 
     async def initialize(self) -> None:
-        provider_name = str(self._setting("provider", "systemone_jev"))
-        if provider_name != "systemone_jev":
-            logger.warning(
-                "Decision Engine provider %s is unavailable; plugin stays fail-open.", provider_name
-            )
-            await self._configure_output_runtime()
-            return
-        self.provider = SystemOneProvider(
-            base_url=str(self._setting("base_url", "")),
-            path=str(self._setting("systemone_path", "/v1/systemone")),
-            api_key=str(self._setting("api_key", "")),
-            model=str(self._setting("model", "jev-latest")),
-            timeout_sec=self._float("timeout_sec", 5.0),
+        self.provider = AstrBotDecisionProvider(
+            self.context,
+            provider_id=str(self._setting("decision_provider_id", "") or ""),
             retries=self._int("retries", 1),
             retry_backoff_sec=self._float("retry_backoff_seconds", 0.0),
             retry_logger=self._log_provider_retry,
         )
-        # Create the reusable session during plugin initialization. A missing key
-        # is reported only as a configuration warning and does not break AstrBot.
-        try:
-            await self.provider.start()
-        except Exception:
+        self._ready = self.provider.configured
+        if not self._ready:
             logger.warning(
-                "Decision Engine could not initialize its HTTP client; calls will fail open."
+                "Decision Engine 未找到 AstrBot 原生 JEV DecisionService；插件保持 fail-open。"
             )
-        self._ready = True
+        elif not decision_provider_catalog(self.context):
+            logger.warning(
+                "Decision Engine 未找到 AstrBot 原生 JEV Provider；请在 AstrBot 模型提供方中配置并选择。"
+            )
         await self._configure_output_runtime()
         # Multi-modal understanding is independent of 主动对话: its tools and
         # auto-understanding have their own switches.
@@ -617,10 +665,8 @@ class DecisionPlugin(Star):
         except Exception as exc:
             logger.warning("Decision Engine 多模态初始化失败：%s", _safe_error(exc))
         await self._configure_life_runtime()
-        if not self.provider.api_key:
-            logger.warning(
-                "Decision Engine API key is empty; tool filtering and proactive decisions are disabled."
-            )
+        # Provider credentials are intentionally never inspected here. They
+        # belong exclusively to AstrBot's native provider manager.
 
     async def _configure_output_runtime(self) -> None:
         """Enable the vendored output pipeline only when explicitly selected."""
@@ -1188,7 +1234,6 @@ class DecisionPlugin(Star):
             result = await self.provider.evaluate(
                 state=state,
                 questions=questions,
-                model=str(self._setting("model", "jev-latest")),
             )
             self._last_call_latency_ms = (time.perf_counter() - started) * 1000
             return result
@@ -2280,9 +2325,7 @@ class DecisionPlugin(Star):
             output = (
                 f"Tool/MCP/Skill/SubAgent decision: {'enabled' if self._bool('tools_subagents_decision_enabled', True) else 'disabled'}\n"
                 f"proactive_reply={self._bool('proactive_reply_enabled', False)}\n"
-                f"provider={self._setting('provider', 'systemone_jev')}\n"
-                f"endpoint={self._setting('base_url', '')}{self._setting('systemone_path', '/v1/systemone')}\n"
-                f"model={self._setting('model', 'jev-latest')}\n"
+                f"jev_provider_id={self._setting('decision_provider_id', '') or 'AstrBot default'}\n"
                 f"tool_filter={self._bool('tool_filter_enabled', True)} mcp_filter={self._bool('mcp_filter_enabled', True)} skill_filter={self._bool('skill_filter_enabled', True)} subagent_filter={self._bool('subagent_filter_enabled', False)} "
                 f"tool_decision={self._bool('tool_decision_enabled', True)} mcp_decision={self._bool('mcp_decision_enabled', True)} skill_decision={self._bool('skill_decision_enabled', True)} subagent_decision={self._bool('subagent_decision_enabled', True)} "
                 f"threshold={self._float('tool_noul_threshold', DEFAULT_TOOL_NOUL_THRESHOLD):.3f}\n"
@@ -2302,10 +2345,10 @@ class DecisionPlugin(Star):
                     },
                 )
                 yield event.plain_result(
-                    f"SystemOne OK: {compact_answer(result.answers['service'])}"
+                    f"AstrBot JEV OK: {compact_answer(result.answers['service'])}"
                 )
             except Exception as exc:
-                yield event.plain_result(f"SystemOne failed: {_safe_error(exc)}")
+                yield event.plain_result(f"AstrBot JEV failed: {_safe_error(exc)}")
         elif action == "tools":
             tools = self._manager_tool_objects()
             names = [str(getattr(item, "name", "")) for item in tools]
@@ -2368,7 +2411,7 @@ class DecisionPlugin(Star):
                 0,
                 {
                     "name": DECISION_TOOL_NAME,
-                    "description": "调用 Jev/SystemOne 对当前场景执行一次结构化判断；不会执行其他工具。",
+                    "description": "调用 AstrBot 原生 JEV Decision Provider 对当前场景执行一次结构化判断；不会执行其他工具。",
                     "handoff": False,
                     "mcp": False,
                     "skill": False,
@@ -3456,6 +3499,10 @@ class DecisionPlugin(Star):
             proactive[key] = value
         return json_response(
             {
+                "decision_provider_id": str(
+                    self._setting("decision_provider_id", "") or ""
+                ),
+                "decision_providers": decision_provider_catalog(self.context),
                 "always_keep_tools": always_keep,
                 "message_interjection_enabled": self._bool("message_interjection_enabled", True),
                 "life": normalize_life(dict(self._setting("life", {}) or {})),
@@ -3553,6 +3600,7 @@ class DecisionPlugin(Star):
                 "always_keep_recommend_subagents must be a string list", status_code=400
             )
         jev_pre_prompt = payload.get("jev_pre_prompt")
+        decision_provider_id = payload.get("decision_provider_id")
         main_llm_post_prompt = payload.get("main_llm_post_prompt")
         tool_filter_enabled = payload.get("tool_filter_enabled")
         mcp_filter_enabled = payload.get("mcp_filter_enabled")
@@ -3567,6 +3615,10 @@ class DecisionPlugin(Star):
         tool_noul_threshold = payload.get("tool_noul_threshold")
         if jev_pre_prompt is not None and not isinstance(jev_pre_prompt, str):
             return error_response("jev_pre_prompt must be a string", status_code=400)
+        if decision_provider_id is not None and (
+            not isinstance(decision_provider_id, str) or len(decision_provider_id) > 300
+        ):
+            return error_response("decision_provider_id must be a string", status_code=400)
         if main_llm_post_prompt is not None and not isinstance(main_llm_post_prompt, str):
             return error_response("main_llm_post_prompt must be a string", status_code=400)
         if tool_filter_enabled is not None and not isinstance(tool_filter_enabled, bool):
@@ -3796,6 +3848,22 @@ class DecisionPlugin(Star):
             detail_values["tools_scope_blacklist"] = tools_scope_blacklist
         if jev_pre_prompt is not None:
             detail_values["jev_pre_prompt"] = jev_pre_prompt[:50000]
+        if decision_provider_id is not None:
+            selected_provider = decision_provider_id.strip()
+            available_decision_providers = {
+                row["id"] for row in decision_provider_catalog(self.context)
+            }
+            current_provider = str(self._setting("decision_provider_id", "") or "")
+            if selected_provider and selected_provider not in available_decision_providers:
+                # Keep a removed provider ID only when it is already saved;
+                # this lets unrelated settings save safely while surfacing
+                # the stale selection in the UI for explicit correction.
+                if selected_provider != current_provider:
+                    return error_response(
+                        "所选模型提供商不是 AstrBot 当前可用的 JEV Provider",
+                        status_code=400,
+                    )
+            detail_values["decision_provider_id"] = selected_provider
         if main_llm_post_prompt is not None:
             detail_values["main_llm_post_prompt"] = main_llm_post_prompt[:50000]
         if tool_noul_threshold is not None:
@@ -3834,15 +3902,67 @@ class DecisionPlugin(Star):
             detail_values["multimodal"] = pending_multimodal
         # Commit first: a failed disk write must not change the running policy
         # or prune proactive history while reporting a failed save to the UI.
+        previous_detail_settings = copy.deepcopy(self._detail_settings)
+        settings_file_existed = self._settings_path.exists()
         try:
             self._save_detail_settings(detail_values)
         except OSError as exc:
             logger.error("Decision Engine WebUI settings save failed: %s", _safe_error(exc))
             return error_response("配置写入失败，原设置保持不变", status_code=500)
+        if decision_provider_id is not None:
+            # Persist the selected Provider through AstrBot's own config
+            # object when available. This keeps the native field and the
+            # dashboard selection synchronized without touching credentials.
+            previous_native_present = "decision_provider_id" in self.config
+            previous_native_value = self.config.get("decision_provider_id")
+            self.config["decision_provider_id"] = str(
+                detail_values.get("decision_provider_id", "") or ""
+            )
+            save_config = getattr(self.config, "save_config", None)
+            if callable(save_config):
+                try:
+                    save_config()
+                except Exception as exc:
+                    # The detail file was committed first so a native config
+                    # write failure must roll both stores back.  Otherwise a
+                    # failed response would leave the dashboard and AstrBot
+                    # disagreeing about the selected Provider.
+                    if previous_native_present:
+                        self.config["decision_provider_id"] = previous_native_value
+                    else:
+                        self.config.pop("decision_provider_id", None)
+                    if callable(save_config):
+                        try:
+                            save_config()
+                        except Exception as rollback_exc:
+                            logger.error(
+                                "Decision Engine could not roll back AstrBot's JEV Provider config: %s",
+                                _safe_error(rollback_exc),
+                            )
+                    try:
+                        if settings_file_existed:
+                            self._save_detail_settings(previous_detail_settings)
+                        else:
+                            self._detail_settings = previous_detail_settings
+                            self._settings_path.unlink(missing_ok=True)
+                    except OSError as rollback_exc:
+                        logger.error(
+                            "Decision Engine could not roll back JEV Provider settings: %s",
+                            _safe_error(rollback_exc),
+                        )
+                    logger.error(
+                        "Decision Engine JEV Provider selection could not be persisted: %s",
+                        _safe_error(exc),
+                    )
+                    return error_response("Jev 模型提供商写入失败，原设置保持不变", status_code=500)
         self.proactive.reconfigure(
             self._int("proactive_history_max_messages", 12),
             self._int("proactive_max_sessions", 500),
         )
+        if self.provider is not None and decision_provider_id is not None:
+            self.provider.provider_id = str(
+                self._setting("decision_provider_id", "") or ""
+            ).strip()
         if pending_multimodal is not None and self._multimodal is not None:
             self._multimodal.refresh(self._multimodal_settings())
             self._sync_multimodal_tools(self._multimodal)
@@ -3862,6 +3982,10 @@ class DecisionPlugin(Star):
         return json_response(
             {
                 "saved": True,
+                "decision_provider_id": str(
+                    self._setting("decision_provider_id", "") or ""
+                ),
+                "decision_providers": decision_provider_catalog(self.context),
                 "always_keep_tools": cleaned,
                 "always_keep_recommend_tools": cleaned_recommend,
                 "always_keep_mcp": cleaned_mcp,

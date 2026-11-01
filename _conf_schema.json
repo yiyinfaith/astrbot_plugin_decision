@@ -1,37 +1,16 @@
 {
-  "provider": {
+  "decision_provider_id": {
     "type": "string",
-    "description": "决策服务",
+    "description": "Jev 模型提供商",
+    "hint": "选择 AstrBot 已配置的 Decision/Jev Provider；留空使用 AstrBot 默认判断 Provider。插件 WebUI 会显示实时 Provider 列表。",
     "options": [
-      "systemone_jev"
+      "",
+      "typesafe_decision",
+      "openrouter_decision",
+      "vercel_decision",
+      "custom_decision"
     ],
-    "default": "systemone_jev"
-  },
-  "base_url": {
-    "type": "string",
-    "description": "服务地址",
     "default": ""
-  },
-  "systemone_path": {
-    "type": "string",
-    "description": "API 路径",
-    "default": "/v1/systemone"
-  },
-  "api_key": {
-    "type": "string",
-    "description": "API 密钥",
-    "secret": true,
-    "default": ""
-  },
-  "model": {
-    "type": "string",
-    "description": "Jev 模型",
-    "default": "jev-latest"
-  },
-  "timeout_sec": {
-    "type": "float",
-    "description": "请求超时（秒）",
-    "default": 5.0
   },
   "retries": {
     "type": "int",
