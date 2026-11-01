@@ -74,8 +74,13 @@ class FakeAigen:
         **_ignored,
     ):
         self.video_calls.append(
-            {"event": event, "prompt": prompt, "duration": duration,
-             "aspect_ratio": aspect_ratio, "reference_mode": reference_mode}
+            {
+                "event": event,
+                "prompt": prompt,
+                "duration": duration,
+                "aspect_ratio": aspect_ratio,
+                "reference_mode": reference_mode,
+            }
         )
         yield "video-ok"
 
@@ -343,9 +348,7 @@ async def test_audio_generates_one_clip_per_call(tmp_path, requested):
     settings = media_settings(audio_count_min=1, audio_count_max=3)
     media, aigen = await make_media(tmp_path, settings=settings)
 
-    result = await media.capture(
-        FakeEvent(), kind="audio", audio_text="你好呀", count=requested
-    )
+    result = await media.capture(FakeEvent(), kind="audio", audio_text="你好呀", count=requested)
     assert len(aigen.audio_calls) == 1
     assert aigen.audio_calls[0]["text"] == "你好呀"
     assert aigen.audio_calls[0]["mode"] == "朗读"

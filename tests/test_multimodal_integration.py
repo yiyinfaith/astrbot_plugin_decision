@@ -204,7 +204,9 @@ async def test_recall_is_bounded(tmp_path):
     await runtime.initialize()
     for index in range(4):
         refs = await runtime.observe(
-            FakeEvent([FakeImage(png(tmp_path, f"f{index}.png", (index, 1, 1)))], msg_id=f"m{index}"),
+            FakeEvent(
+                [FakeImage(png(tmp_path, f"f{index}.png", (index, 1, 1)))], msg_id=f"m{index}"
+            ),
             auto_allowed=False,
         )
         await runtime.understand(refs[0])
@@ -433,6 +435,7 @@ def test_webui_exposes_the_non_text_switch():
     assert "非文字消息是否进入判断" in page
     assert "form.proactive.non_text_proactive_enabled" in page
 
+
 # ------------------------------------------------- P0 isolation and singleflight
 @pytest.mark.asyncio
 async def test_same_media_in_two_groups_is_not_shared(tmp_path):
@@ -489,6 +492,7 @@ async def test_singleflight_releases_the_slot_after_failure(tmp_path):
     assert runtime._inflight == {}, "a failed flight must not stay registered"
     await runtime.terminate()
 
+
 # ------------------------------------------------------------ P1 regressions
 @pytest.mark.asyncio
 async def test_gif_frame_dirs_are_swept_and_removed_on_terminate(tmp_path):
@@ -503,7 +507,9 @@ async def test_gif_frame_dirs_are_swept_and_removed_on_terminate(tmp_path):
     runtime._sweep_gif_dirs()
     assert not directory.exists(), "an aged frame directory must be removed"
     await runtime.sanitize_request_images(
-        SimpleNamespace(prompt="y", image_urls=[str(gif(tmp_path, "b.gif"))], extra_user_content_parts=[])
+        SimpleNamespace(
+            prompt="y", image_urls=[str(gif(tmp_path, "b.gif"))], extra_user_content_parts=[]
+        )
     )
     await runtime.terminate()
     assert runtime._gif_dirs == []

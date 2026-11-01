@@ -66,10 +66,14 @@ class DocumentIndex:
             # must not match a different slide titled "2026 report").
             import re
 
-            ordinal = re.fullmatch(r"(?:slide|幻灯片|第)?\s*(\d+)(?:\s*[-~到]\s*(\d+))?\s*(?:页|张)?", lowered)
+            ordinal = re.fullmatch(
+                r"(?:slide|幻灯片|第)?\s*(\d+)(?:\s*[-~到]\s*(\d+))?\s*(?:页|张)?", lowered
+            )
             if ordinal:
                 start, end = int(ordinal[1]), int(ordinal[2] or ordinal[1])
-                return [block for block in self.blocks if start <= int(block.get("number", 0)) <= end]
+                return [
+                    block for block in self.blocks if start <= int(block.get("number", 0)) <= end
+                ]
         hits = []
         for block in self.blocks:
             names = {
@@ -231,7 +235,8 @@ def _pptx(path: Path, limit_chars: int) -> DocumentIndex:
                 "label": f"幻灯片 {number}",
                 "number": number,
                 "title": title,
-                "text": body or f"（第 {number} 页只有图片/图表：图片 {pictures}、表格 {tables}、图表 {charts}）",
+                "text": body
+                or f"（第 {number} 页只有图片/图表：图片 {pictures}、表格 {tables}、图表 {charts}）",
                 "kind": "slide",
                 "pictures": pictures,
                 "tables": tables,
@@ -311,7 +316,12 @@ def _xlsx_sheet_details(
                 value = element.get("ref", "")
                 min_col, min_row, max_col, max_row = range_boundaries(value)
                 rows, columns = max(rows, max_row), max(columns, max_col)
-                if min_row <= end_row and max_row >= start_row and min_col <= end_col and max_col >= start_col:
+                if (
+                    min_row <= end_row
+                    and max_row >= start_row
+                    and min_col <= end_col
+                    and max_col >= start_col
+                ):
                     merged.append(value)
             stack.pop()
             element.clear()
@@ -345,9 +355,16 @@ def _xlsx_sheet_window(
     # coordinate that can be addressed. A tiny target on row 1,048,576 works.
     cell_budget = max(1, min(_XLSX_WINDOW_CELLS, limit_chars // 8))
     hidden, merged, total_rows, columns = _xlsx_sheet_details(
-        path, sheet,
-        (start_col, start_row, end_col or _XLSX_MAX_COLUMNS, min(end_row, start_row + cell_budget - 1)),
-        deadline, cancelled,
+        path,
+        sheet,
+        (
+            start_col,
+            start_row,
+            end_col or _XLSX_MAX_COLUMNS,
+            min(end_row, start_row + cell_budget - 1),
+        ),
+        deadline,
+        cancelled,
     )
     end_col = end_col or columns
     end_col = min(end_col, start_col + cell_budget - 1)
@@ -362,7 +379,9 @@ def _xlsx_sheet_window(
     cached_rows = sheet.iter_rows(**kwargs)
     formula_rows = formula_sheet.iter_rows(**kwargs)
     try:
-        for number, (cached, formulas) in enumerate(zip(cached_rows, formula_rows, strict=True), start_row):
+        for number, (cached, formulas) in enumerate(
+            zip(cached_rows, formula_rows, strict=True), start_row
+        ):
             _check_xlsx_budget(deadline, cancelled)
             values = []
             for column, (cell, source) in enumerate(zip(cached, formulas, strict=True), start_col):
@@ -377,7 +396,9 @@ def _xlsx_sheet_window(
                     if formula and len(formula) > limit_chars:
                         formula = formula[:limit_chars] + "…（公式已截断）"
                     cells_data.setdefault(str(number), {})[str(column)] = {
-                        "coordinate": coordinate, "value": value, "formula": formula,
+                        "coordinate": coordinate,
+                        "value": value,
+                        "formula": formula,
                     }
                     if formula and len(formula_cells) < 40:
                         formula_cells.append(f"{coordinate}={formula}")
@@ -398,7 +419,8 @@ def _xlsx_sheet_window(
         formula_rows.close()
     hidden = [number for number in hidden if number <= last_row]
     merged = [
-        value for value in merged
+        value
+        for value in merged
         if range_boundaries(value)[0] <= end_col and range_boundaries(value)[1] <= last_row
     ]
     hidden_set = set(hidden)
@@ -416,22 +438,36 @@ def _xlsx_sheet_window(
     preview_budget = max(0, limit_chars - len(f"[工作表 {sheet.title}]\n"))
     if len(text) > preview_budget:
         note = "\n…（概览已截断，可指定单元格或区域按需读取）"
-        text = text[:max(0, preview_budget - len(note))] + note[:preview_budget]
+        text = text[: max(0, preview_budget - len(note))] + note[:preview_budget]
     return {
-        "label": f"工作表 {sheet.title}", "name": sheet.title,
-        "title": sheet.title, "kind": "sheet", "text": text,
+        "label": f"工作表 {sheet.title}",
+        "name": sheet.title,
+        "title": sheet.title,
+        "kind": "sheet",
+        "text": text,
         "dims": f"A1:{get_column_letter(columns)}{total_rows}",
-        "rows": total_rows, "columns": columns, "header": header,
-        "rows_data": rows, "cells_data": cells_data,
-        "hidden_rows": hidden, "merged_ranges": merged, "truncated": truncated,
-        "indexed_start_row": start_row, "indexed_end_row": last_row,
-        "indexed_start_col": start_col, "indexed_end_col": end_col,
+        "rows": total_rows,
+        "columns": columns,
+        "header": header,
+        "rows_data": rows,
+        "cells_data": cells_data,
+        "hidden_rows": hidden,
+        "merged_ranges": merged,
+        "truncated": truncated,
+        "indexed_start_row": start_row,
+        "indexed_end_row": last_row,
+        "indexed_start_col": start_col,
+        "indexed_end_col": end_col,
     }
 
 
 def _xlsx(
-    path: Path, limit_chars: int, *, max_rows: int | None = None,
-    deadline: float | None = None, cancelled: Callable[[], bool] | None = None,
+    path: Path,
+    limit_chars: int,
+    *,
+    max_rows: int | None = None,
+    deadline: float | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> DocumentIndex:
     from openpyxl import load_workbook
 
@@ -439,28 +475,55 @@ def _xlsx(
     _check_xlsx_budget(deadline, cancelled)
     index = DocumentIndex(kind="xlsx")
     with ExitStack() as resources:
-        workbook = resources.enter_context(closing(load_workbook(
-            str(path), read_only=True, data_only=True, keep_links=False,
-        )))
-        formula_book = resources.enter_context(closing(load_workbook(
-            str(path), read_only=True, data_only=False, keep_links=False,
-        )))
+        workbook = resources.enter_context(
+            closing(
+                load_workbook(
+                    str(path),
+                    read_only=True,
+                    data_only=True,
+                    keep_links=False,
+                )
+            )
+        )
+        formula_book = resources.enter_context(
+            closing(
+                load_workbook(
+                    str(path),
+                    read_only=True,
+                    data_only=False,
+                    keep_links=False,
+                )
+            )
+        )
         for sheet in workbook.worksheets:
-            index.blocks.append(_xlsx_sheet_window(
-                path, sheet, formula_book[sheet.title],
-                start_col=1, start_row=1, end_col=0,
-                end_row=min(sheet.max_row or _XLSX_MAX_ROWS, max_rows or _XLSX_MAX_ROWS),
-                limit_chars=limit_chars, deadline=deadline, cancelled=cancelled,
-            ))
+            index.blocks.append(
+                _xlsx_sheet_window(
+                    path,
+                    sheet,
+                    formula_book[sheet.title],
+                    start_col=1,
+                    start_row=1,
+                    end_col=0,
+                    end_row=min(sheet.max_row or _XLSX_MAX_ROWS, max_rows or _XLSX_MAX_ROWS),
+                    limit_chars=limit_chars,
+                    deadline=deadline,
+                    cancelled=cancelled,
+                )
+            )
     stat = path.stat()
-    index.meta.update(source_path=str(path.resolve()), source_version=(stat.st_size, stat.st_mtime_ns))
+    index.meta.update(
+        source_path=str(path.resolve()), source_version=(stat.st_size, stat.st_mtime_ns)
+    )
     index.meta["sheets"] = [block["name"] for block in index.blocks]
     return index
 
 
 def parse_document(
-    path: Path, *, limit_chars: int = 12_000,
-    deadline: float | None = None, cancelled: Callable[[], bool] | None = None,
+    path: Path,
+    *,
+    limit_chars: int = 12_000,
+    deadline: float | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> DocumentIndex:
     """Parse a supported Office document into an index of readable blocks."""
 
@@ -511,9 +574,7 @@ def _parse_xlsx_target(target: str) -> tuple[str, int, int, int, int] | None:
     )
     if not match:
         # Keep the legacy row-only spelling, such as ``Sheet 401-450``.
-        match = re.fullmatch(
-            r"\s*(?:第\s*)?(\d+)\s*[-~到]\s*(\d+)\s*行?\s*", address
-        )
+        match = re.fullmatch(r"\s*(?:第\s*)?(\d+)\s*[-~到]\s*(\d+)\s*行?\s*", address)
         if not match:
             return None
         return _parse_xlsx_target(f"{sheet_name}!{match.group(1)}:{match.group(2)}")
@@ -525,14 +586,8 @@ def _parse_xlsx_target(target: str) -> tuple[str, int, int, int, int] | None:
     from openpyxl.utils.cell import column_index_from_string
 
     try:
-        start_col = (
-            column_index_from_string(start_col_text) if start_col_text else 0
-        )
-        end_col = (
-            column_index_from_string(end_col_text)
-            if end_col_text
-            else start_col
-        )
+        start_col = column_index_from_string(start_col_text) if start_col_text else 0
+        end_col = column_index_from_string(end_col_text) if end_col_text else start_col
     except ValueError:
         return None
     if start_col and end_col < start_col:
@@ -545,9 +600,12 @@ def _parse_xlsx_target(target: str) -> tuple[str, int, int, int, int] | None:
 
 
 def _xlsx_target_window(
-    index: DocumentIndex, block: dict[str, Any],
-    bounds: tuple[int, int, int, int], limit_chars: int,
-    deadline: float, cancelled: Callable[[], bool] | None,
+    index: DocumentIndex,
+    block: dict[str, Any],
+    bounds: tuple[int, int, int, int],
+    limit_chars: int,
+    deadline: float,
+    cancelled: Callable[[], bool] | None,
 ) -> dict[str, Any]:
     """Reuse an indexed window or stream the requested coordinates from source."""
 
@@ -567,30 +625,50 @@ def _xlsx_target_window(
         start_row >= block.get("indexed_start_row", 1)
         and end_row <= block.get("indexed_end_row", block.get("rows", 0))
         and (start_col or 1) >= block.get("indexed_start_col", 1)
-        and (end_col or block.get("columns", 1)) <= block.get("indexed_end_col", block.get("columns", 1))
+        and (end_col or block.get("columns", 1))
+        <= block.get("indexed_end_col", block.get("columns", 1))
     ):
         return block
     if not path_text:
         raise ValueError("指定区域尚未索引，且没有可按需读取的 XLSX 源文件；请重新提供文件")
     _check_xlsx_budget(deadline, cancelled)
     with ExitStack() as resources:
-        cached = resources.enter_context(closing(load_workbook(
-            str(path), read_only=True, data_only=True, keep_links=False,
-        )))
-        formulas = resources.enter_context(closing(load_workbook(
-            str(path), read_only=True, data_only=False, keep_links=False,
-        )))
+        cached = resources.enter_context(
+            closing(
+                load_workbook(
+                    str(path),
+                    read_only=True,
+                    data_only=True,
+                    keep_links=False,
+                )
+            )
+        )
+        formulas = resources.enter_context(
+            closing(
+                load_workbook(
+                    str(path),
+                    read_only=True,
+                    data_only=False,
+                    keep_links=False,
+                )
+            )
+        )
         name = block["name"]
         return _xlsx_sheet_window(
-            path, cached[name], formulas[name],
-            start_col=start_col, start_row=start_row, end_col=end_col, end_row=end_row,
-            limit_chars=limit_chars, deadline=deadline, cancelled=cancelled,
+            path,
+            cached[name],
+            formulas[name],
+            start_col=start_col,
+            start_row=start_row,
+            end_col=end_col,
+            end_row=end_row,
+            limit_chars=limit_chars,
+            deadline=deadline,
+            cancelled=cancelled,
         )
 
 
-def _xlsx_merged_range(
-    ranges: list[str], row_number: int, column_number: int
-) -> str:
+def _xlsx_merged_range(ranges: list[str], row_number: int, column_number: int) -> str:
     """Return the merged range containing a physical cell, if any."""
 
     from openpyxl.utils.cell import range_boundaries
@@ -644,17 +722,17 @@ def _render_xlsx_region(
             cell = row_data.get(str(column_number)) or {}
             formula = str(cell.get("formula") or "")
             value = str(cell.get("value") or "")
-            outside_index = (
-                column_number > indexed_columns
-                and (explicit_start_col or explicit_end_col)
+            outside_index = column_number > indexed_columns and (
+                explicit_start_col or explicit_end_col
             )
-            if row_number > block.get("indexed_end_row", block.get("rows", 0)) or column_number > block.get("indexed_end_col", indexed_columns):
+            if row_number > block.get(
+                "indexed_end_row", block.get("rows", 0)
+            ) or column_number > block.get("indexed_end_col", indexed_columns):
                 unread = f"…（{coordinate} 及后续区域尚未读取，达到本次处理预算，请缩小范围精读）"
                 return ("\n".join(lines) + "\n" + unread)[:limit_chars].strip()
             if outside_index:
                 rendered = (
-                    f"{coordinate}=（超出工作表索引范围 "
-                    f"A:{get_column_letter(indexed_columns)}）"
+                    f"{coordinate}=（超出工作表索引范围 A:{get_column_letter(indexed_columns)}）"
                 )
             elif formula:
                 rendered = f"{coordinate}={formula}"
@@ -664,9 +742,7 @@ def _render_xlsx_region(
             else:
                 merged = _xlsx_merged_range(merged_ranges, row_number, column_number)
                 rendered = (
-                    f"{coordinate}=（合并单元格 {merged}）"
-                    if merged
-                    else f"{coordinate}=（空）"
+                    f"{coordinate}=（合并单元格 {merged}）" if merged else f"{coordinate}=（空）"
                 )
             piece = (" | " if column_number > start_col else "") + rendered
             if used + len(line) + len(piece) + 1 > budget:
@@ -683,7 +759,13 @@ def _render_xlsx_region(
 def is_page_target(target: str) -> bool:
     import re
 
-    return bool(re.fullmatch(r"(?:pages?|slide|幻灯片|第)?\s*\d+(?:\s*[-~到,]\s*\d+)*\s*(?:页|张)?", str(target or "").strip(), re.I))
+    return bool(
+        re.fullmatch(
+            r"(?:pages?|slide|幻灯片|第)?\s*\d+(?:\s*[-~到,]\s*\d+)*\s*(?:页|张)?",
+            str(target or "").strip(),
+            re.I,
+        )
+    )
 
 
 def _page_selection(target: str, page_count: int) -> list[int]:
@@ -715,28 +797,88 @@ def _office_sandbox_command(executable: str, job: Path, timeout: float) -> list[
     bwrap, prlimit = shutil.which("bwrap"), shutil.which("prlimit")
     if os.name != "posix" or not bwrap or not prlimit:
         raise RuntimeError("缺少 bubblewrap/prlimit 隔离环境，无法安全执行 Office 整页渲染")
-    command = [prlimit, "--as=1073741824", f"--cpu={max(5, int(timeout))}:{max(7, int(timeout) + 2)}", "--nofile=256:256", "--",
-               bwrap, "--unshare-all", "--die-with-parent", "--new-session", "--cap-drop", "ALL", "--clearenv"]
-    for system_path in ("/usr", "/bin", "/lib", "/lib64", "/etc/fonts", "/etc/libreoffice", "/etc/ld.so.cache"):
+    command = [
+        prlimit,
+        "--as=1073741824",
+        f"--cpu={max(5, int(timeout))}:{max(7, int(timeout) + 2)}",
+        "--nofile=256:256",
+        "--",
+        bwrap,
+        "--unshare-all",
+        "--die-with-parent",
+        "--new-session",
+        "--cap-drop",
+        "ALL",
+        "--clearenv",
+    ]
+    for system_path in (
+        "/usr",
+        "/bin",
+        "/lib",
+        "/lib64",
+        "/etc/fonts",
+        "/etc/libreoffice",
+        "/etc/ld.so.cache",
+    ):
         if Path(system_path).exists():
             command.extend(["--ro-bind", system_path, system_path])
-    command.extend([
-        "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
-        "--bind", str(job), "/work", "--chdir", "/work",
-        "--setenv", "HOME", "/work", "--setenv", "TMPDIR", "/tmp",
-        "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "LANG", "C.UTF-8",
-        "--setenv", "SAL_USE_VCLPLUGIN", "svp",
-        executable, "--headless", "--nologo", "--nodefault", "--norestore", "--nolockcheck",
-        "-env:UserInstallation=file:///work/profile", "--convert-to", "pdf",
-        "--outdir", "/work/output", "/work/input" + (job / "input.name").read_text(),
-    ])
+    command.extend(
+        [
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "--tmpfs",
+            "/tmp",
+            "--bind",
+            str(job),
+            "/work",
+            "--chdir",
+            "/work",
+            "--setenv",
+            "HOME",
+            "/work",
+            "--setenv",
+            "TMPDIR",
+            "/tmp",
+            "--setenv",
+            "PATH",
+            "/usr/bin:/bin",
+            "--setenv",
+            "LANG",
+            "C.UTF-8",
+            "--setenv",
+            "SAL_USE_VCLPLUGIN",
+            "svp",
+            executable,
+            "--headless",
+            "--nologo",
+            "--nodefault",
+            "--norestore",
+            "--nolockcheck",
+            "-env:UserInstallation=file:///work/profile",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            "/work/output",
+            "/work/input" + (job / "input.name").read_text(),
+        ]
+    )
     return command
 
 
-def _run_office_conversion(command: list[str], job: Path, timeout: float, cancelled: Callable[[], bool] | None) -> None:
+def _run_office_conversion(
+    command: list[str], job: Path, timeout: float, cancelled: Callable[[], bool] | None
+) -> None:
     deadline = time.monotonic() + timeout
-    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          env={"PATH": os.defpath}, cwd=str(job), start_new_session=True) as process:
+    with subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={"PATH": os.defpath},
+        cwd=str(job),
+        start_new_session=True,
+    ) as process:
         try:
             while True:
                 if cancelled is not None and cancelled():
@@ -745,7 +887,7 @@ def _run_office_conversion(command: list[str], job: Path, timeout: float, cancel
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(command, timeout)
                 try:
-                    _, stderr = process.communicate(timeout=min(.2, remaining))
+                    _, stderr = process.communicate(timeout=min(0.2, remaining))
                     break
                 except subprocess.TimeoutExpired:
                     continue
@@ -813,12 +955,17 @@ def render_pages(
                 # DOCX section reads use exported heading bookmarks. If the
                 # converter cannot map the section, never attach unrelated pages.
                 toc = document.get_toc()
-                hits = [(i, row) for i, row in enumerate(toc) if target.casefold() in row[1].casefold()]
+                hits = [
+                    (i, row) for i, row in enumerate(toc) if target.casefold() in row[1].casefold()
+                ]
                 if not hits:
                     raise ValueError("无法把章节映射到物理页；仅可回退到结构化章节文本")
                 wanted_set = set()
                 for offset, (level, _title, start) in hits:
-                    end = next((row[2] - 1 for row in toc[offset + 1:] if row[0] <= level), document.page_count)
+                    end = next(
+                        (row[2] - 1 for row in toc[offset + 1 :] if row[0] <= level),
+                        document.page_count,
+                    )
                     wanted_set.update(range(max(0, start - 1), min(end, document.page_count)))
                 wanted = sorted(wanted_set)
             else:
@@ -843,8 +990,12 @@ def render_pages(
 
 
 def read_target(
-    index: DocumentIndex, target: str, *, limit_chars: int = 12_000,
-    deadline: float | None = None, cancelled: Callable[[], bool] | None = None,
+    index: DocumentIndex,
+    target: str,
+    *,
+    limit_chars: int = 12_000,
+    deadline: float | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> str:
     """Render only the requested part of the document."""
 
@@ -859,8 +1010,7 @@ def read_target(
             candidates = [
                 block
                 for block in index.blocks
-                if not sheet_name
-                or str(block.get("name", "")).casefold() == sheet_name.casefold()
+                if not sheet_name or str(block.get("name", "")).casefold() == sheet_name.casefold()
             ]
             blocks = []
             if candidates:
@@ -868,10 +1018,16 @@ def read_target(
                     # Exact physical-coordinate rendering: no compressed row
                     # or column list is used for a target request.
                     _check_xlsx_budget(deadline, cancelled)
-                    copy_block = dict(_xlsx_target_window(
-                        index, block, (start_col, start, end_col, end), limit_chars,
-                        deadline, cancelled,
-                    ))
+                    copy_block = dict(
+                        _xlsx_target_window(
+                            index,
+                            block,
+                            (start_col, start, end_col, end),
+                            limit_chars,
+                            deadline,
+                            cancelled,
+                        )
+                    )
                     copy_block["text"] = _render_xlsx_region(
                         copy_block,
                         start_col=start_col,

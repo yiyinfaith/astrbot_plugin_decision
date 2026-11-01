@@ -116,7 +116,9 @@ async def extract_media(event: Any, *, limit: int = 16) -> list[MediaRef]:
         components = list(getattr(message_obj, "message", None) or [])
 
     umo = str(getattr(event, "unified_msg_origin", "") or "")
-    message_id = str(getattr(event, "message_obj", None) and getattr(event.message_obj, "message_id", "") or "")
+    message_id = str(
+        getattr(event, "message_obj", None) and getattr(event.message_obj, "message_id", "") or ""
+    )
     if not message_id:
         message_id = f"local-{int(time.time() * 1000)}"
     received_at = time.time()
@@ -132,9 +134,7 @@ async def extract_media(event: Any, *, limit: int = 16) -> list[MediaRef]:
         try:
             reference = await _resolve_reference(component)
         except Exception as exc:
-            logger.warning(
-                "Decision Engine 无法读取%s附件：%s", kind, str(exc)[:160]
-            )
+            logger.warning("Decision Engine 无法读取%s附件：%s", kind, str(exc)[:160])
             continue
         if not reference:
             continue
@@ -179,7 +179,9 @@ def is_local_file(reference: str) -> bool:
         return False
 
 
-async def ensure_local(reference: str, *, timeout: float = 60.0, max_bytes: int = 200 * 1024 * 1024) -> str:
+async def ensure_local(
+    reference: str, *, timeout: float = 60.0, max_bytes: int = 200 * 1024 * 1024
+) -> str:
     """Return a local path for a reference, downloading http(s) sources safely.
 
     Only http(s) with a public-looking host is attempted; the download is bounded
@@ -207,20 +209,31 @@ def _is_public_ip(ip: str) -> bool:
     # ``is_global`` is deliberately stricter than just ``not private``.  It
     # rejects documentation/test ranges, benchmarking ranges and other
     # special-use networks which must never be reachable from a media fetcher.
-    if not address.is_global or any((
-        address.is_multicast, address.is_reserved, address.is_loopback,
-        address.is_link_local, address.is_unspecified,
-        getattr(address, "is_site_local", False),
-    )):
+    if not address.is_global or any(
+        (
+            address.is_multicast,
+            address.is_reserved,
+            address.is_loopback,
+            address.is_link_local,
+            address.is_unspecified,
+            getattr(address, "is_site_local", False),
+        )
+    ):
         return False
     if isinstance(address, ipaddress.IPv6Address):
         if address.ipv4_mapped is not None:
             return _is_public_ip(str(address.ipv4_mapped))
         # Transition/translation endpoints can route an otherwise global IPv6
         # literal to private IPv4. Refuse these special-use transports.
-        if any(address in ipaddress.ip_network(prefix) for prefix in (
-            "64:ff9b::/96", "64:ff9b:1::/48", "2002::/16", "2001::/32",
-        )):
+        if any(
+            address in ipaddress.ip_network(prefix)
+            for prefix in (
+                "64:ff9b::/96",
+                "64:ff9b:1::/48",
+                "2002::/16",
+                "2001::/32",
+            )
+        ):
             return False
     return True
 
@@ -261,9 +274,7 @@ def _public_resolution(url: str) -> tuple[str, int, list[dict[str, Any]]]:
     if literal is not None and not _is_public_ip(str(literal)):
         raise ValueError("拒绝访问内网地址")
     try:
-        infos = socket.getaddrinfo(
-            host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
-        )
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
     except OSError as exc:
         raise ValueError(f"无法解析媒体主机：{exc}") from exc
     pinned: list[dict[str, Any]] = []
@@ -345,6 +356,7 @@ class _PinnedResolver(AbstractResolver):
 
 async def _download(url: str, *, max_bytes: int = 200 * 1024 * 1024) -> str:
     import aiohttp
+
     host, port, pinned = await asyncio.to_thread(_public_resolution, url)
     suffix = Path(url.split("?", 1)[0]).suffix[:8] or ".bin"
     handle = None
@@ -352,9 +364,7 @@ async def _download(url: str, *, max_bytes: int = 200 * 1024 * 1024) -> str:
     try:
         import tempfile
 
-        handle = tempfile.NamedTemporaryFile(
-            "wb", prefix="mm-dl-", suffix=suffix, delete=False
-        )
+        handle = tempfile.NamedTemporaryFile("wb", prefix="mm-dl-", suffix=suffix, delete=False)
         connector = aiohttp.TCPConnector(
             resolver=_PinnedResolver(host, pinned),
             use_dns_cache=False,

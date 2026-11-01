@@ -35,7 +35,8 @@ def _generate_content_text(payload: Any) -> str:
         return ""
     parts = ((candidates[0] or {}).get("content") or {}).get("parts") or []
     return "".join(
-        str(part.get("text") or "") for part in parts
+        str(part.get("text") or "")
+        for part in parts
         if isinstance(part, dict) and not part.get("thought", False)
     ).strip()
 
@@ -60,7 +61,9 @@ def _model_output_text(payload: Any) -> str:
         parts = [
             str(part.get("text") or "").strip()
             for part in content
-            if isinstance(part, dict) and part.get("type") == "text" and not part.get("thought", False)
+            if isinstance(part, dict)
+            and part.get("type") == "text"
+            and not part.get("thought", False)
         ]
         text = "\n".join(part for part in parts if part).strip()
         final = text
@@ -109,7 +112,7 @@ def gemini_credentials(provider: Any) -> tuple[str, str]:
     base = str(config.get("api_base") or DEFAULT_BASE).rstrip("/")
     for suffix in ("/v1beta", "/v1alpha"):
         if base.endswith(suffix):
-            base = base[:-len(suffix)]
+            base = base[: -len(suffix)]
     if "gemini" not in provider_type and "google" not in provider_type:
         return "", ""
     if not key:
@@ -336,7 +339,9 @@ async def agentic_generate(
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(
-                f"{base}/v1beta/interactions", headers=headers, json=body,
+                f"{base}/v1beta/interactions",
+                headers=headers,
+                json=body,
                 timeout=aiohttp.ClientTimeout(total=min(timeout, 120.0)),
             ) as response:
                 if response.status >= 400:
@@ -352,16 +357,25 @@ async def agentic_generate(
                 if status in {"failed", "cancelled", "incomplete"}:
                     raise RuntimeError(f"Gemini Agentic Video 失败：{status}")
                 if status == "requires_action":
-                    raise RuntimeError("Gemini Agentic Video 请求了未配置的客户端工具，无法完成理解")
+                    raise RuntimeError(
+                        "Gemini Agentic Video 请求了未配置的客户端工具，无法完成理解"
+                    )
                 if status not in {"in_progress"}:
                     raise RuntimeError("Gemini Agentic Video 返回未知状态")
-                await asyncio.sleep(min(2.0, max(0.0, deadline - asyncio.get_running_loop().time())))
+                await asyncio.sleep(
+                    min(2.0, max(0.0, deadline - asyncio.get_running_loop().time()))
+                )
                 async with session.get(
-                    f"{base}/v1beta/interactions/{interaction_id}", headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=max(.001, min(deadline - asyncio.get_running_loop().time(), 60.0))),
+                    f"{base}/v1beta/interactions/{interaction_id}",
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(
+                        total=max(0.001, min(deadline - asyncio.get_running_loop().time(), 60.0))
+                    ),
                 ) as response:
                     if response.status >= 400:
-                        raise RuntimeError(f"Gemini Agentic Video 状态查询失败：HTTP {response.status}")
+                        raise RuntimeError(
+                            f"Gemini Agentic Video 状态查询失败：HTTP {response.status}"
+                        )
                     payload = await response.json(content_type=None)
             else:
                 raise RuntimeError("Gemini Agentic Video 等待超时")

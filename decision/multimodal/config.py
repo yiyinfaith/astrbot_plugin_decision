@@ -98,9 +98,7 @@ MULTIMODAL_DEFAULTS: dict[str, Any] = {
 
 BOOL_KEYS = frozenset(key for key, value in MULTIMODAL_DEFAULTS.items() if isinstance(value, bool))
 LIST_KEYS = frozenset(key for key, value in MULTIMODAL_DEFAULTS.items() if isinstance(value, list))
-STR_KEYS = frozenset(
-    {key for key, value in MULTIMODAL_DEFAULTS.items() if isinstance(value, str)}
-)
+STR_KEYS = frozenset({key for key, value in MULTIMODAL_DEFAULTS.items() if isinstance(value, str)})
 
 # Inclusive bounds for the numeric settings, used both for validation and to keep
 # hand-edited config files inside a safe range.
@@ -249,9 +247,7 @@ def validate_page_payload(payload: Mapping[str, Any]) -> tuple[dict[str, Any], s
                 return {}, f"{key} must be a string"
             cleaned[key] = value.strip()
     # Cross-field sanity: the short/long boundary must stay inside the hard limit.
-    short = cleaned.get(
-        "mm_video_short_seconds", MULTIMODAL_DEFAULTS["mm_video_short_seconds"]
-    )
+    short = cleaned.get("mm_video_short_seconds", MULTIMODAL_DEFAULTS["mm_video_short_seconds"])
     longest = cleaned.get("mm_video_max_seconds", MULTIMODAL_DEFAULTS["mm_video_max_seconds"])
     if short > longest:
         return {}, "mm_video_short_seconds must not exceed mm_video_max_seconds"
@@ -266,10 +262,6 @@ def page_settings(settings: MultimodalSettings) -> dict[str, Any]:
     from .preprocess import tooling_status
 
     payload["mm_tooling"] = {**tooling_status(), "ocr": engine_status()}
-    payload["mm_auto_kinds_label"] = ", ".join(
-        KIND_LABELS[kind] for kind in settings.auto_kinds
-    )
-    payload["mm_tool_kinds_label"] = ", ".join(
-        KIND_LABELS[kind] for kind in settings.tool_kinds
-    )
+    payload["mm_auto_kinds_label"] = ", ".join(KIND_LABELS[kind] for kind in settings.auto_kinds)
+    payload["mm_tool_kinds_label"] = ", ".join(KIND_LABELS[kind] for kind in settings.tool_kinds)
     return payload

@@ -729,9 +729,7 @@ def test_routing_template_replaces_mcp_placeholder():
 
 
 def test_mcp_tool_detection_uses_server_identity():
-    mcp_tool = SimpleNamespace(
-        name="filesystem_read", mcp_server_name="filesystem", active=True
-    )
+    mcp_tool = SimpleNamespace(name="filesystem_read", mcp_server_name="filesystem", active=True)
     ordinary = SimpleNamespace(name="filesystem_read", active=True)
     assert is_mcp_tool(mcp_tool)
     assert not is_mcp_tool(ordinary)
@@ -742,7 +740,10 @@ def test_mcp_filter_keep_and_recommend_are_independent():
         name="filesystem_read", description="read files", mcp_server_name="filesystem", active=True
     )
     dropped = SimpleNamespace(
-        name="filesystem_write", description="write files", mcp_server_name="filesystem", active=True
+        name="filesystem_write",
+        description="write files",
+        mcp_server_name="filesystem",
+        active=True,
     )
     outcome = choose_tools(
         [selected, dropped],
@@ -899,7 +900,9 @@ def test_public_schema_contains_only_global_settings_and_master_switches():
     }
     assert all("[" not in item.get("description", "") for item in schema.values())
     assert schema["tools_subagents_decision_enabled"]["default"] is True
-    assert schema["tools_subagents_decision_enabled"]["description"] == "Tool/MCP/Skill/SubAgent 决策"
+    assert (
+        schema["tools_subagents_decision_enabled"]["description"] == "Tool/MCP/Skill/SubAgent 决策"
+    )
     assert "不影响主动对话" in schema["tools_subagents_decision_enabled"]["hint"]
     assert schema["proactive_reply_enabled"]["default"] is False
     assert "详细配置在插件 WebUI" in schema["proactive_reply_enabled"]["hint"]
@@ -1082,15 +1085,11 @@ def test_proactive_history_records_bot_and_user_roles():
 
 
 def test_dialogue_flow_prefers_explicit_bot_and_other_targets():
-    bot = ProactiveRecord(
-        "Alice", "u1", "@bot hi", at_targets=(("bot-id", "Bot"),), timestamp=100
-    )
+    bot = ProactiveRecord("Alice", "u1", "@bot hi", at_targets=(("bot-id", "Bot"),), timestamp=100)
     result = infer_dialogue_target(bot, [], bot_id="bot-id", now=100)
     assert result == DialogueInference("bot", "你", 1.0, "explicit_at_bot")
 
-    other = ProactiveRecord(
-        "Alice", "u1", "@Bob hi", at_targets=(("u2", "Bob"),), timestamp=100
-    )
+    other = ProactiveRecord("Alice", "u1", "@Bob hi", at_targets=(("u2", "Bob"),), timestamp=100)
     result = infer_dialogue_target(other, [], bot_id="bot-id", now=100)
     assert result.target_id == "u2"
     assert result.target_name == "Bob"
@@ -1113,7 +1112,10 @@ def test_dialogue_flow_uses_reply_bot_aba_and_conservative_group_fallback():
         "bot", "bot-id", "answer", True, timestamp=90, talking_to="u1", talking_to_name="Alice"
     )
     short_ack = ProactiveRecord("Alice", "u1", "好的", timestamp=100)
-    assert infer_dialogue_target(short_ack, [recent_bot], bot_id="bot-id", now=100).reason == "bot_recently_replied"
+    assert (
+        infer_dialogue_target(short_ack, [recent_bot], bot_id="bot-id", now=100).reason
+        == "bot_recently_replied"
+    )
 
     previous = ProactiveRecord(
         "Bob", "u2", "问 Alice", timestamp=90, talking_to="u1", talking_to_name="Alice"
@@ -1138,9 +1140,7 @@ def test_proactive_history_can_render_identity_aware_dialogue_flow():
     state = ProactiveState(max_messages=4)
     state.add(
         "g",
-        ProactiveRecord(
-            "Alice", "u1", "hello", talking_to="u2", talking_to_name="Bob"
-        ),
+        ProactiveRecord("Alice", "u1", "hello", talking_to="u2", talking_to_name="Bob"),
     )
     assert state.history_lines("g", 200, include_dialogue=True) == [
         "[Alice (u1) → Bob (u2)]: hello"

@@ -140,6 +140,7 @@ def native(tmp_path, monkeypatch):
     provider = StubProvider()
     ctx.get_using_provider.return_value = provider
     if hasattr(ctx, "get_using_provider_async"):
+
         async def using_provider(*args, **kwargs):
             return ctx.get_using_provider(*args, **kwargs)
 
@@ -225,12 +226,18 @@ async def test_adaptive_ignores_old_unanswered_hard_stop_and_real_send_counts_on
         data = runtime.contacts.profile(db, UMO, "alice", runtime._now())
         data["created"] -= 3 * 86400
         runtime.ledger.save_profile(db, UMO, "alice", data)
-    native.owner._evaluate.return_value = SimpleNamespace(answers={q: {"noul": 0.0} for q in ("initiate", "relevant", "timing")})
-    sent, _ = await runtime._attempt_unsolicited(UMO, native.persona, native.plan, "有意义的读书分享", "adaptive")
+    native.owner._evaluate.return_value = SimpleNamespace(
+        answers={q: {"noul": 0.0} for q in ("initiate", "relevant", "timing")}
+    )
+    sent, _ = await runtime._attempt_unsolicited(
+        UMO, native.persona, native.plan, "有意义的读书分享", "adaptive"
+    )
     assert sent
     assert native.context.send_message.await_count >= 1
     assert runtime.contacts.summary(UMO, "alice", runtime._now())["today"]["ordinary"] == 1
-    sent, reason = await runtime._attempt_unsolicited(UMO, native.persona, native.plan, "重复", "adaptive")
+    sent, reason = await runtime._attempt_unsolicited(
+        UMO, native.persona, native.plan, "重复", "adaptive"
+    )
     assert not sent and reason == "daily budget exhausted"
 
 
@@ -273,9 +280,20 @@ async def test_native_send_only_starts_commitment_after_its_acknowledged_text(na
     runtime.config["temporal_settings"]["use_native_scheduler"] = False
     monkeypatch.setattr(event.trace, "record", MagicMock())
     monkeypatch.setattr("astrbot.core.platform.astr_message_event.Metric.upload", AsyncMock())
-    ident = json.loads(await runtime.temporal.manage(event, action="create", origin="bot",
-        kind="virtual_finish", delay_seconds=21600, note="读完小说", notify=False))["task"]["id"]
-    receipt = AsyncMock(return_value=LLMResponse(role="assistant", completion_text='{"commitments":[]}'))
+    ident = json.loads(
+        await runtime.temporal.manage(
+            event,
+            action="create",
+            origin="bot",
+            kind="virtual_finish",
+            delay_seconds=21600,
+            note="读完小说",
+            notify=False,
+        )
+    )["task"]["id"]
+    receipt = AsyncMock(
+        return_value=LLMResponse(role="assistant", completion_text='{"commitments":[]}')
+    )
     monkeypatch.setattr(native.provider, "text_chat", receipt)
     runtime.delivery.wrap_event(event, "alice")
     await event.send(MessageChain().message("先跟你说一件别的事。"))
@@ -285,11 +303,17 @@ async def test_native_send_only_starts_commitment_after_its_acknowledged_text(na
     assert receipt.await_count == 1
     assert runtime.ledger.get_task(ident)["status"] == "awaiting_delivery"
     native.context.send_message.return_value = True
-    receipt.return_value = LLMResponse(role="assistant", completion_text=json.dumps({"commitments": [{"id": ident, "quote": "我六小时后读完小说"}]}))
+    receipt.return_value = LLMResponse(
+        role="assistant",
+        completion_text=json.dumps({"commitments": [{"id": ident, "quote": "我六小时后读完小说"}]}),
+    )
     before = runtime._now().timestamp()
     await event.send(MessageChain().message("我六小时后读完小说"))
     stored = runtime.ledger.get_task(ident)
-    assert stored["status"] == "pending" and before + 21600 <= stored["due"] <= runtime._now().timestamp() + 21600
+    assert (
+        stored["status"] == "pending"
+        and before + 21600 <= stored["due"] <= runtime._now().timestamp() + 21600
+    )
     assert receipt.await_count == 2
     await runtime.terminate()
     await asyncio.sleep(0)
@@ -301,7 +325,10 @@ async def test_resolved_topic_during_generation_cannot_be_sent(native, monkeypat
     now = runtime._now().timestamp()
     topic = {"id": "pending-interview", "title": "面试", "note": "询问进展"}
     with runtime.ledger.transaction() as db:
-        db.execute("INSERT INTO topics VALUES (?,?,?,?,?,?,?,?)", (topic["id"], UMO, "alice", "42", now - 1, now + 86400, "open", json.dumps(topic)))
+        db.execute(
+            "INSERT INTO topics VALUES (?,?,?,?,?,?,?,?)",
+            (topic["id"], UMO, "alice", "42", now - 1, now + 86400, "open", json.dumps(topic)),
+        )
 
     async def generate(**kwargs):
         with runtime.ledger.transaction() as db:
@@ -309,7 +336,9 @@ async def test_resolved_topic_during_generation_cannot_be_sent(native, monkeypat
         return LLMResponse(role="assistant", completion_text="你之前的面试怎么样了？")
 
     monkeypatch.setattr(native.provider, "text_chat", generate)
-    assert not await dispatch_life_agent(runtime, UMO, "询问面试进展", 0, "alice", "followup", offered_topics=[topic])
+    assert not await dispatch_life_agent(
+        runtime, UMO, "询问面试进展", 0, "alice", "followup", offered_topics=[topic]
+    )
     native.context.send_message.assert_not_awaited()
     assert runtime.conversation.recent(UMO, "alice") == []
 
@@ -320,9 +349,21 @@ async def test_scheduled_contact_uses_real_native_respond_pipeline_once(native):
 
     runtime = native.runtime
     now = runtime._now()
-    task = dict(id="scheduled-native", umo=UMO, persona="alice", sender="42", due=now.timestamp(),
-        status="sending", origin="user", kind="reminder", note="读书", notify=True, revision=1,
-        created=now.timestamp(), prepared="约好的读书时间到啦。")
+    task = dict(
+        id="scheduled-native",
+        umo=UMO,
+        persona="alice",
+        sender="42",
+        due=now.timestamp(),
+        status="sending",
+        origin="user",
+        kind="reminder",
+        note="读书",
+        notify=True,
+        revision=1,
+        created=now.timestamp(),
+        prepared="约好的读书时间到啦。",
+    )
     with runtime.ledger.transaction() as db:
         runtime.ledger.save_task(db, task)
     await send_prepared_contact(runtime, task)
@@ -345,7 +386,11 @@ async def test_native_cron_public_api_and_ledger_recovery_do_not_duplicate(nativ
     runtime.config["temporal_settings"]["enable"] = True
     native.event.message_str = "六小时后提醒我看书"
     try:
-        result = json.loads(await runtime.temporal.manage(native.event, action="create", delay_seconds=21600, note="看书"))
+        result = json.loads(
+            await runtime.temporal.manage(
+                native.event, action="create", delay_seconds=21600, note="看书"
+            )
+        )
         task = runtime.ledger.get_task(result["task"]["id"])
         assert task["native_id"]
         # Execute the actual core callback and payload dispatch, not a fake API.
@@ -832,7 +877,9 @@ async def test_real_aigen_extractor_sees_only_persona_references(native, tmp_pat
     package = ModuleType("_decision_aigen_extractor_qa")
     package.__path__ = [str(source.parent)]
     monkeypatch.setitem(sys.modules, "_decision_aigen_extractor_qa", package)
-    spec = importlib.util.spec_from_file_location("_decision_aigen_extractor_qa.image_manager", source)
+    spec = importlib.util.spec_from_file_location(
+        "_decision_aigen_extractor_qa.image_manager", source
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     path = tmp_path / "persona.png"

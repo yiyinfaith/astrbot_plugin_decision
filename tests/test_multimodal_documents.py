@@ -418,7 +418,9 @@ def test_xlsx_unindexed_region_without_source_is_not_empty(far_xlsx):
 
 
 def test_xlsx_large_target_retains_content_and_explicit_budget_notice(far_xlsx):
-    result = office.read_target(office.parse_document(far_xlsx), "Sheet1!A100001:D1048576", limit_chars=500)
+    result = office.read_target(
+        office.parse_document(far_xlsx), "Sheet1!A100001:D1048576", limit_chars=500
+    )
     assert "unique-far-a" in result
     assert "上限" in result or "处理预算" in result
     assert len(result) <= 500
@@ -467,7 +469,11 @@ def test_office_render_pages_produces_full_page_visual(monkeypatch, tmp_path, pp
     monkeypatch.setattr(office.shutil, "which", lambda name: "fake-soffice")
     # Test the rendering boundary with a fake converter; sandbox isolation is
     # independently exercised against real bubblewrap in the VPS acceptance.
-    monkeypatch.setattr(office, "_office_sandbox_command", lambda exe, job, timeout: [exe, "--outdir", str(job / "output")])
+    monkeypatch.setattr(
+        office,
+        "_office_sandbox_command",
+        lambda exe, job, timeout: [exe, "--outdir", str(job / "output")],
+    )
 
     def fake_run(command, job, timeout, cancelled):
         output = Path(command[command.index("--outdir") + 1])
@@ -638,9 +644,7 @@ async def test_ocr_fallback_note_does_not_discard_recognized_text(monkeypatch, t
         "resolve_engine",
         lambda requested: ("tesseract", "已从 PaddleOCR 降级"),
     )
-    monkeypatch.setattr(
-        ocr, "_ocr_tesseract", lambda path, lang: "降级后仍识别到的文字"
-    )
+    monkeypatch.setattr(ocr, "_ocr_tesseract", lambda path, lang: "降级后仍识别到的文字")
 
     result = await ocr.ocr_image(image, engine="paddleocr")
     assert result.ok is True

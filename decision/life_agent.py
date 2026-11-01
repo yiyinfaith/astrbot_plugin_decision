@@ -23,9 +23,9 @@ class PlatformSendError(RuntimeError):
 async def send_prepared_contact(runtime, task):
     """Send prepared text through the host's decoration/respond hooks, once.
 
-Future contacts never execute another unconstrained Agent at the deadline.
-The reservation and claim have already succeeded before this function runs.
-"""
+    Future contacts never execute another unconstrained Agent at the deadline.
+    The reservation and claim have already succeeded before this function runs.
+    """
     from astrbot.core.cron.events import CronMessageEvent
     from astrbot.core.message.message_event_result import ResultContentType
     from astrbot.core.pipeline.context import PipelineContext
@@ -37,10 +37,18 @@ The reservation and claim have already succeeded before this function runs.
     ctx = copy.copy(runtime.context)
     original_send = runtime.context.send_message
     session = MessageSession.from_str(umo)
-    event = CronMessageEvent(context=ctx, session=session, message="已约定的未来联系",
-        message_type=session.message_type, extras={"decision_life_proactive": True,
-        "decision_scheduled_contact": task["id"], "decision_life_media_kind": "",
-        "decision_life_media_max": 0})
+    event = CronMessageEvent(
+        context=ctx,
+        session=session,
+        message="已约定的未来联系",
+        message_type=session.message_type,
+        extras={
+            "decision_life_proactive": True,
+            "decision_scheduled_contact": task["id"],
+            "decision_life_media_kind": "",
+            "decision_life_media_max": 0,
+        },
+    )
     event.role = "member"
     platform = ctx.get_platform_inst(session.platform_id)
     if platform is None:
@@ -62,9 +70,18 @@ The reservation and claim have already succeeded before this function runs.
         current = runtime.ledger.get_task(task["id"])
         if not current or current["revision"] != task["revision"] or current["status"] != "sending":
             raise PlatformSendError("未来联系任务已变更")
-        if (await runtime.personas.resolve(umo)).id != task["persona"] or not runtime.policy.is_enabled(umo):
+        if (await runtime.personas.resolve(umo)).id != task[
+            "persona"
+        ] or not runtime.policy.is_enabled(umo):
             raise PlatformSendError("未来联系人格／名单已变更")
-        allowed, reason = runtime.contacts.gate(umo, task["persona"], runtime._now(), agreed=task["origin"] == "user", exclude=task["id"], frequency=False)
+        allowed, reason = runtime.contacts.gate(
+            umo,
+            task["persona"],
+            runtime._now(),
+            agreed=task["origin"] == "user",
+            exclude=task["id"],
+            frequency=False,
+        )
         if not allowed:
             raise PlatformSendError(reason)
         if not await original_send(session, chain):
@@ -77,8 +94,13 @@ The reservation and claim have already succeeded before this function runs.
             actual_texts.append(text)
         # Commit the first acknowledged segment immediately. A later decoration
         # failure must never make a delivered reminder eligible for retry.
-        runtime.contacts.delivered(umo, task["persona"], runtime._now(), task["id"],
-            kind="agreed" if task["origin"] == "user" else "ordinary")
+        runtime.contacts.delivered(
+            umo,
+            task["persona"],
+            runtime._now(),
+            task["id"],
+            kind="agreed" if task["origin"] == "user" else "ordinary",
+        )
         event._has_send_oper = True
         return True
 
@@ -112,7 +134,13 @@ The reservation and claim have already succeeded before this function runs.
         raise PlatformSendError("未来联系未经过实际平台发送")
     delivery = getattr(runtime, "delivery", None)
     if delivery and actual_texts:
-        await delivery.record(umo, task["persona"], "scheduled:" + task["id"], "\n".join(actual_texts), kind="scheduled")
+        await delivery.record(
+            umo,
+            task["persona"],
+            "scheduled:" + task["id"],
+            "\n".join(actual_texts),
+            kind="scheduled",
+        )
 
 
 async def dispatch_life_agent(
@@ -141,8 +169,10 @@ async def dispatch_life_agent(
     ctx = runtime.context
     session = MessageSession.from_str(umo)
     extras = {
-        "decision_life_proactive": True, "decision_life_generation": generation,
-        "decision_life_media_kind": "", "decision_life_media_max": 0,
+        "decision_life_proactive": True,
+        "decision_life_generation": generation,
+        "decision_life_media_kind": "",
+        "decision_life_media_max": 0,
         "decision_life_media_used": 0,
     }
     if media_choice:
@@ -177,7 +207,9 @@ async def dispatch_life_agent(
     values = {f.name: settings[f.name] for f in fields(MainAgentBuildConfig) if f.name in settings}
     # Newer hosts receive fallback IDs as a separate build option rather than
     # reading fallback_chat_models from provider_settings inside the builder.
-    if any(field_info.name == "fallback_provider_ids" for field_info in fields(MainAgentBuildConfig)):
+    if any(
+        field_info.name == "fallback_provider_ids" for field_info in fields(MainAgentBuildConfig)
+    ):
         configured_fallbacks = settings.get("fallback_chat_models", [])
         values["fallback_provider_ids"] = (
             list(configured_fallbacks) if isinstance(configured_fallbacks, list) else []
@@ -221,7 +253,11 @@ async def dispatch_life_agent(
         if not await runtime.validate_commit(umo, generation, persona_id):
             raise RuntimeError("主动候选已过期或会话已更新")
         if offered_topics and getattr(runtime, "conversation", None):
-            open_ids = {t["id"] for t in runtime.conversation.topics(umo, persona_id) if t["status"] == "open"}
+            open_ids = {
+                t["id"]
+                for t in runtime.conversation.topics(umo, persona_id)
+                if t["status"] == "open"
+            }
             if any(topic["id"] not in open_ids for topic in offered_topics):
                 raise RuntimeError("候选话题已经结束或已经询问，不再重复发送")
         try:
@@ -319,9 +355,15 @@ async def dispatch_life_agent(
             if response and getattr(response, "role", "assistant") == "assistant":
                 text = str(response.completion_text or "").strip()
                 if text and offered_topics and getattr(runtime, "conversation", None):
-                    open_ids = {t["id"] for t in runtime.conversation.topics(umo, persona_id) if t["status"] == "open"}
+                    open_ids = {
+                        t["id"]
+                        for t in runtime.conversation.topics(umo, persona_id)
+                        if t["status"] == "open"
+                    }
                     if any(topic["id"] not in open_ids for topic in offered_topics):
-                        runtime.record_audit(umo, False, "生成期间话题已经结束或已经询问，取消本次候选")
+                        runtime.record_audit(
+                            umo, False, "生成期间话题已经结束或已经询问，取消本次候选"
+                        )
                         text = ""
                 delivery = getattr(runtime, "delivery", None)
                 if text and delivery and delivery.repeated(umo, persona_id, text):
@@ -368,10 +410,18 @@ async def dispatch_life_agent(
             if actual_texts and delivery:
                 ident = runtime._delivery_contact_ids.get(umo) or runtime.ledger.new_id()
                 try:
-                    await delivery.record(umo, persona_id, ident, "\n".join(actual_texts),
-                                          ideas=offered_ideas, topics=offered_topics)
+                    await delivery.record(
+                        umo,
+                        persona_id,
+                        ident,
+                        "\n".join(actual_texts),
+                        ideas=offered_ideas,
+                        topics=offered_topics,
+                    )
                 except Exception as exc:
-                    logger.warning("Decision 主动消息已经发送，记录保存失败：%s", type(exc).__name__)
+                    logger.warning(
+                        "Decision 主动消息已经发送，记录保存失败：%s", type(exc).__name__
+                    )
             if sent and runner:
                 # Persist the actual tool-loop messages, including photo/video
                 # tool status. Do not invent a user message or discard tools.

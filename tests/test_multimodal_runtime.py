@@ -221,12 +221,18 @@ async def test_target_isolation_prevents_wrong_region_reuse(tmp_path):
     await runtime.initialize()
     source = png(tmp_path, "target.png")
     first = MediaRef(
-        kind="image", reference=str(source), urn="u::target::0",
-        umo="aiocqhttp:GroupMessage:1", extra={"target": "page 1"}
+        kind="image",
+        reference=str(source),
+        urn="u::target::0",
+        umo="aiocqhttp:GroupMessage:1",
+        extra={"target": "page 1"},
     )
     second = MediaRef(
-        kind="image", reference=str(source), urn="u::target::0",
-        umo="aiocqhttp:GroupMessage:1", extra={"target": "page 2"}
+        kind="image",
+        reference=str(source),
+        urn="u::target::0",
+        umo="aiocqhttp:GroupMessage:1",
+        extra={"target": "page 2"},
     )
     await runtime.understand(first)
     await runtime.understand(second)
@@ -286,11 +292,20 @@ async def test_understand_file_reads_xlsx_target_after_row_100000(tmp_path):
     runtime = build(tmp_path, provider)
     try:
         await runtime.initialize()
-        refs = await runtime.observe(FakeEvent([SimpleNamespace(type="file", file_=str(path), name=path.name)]), auto_allowed=False)
+        refs = await runtime.observe(
+            FakeEvent([SimpleNamespace(type="file", file_=str(path), name=path.name)]),
+            auto_allowed=False,
+        )
         assert refs and provider.calls == []
-        for target, expected in [("Sheet1!A100001", "precise far row"), ("Sheet1!A1048576", "Excel final row")]:
+        for target, expected in [
+            ("Sheet1!A100001", "precise far row"),
+            ("Sheet1!A1048576", "Excel final row"),
+        ]:
             item, error = await runtime.understand_by_selector(
-                refs[0].umo, kind="file", selector="latest", target=target,
+                refs[0].umo,
+                kind="file",
+                selector="latest",
+                target=target,
             )
             assert error == "" and item is not None and item.ok
             assert expected in provider.calls[-1]["prompt"]
@@ -326,9 +341,15 @@ async def test_office_worker_receives_cancellation_without_provider_call(tmp_pat
     path = tmp_path / "cancel.xlsx"
     path.write_bytes(b"worker cancellation fixture")
     ref = MediaRef(kind="file", reference=str(path), urn="u::cancel", umo="u")
-    task = asyncio.create_task(runtime._run_file(
-        ref, SimpleNamespace(provider=provider, model=""), "read", tmp_path, path,
-    ))
+    task = asyncio.create_task(
+        runtime._run_file(
+            ref,
+            SimpleNamespace(provider=provider, model=""),
+            "read",
+            tmp_path,
+            path,
+        )
+    )
     try:
         assert await asyncio.to_thread(started.wait, 2)
         task.cancel()
@@ -478,9 +499,7 @@ async def test_sanitize_replaces_animated_gif_with_a_frame(tmp_path):
     runtime = build(tmp_path, FakeProvider())
     await runtime.initialize()
     gif_path = gif(tmp_path)
-    req = SimpleNamespace(
-        prompt="看图", image_urls=[str(gif_path)], extra_user_content_parts=[]
-    )
+    req = SimpleNamespace(prompt="看图", image_urls=[str(gif_path)], extra_user_content_parts=[])
     replaced = await runtime.sanitize_request_images(req)
     assert replaced == 1
     assert len(req.image_urls) == 1
@@ -527,9 +546,7 @@ async def test_tool_selector_latest_and_index(tmp_path):
     assert error == "" and item is not None
     assert item.message_id == "m2", "latest means the newest media"
 
-    item, error = await runtime.understand_by_selector(
-        "aiocqhttp:GroupMessage:1", selector="2"
-    )
+    item, error = await runtime.understand_by_selector("aiocqhttp:GroupMessage:1", selector="2")
     assert error == "" and item.message_id == "m1"
     await runtime.terminate()
 
@@ -552,9 +569,7 @@ async def test_tool_reports_out_of_range_selector(tmp_path):
     runtime = build(tmp_path, FakeProvider())
     await runtime.initialize()
     await runtime.observe(FakeEvent([FakeImage(png(tmp_path))]), auto_allowed=False)
-    item, error = await runtime.understand_by_selector(
-        "aiocqhttp:GroupMessage:1", selector="9"
-    )
+    item, error = await runtime.understand_by_selector("aiocqhttp:GroupMessage:1", selector="9")
     assert item is None and "超出范围" in error
     await runtime.terminate()
 

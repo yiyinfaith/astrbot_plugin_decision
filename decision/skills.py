@@ -7,9 +7,7 @@ from collections.abc import Iterable
 # Keep this parser intentionally format-tolerant: descriptions and paths are
 # untrusted text, so only the generated inventory bullet is inspected.
 _SKILLS_BLOCK_RE = re.compile(r"(?ms)^## Skills\s*\n.*?(?=^## (?!#)|\Z)")
-_SKILL_ITEM_RE = re.compile(
-    r"(?ms)^- \*\*(?P<name>[^*\n]+)\*\*:.*?\n  File: `[^\n]*`\s*"
-)
+_SKILL_ITEM_RE = re.compile(r"(?ms)^- \*\*(?P<name>[^*\n]+)\*\*:.*?\n  File: `[^\n]*`\s*")
 
 
 def filter_skills_prompt(system_prompt: str, allowed_names: Iterable[str]) -> str:
@@ -35,4 +33,3 @@ def filter_skills_prompt(system_prompt: str, allowed_names: Iterable[str]) -> st
 
     filtered = _SKILL_ITEM_RE.sub(keep_item, block)
     return text[: match.start()] + filtered + text[match.end() :]
-

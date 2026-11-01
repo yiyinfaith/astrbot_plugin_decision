@@ -676,9 +676,7 @@ class VirtualLifeBase:
         draw = deterministic_int(f"sleep-pick::{plan.date}::{umo}", 0, max(0, total - 1))
         chosen = candidates[-1]
         for candidate in candidates:
-            weight = max(
-                1, int((candidate[2] - candidate[1]).total_seconds() // 60)
-            )
+            weight = max(1, int((candidate[2] - candidate[1]).total_seconds() // 60))
             if draw < weight:
                 chosen = candidate
                 break
@@ -1981,9 +1979,7 @@ class VirtualLifeBase:
             "管理员要求立即测试主动消息",
             "manual",
         )
-        yield event.plain_result(
-            "测试主动消息已发送。" if sent else f"本次未发送：{reason}"
-        )
+        yield event.plain_result("测试主动消息已发送。" if sent else f"本次未发送：{reason}")
 
     async def proactive_execution_times(self, event: AstrMessageEvent):
         _, plan = await self._ensure_plan_for_umo(event.unified_msg_origin)

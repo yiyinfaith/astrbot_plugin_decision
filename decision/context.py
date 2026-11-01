@@ -97,17 +97,13 @@ def build_decision_state(
         for item in mcp_tools
         if item.get("name")
     ]
-    sections.append(
-        "[Available MCP Tools]\n" + ("\n".join(mcp_lines) if mcp_lines else "(none)")
-    )
+    sections.append("[Available MCP Tools]\n" + ("\n".join(mcp_lines) if mcp_lines else "(none)"))
     skill_lines = [
         f"- {item.get('name', '')}: {item.get('description', '')}"
         for item in skills
         if item.get("name")
     ]
-    sections.append(
-        "[Available Skills]\n" + ("\n".join(skill_lines) if skill_lines else "(none)")
-    )
+    sections.append("[Available Skills]\n" + ("\n".join(skill_lines) if skill_lines else "(none)"))
     agent_lines = [
         f"- {item.get('name', '')}: {item.get('description', '')}"
         for item in subagents
@@ -156,8 +152,10 @@ def is_mcp_tool(tool: Any) -> bool:
     cls = type(tool)
     class_name = str(getattr(cls, "__name__", "")).casefold()
     module_name = str(getattr(cls, "__module__", "")).casefold()
-    return class_name == "mcptool" or class_name.endswith("mcptool") or module_name.endswith(
-        ".mcp_client"
+    return (
+        class_name == "mcptool"
+        or class_name.endswith("mcptool")
+        or module_name.endswith(".mcp_client")
     )
 
 

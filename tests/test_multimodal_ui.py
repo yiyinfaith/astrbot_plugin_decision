@@ -19,8 +19,8 @@ def page_text() -> str:
 def test_flow_enhancement_has_two_sub_tabs():
     html = page_text()
     assert 'aria-label="对话流增强模式"' in html
-    assert 'flowTab = \'input\'' in html
-    assert 'flowTab = \'output\'' in html
+    assert "flowTab = 'input'" in html
+    assert "flowTab = 'output'" in html
     assert "flowTab: 'input'" in html, "input must be the default sub-tab"
 
 
@@ -84,16 +84,16 @@ def test_multimodal_section_is_under_input_enhancement():
     # There is one multimodal master; automatic understanding uses the media
     # type switches and session scope without a second hidden master.
     assert 'v-model="mm.multimodal.mm_auto_enabled"' not in html
-    assert '<strong>启用多模态理解</strong>' in html
+    assert "<strong>启用多模态理解</strong>" in html
 
 
 def test_input_selects_use_readable_dark_glass_theme():
     html = page_text()
-    assert '.dialogue-flow-page select:not([multiple])' in html
-    assert 'appearance: none' in html
-    assert 'color-scheme: dark' in html
-    assert '.dialogue-flow-page select:not([multiple]) option' in html
-    assert '#eaf3ff' in html
+    assert ".dialogue-flow-page select:not([multiple])" in html
+    assert "appearance: none" in html
+    assert "color-scheme: dark" in html
+    assert ".dialogue-flow-page select:not([multiple]) option" in html
+    assert "#eaf3ff" in html
 
 
 def test_model_dropdowns_are_populated_from_the_provider_catalog():

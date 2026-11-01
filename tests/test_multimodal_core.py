@@ -49,9 +49,7 @@ def test_blacklist_with_empty_list_allows_everyone():
 
 
 def test_whitelist_match_allows_that_session_only():
-    settings = config.MultimodalSettings(
-        config.normalize_settings({"mm_auto_scope": ["umo-a"]})
-    )
+    settings = config.MultimodalSettings(config.normalize_settings({"mm_auto_scope": ["umo-a"]}))
     assert settings.scope_allows("umo-a") is True
     assert settings.scope_allows("umo-b") is False
 
@@ -176,8 +174,13 @@ async def test_media_index_is_bounded_and_deduplicated(tmp_path):
     cache = MultimodalCache(tmp_path / "c.json")
     rows = [
         MediaIndexEntry(
-            umo="u1", message_id="m1", kind="image", index=0, name="a.png",
-            reference="/tmp/a.png", content_key=f"k{i}",
+            umo="u1",
+            message_id="m1",
+            kind="image",
+            index=0,
+            name="a.png",
+            reference="/tmp/a.png",
+            content_key=f"k{i}",
             received_at=time.time() + i,
         )
         for i in range(3)
@@ -205,7 +208,9 @@ class FakeProvider:
         self.calls: list[dict] = []
 
     def meta(self):
-        return type("Meta", (), {"id": self.provider_config["id"], "model": self._model, "type": "openai"})()
+        return type(
+            "Meta", (), {"id": self.provider_config["id"], "model": self._model, "type": "openai"}
+        )()
 
     async def text_chat(self, **kwargs):
         self.calls.append(kwargs)
@@ -235,7 +240,9 @@ def test_declared_modalities_are_enforced():
 
 
 def test_provider_catalog_lists_configured_models():
-    context = type("Ctx", (), {"get_all_providers": lambda self: [FakeProvider(["text", "image"])]})()
+    context = type(
+        "Ctx", (), {"get_all_providers": lambda self: [FakeProvider(["text", "image"])]}
+    )()
     catalog = adapters.provider_catalog(context)
     assert len(catalog) == 1
     assert catalog[0]["id"] == "p1"
@@ -257,9 +264,7 @@ def test_pick_provider_reports_missing_model_and_missing_capability():
     choice, error = adapters.pick_provider(context, settings, "audio")
     assert choice is None and "未选择" in error
 
-    settings = config.MultimodalSettings(
-        config.normalize_settings({"mm_model_audio": "p1"})
-    )
+    settings = config.MultimodalSettings(config.normalize_settings({"mm_model_audio": "p1"}))
     choice, error = adapters.pick_provider(context, settings, "audio")
     assert choice is None and "未声明支持" in error
 
@@ -267,9 +272,7 @@ def test_pick_provider_reports_missing_model_and_missing_capability():
 def test_pick_provider_returns_a_usable_choice():
     provider = FakeProvider(["text", "audio"])
     context = type("Ctx", (), {"get_provider_by_id": lambda self, pid: provider})()
-    settings = config.MultimodalSettings(
-        config.normalize_settings({"mm_model_audio": "p1"})
-    )
+    settings = config.MultimodalSettings(config.normalize_settings({"mm_model_audio": "p1"}))
     choice, error = adapters.pick_provider(context, settings, "audio")
     assert error == "" and choice is not None and choice.provider is provider
 
@@ -332,9 +335,7 @@ def test_animated_gif_becomes_multiple_ordered_frames(tmp_path):
 
 def test_gif_frame_count_respects_the_configured_cap(tmp_path):
     path = _make_image(tmp_path / "a.gif", animated=True)
-    settings = config.MultimodalSettings(
-        config.normalize_settings({"mm_gif_max_frames": 3})
-    )
+    settings = config.MultimodalSettings(config.normalize_settings({"mm_gif_max_frames": 3}))
     workdir = tmp_path / "w"
     workdir.mkdir()
     prepared = preprocess.prepare_image(path, settings, workdir)
@@ -467,6 +468,7 @@ async def test_extract_media_from_fake_components():
     assert refs[0].urn == "aiocqhttp:GroupMessage:9::mid-1::0"
     assert refs[0].message_id == "mid-1"
     assert refs[0].umo == "aiocqhttp:GroupMessage:9"
+
 
 def test_capability_classification_distinguishes_native_and_preprocessed():
     image_only = FakeProvider(["text", "image"])

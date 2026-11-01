@@ -90,9 +90,7 @@ class MultimodalCache:
         payload = {
             "version": 1,
             "entries": [item.to_dict() for item in self._entries.values()],
-            "index": {
-                umo: [row.to_dict() for row in rows] for umo, rows in self._index.items()
-            },
+            "index": {umo: [row.to_dict() for row in rows] for umo, rows in self._index.items()},
         }
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,9 +136,7 @@ class MultimodalCache:
             for key in expired:
                 self._entries.pop(key, None)
         if len(self._entries) > self.max_entries:
-            ordered = sorted(
-                self._entries.values(), key=lambda item: item.created_at or 0
-            )
+            ordered = sorted(self._entries.values(), key=lambda item: item.created_at or 0)
             for item in ordered[: len(self._entries) - self.max_entries]:
                 self._entries.pop(item.key, None)
         cutoff = now - 7 * 24 * 3600
@@ -177,9 +173,7 @@ class MultimodalCache:
             rows = list(self._index.get(umo, []))
         return rows[-limit:][::-1]
 
-    async def recent_understandings(
-        self, umo: str, limit: int = 3
-    ) -> list[Understanding]:
+    async def recent_understandings(self, umo: str, limit: int = 3) -> list[Understanding]:
         """Newest successful understandings for one conversation."""
 
         if limit <= 0:
@@ -190,9 +184,7 @@ class MultimodalCache:
             rows = [
                 item
                 for item in self._entries.values()
-                if item.umo == umo
-                and item.ok
-                and (not item.expires_at or item.expires_at >= now)
+                if item.umo == umo and item.ok and (not item.expires_at or item.expires_at >= now)
             ]
         rows.sort(key=lambda item: item.created_at or 0, reverse=True)
         return rows[:limit]
@@ -293,9 +285,7 @@ class MultimodalCache:
     async def clear_session(self, umo: str) -> int:
         async with self._lock:
             await self.load()
-            removed = [
-                key for key, item in self._entries.items() if item.umo == umo
-            ]
+            removed = [key for key, item in self._entries.items() if item.umo == umo]
             for key in removed:
                 self._entries.pop(key, None)
             had_index = umo in self._index

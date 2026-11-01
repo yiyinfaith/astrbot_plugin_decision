@@ -133,9 +133,7 @@ def choose_tools(
         if is_mcp_tool(tool):
             keep = name in always_keep_mcp
             matching_ids = [
-                qid
-                for qid, mcp_name in (question_to_mcp or {}).items()
-                if mcp_name == name
+                qid for qid, mcp_name in (question_to_mcp or {}).items() if mcp_name == name
             ]
             selected_by_jev = any(
                 isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
@@ -149,9 +147,7 @@ def choose_tools(
                 keep = True
             if keep:
                 final.append(tool)
-            if selected_by_jev or (
-                name in always_keep_mcp and name in always_keep_mcp_recommend
-            ):
+            if selected_by_jev or (name in always_keep_mcp and name in always_keep_mcp_recommend):
                 recommended_mcp.append(name)
             continue
         keep = name in always_keep
@@ -181,9 +177,7 @@ def choose_tools(
             continue
         keep = name in always_keep_skills
         matching_ids = [
-            qid
-            for qid, skill_name in (question_to_skill or {}).items()
-            if skill_name == name
+            qid for qid, skill_name in (question_to_skill or {}).items() if skill_name == name
         ]
         selected_by_jev = any(
             isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
@@ -197,9 +191,7 @@ def choose_tools(
             keep = True
         if keep:
             selected_skills.append(skill)
-        if selected_by_jev or (
-            name in always_keep_skills and name in always_keep_skills_recommend
-        ):
+        if selected_by_jev or (name in always_keep_skills and name in always_keep_skills_recommend):
             recommended_skills.append(name)
 
     if (

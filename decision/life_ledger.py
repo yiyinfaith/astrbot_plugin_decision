@@ -79,35 +79,64 @@ class LifeLedger:
 
     @staticmethod
     def profile(db, umo, persona, now, minimum, maximum):
-        row = db.execute("SELECT data FROM profiles WHERE umo=? AND persona=?", (umo, persona)).fetchone()
-        data = json.loads(row[0]) if row else {
-            "created": now, "baseline": min(maximum, minimum * 2),
-            "interval": min(maximum, minimum * 2), "paused_until": 0,
-            "last_sent": 0, "last_incoming": 0, "last_positive": 0,
-            "unanswered": 0, "awaiting": False, "negative_applied": False,
-            "feedback": "", "feedback_at": 0,
-            "relationship_score": 20.0, "relationship_updated_at": now,
-            "response_latency_seconds": 0.0, "response_samples": 0, "response_last_at": 0,
-            "recent_intents": [],
-        }
+        row = db.execute(
+            "SELECT data FROM profiles WHERE umo=? AND persona=?", (umo, persona)
+        ).fetchone()
+        data = (
+            json.loads(row[0])
+            if row
+            else {
+                "created": now,
+                "baseline": min(maximum, minimum * 2),
+                "interval": min(maximum, minimum * 2),
+                "paused_until": 0,
+                "last_sent": 0,
+                "last_incoming": 0,
+                "last_positive": 0,
+                "unanswered": 0,
+                "awaiting": False,
+                "negative_applied": False,
+                "feedback": "",
+                "feedback_at": 0,
+                "relationship_score": 20.0,
+                "relationship_updated_at": now,
+                "response_latency_seconds": 0.0,
+                "response_samples": 0,
+                "response_last_at": 0,
+                "recent_intents": [],
+            }
+        )
         data["baseline"] = min(maximum, max(minimum, data["baseline"]))
         data["interval"] = min(maximum, max(minimum, data["interval"]))
         return data
 
     @staticmethod
     def save_profile(db, umo, persona, data):
-        db.execute("INSERT OR REPLACE INTO profiles VALUES (?,?,?)", (umo, persona, json.dumps(data, ensure_ascii=False)))
+        db.execute(
+            "INSERT OR REPLACE INTO profiles VALUES (?,?,?)",
+            (umo, persona, json.dumps(data, ensure_ascii=False)),
+        )
 
     @staticmethod
     def task(row):
-        return {**json.loads(row["data"]), **{key: row[key] for key in ("id", "umo", "persona", "due", "status")}}
+        return {
+            **json.loads(row["data"]),
+            **{key: row[key] for key in ("id", "umo", "persona", "due", "status")},
+        }
 
     @staticmethod
     def save_task(db, task):
-        db.execute("INSERT OR REPLACE INTO tasks VALUES (?,?,?,?,?,?)", (
-            task["id"], task["umo"], task["persona"], task["due"], task["status"],
-            json.dumps(task, ensure_ascii=False),
-        ))
+        db.execute(
+            "INSERT OR REPLACE INTO tasks VALUES (?,?,?,?,?,?)",
+            (
+                task["id"],
+                task["umo"],
+                task["persona"],
+                task["due"],
+                task["status"],
+                json.dumps(task, ensure_ascii=False),
+            ),
+        )
 
     def tasks(self, umo=None, persona=None, *, active=False, limit=100):
         where, args = [], []
@@ -116,12 +145,19 @@ class LifeLedger:
                 where.append(f"{key}=?")
                 args.append(val)
         if active:
-            where.append("status IN ('pending','preparing','ready','sending','suspended','awaiting_delivery')")
+            where.append(
+                "status IN ('pending','preparing','ready','sending','suspended','awaiting_delivery')"
+            )
         with self.transaction() as db:
-            return [self.task(row) for row in db.execute(
-                "SELECT * FROM tasks" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY due DESC LIMIT ?",
-                (*args, limit),
-            )]
+            return [
+                self.task(row)
+                for row in db.execute(
+                    "SELECT * FROM tasks"
+                    + (" WHERE " + " AND ".join(where) if where else "")
+                    + " ORDER BY due DESC LIMIT ?",
+                    (*args, limit),
+                )
+            ]
 
     def get_task(self, ident):
         with self.transaction() as db:
@@ -135,15 +171,29 @@ class LifeLedger:
             db.execute("DELETE FROM conversation_calls WHERE at<?", (now - 7 * 86400,))
             # Duplicate suppression deliberately compares the last four,
             # regardless of age. Retention must not erase that small baseline.
-            db.execute("""DELETE FROM utterances WHERE at<? AND id NOT IN (
+            db.execute(
+                """DELETE FROM utterances WHERE at<? AND id NOT IN (
                 SELECT id FROM (SELECT id, ROW_NUMBER() OVER (
                     PARTITION BY umo,persona ORDER BY at DESC,rowid DESC) AS rank
-                    FROM utterances) WHERE rank<=4)""", (now - 40 * 86400,))
+                    FROM utterances) WHERE rank<=4)""",
+                (now - 40 * 86400,),
+            )
             db.execute("DELETE FROM topics WHERE expires<?", (now - 7 * 86400,))
-            db.execute("DELETE FROM contacts WHERE at<? AND status NOT IN ('sending','unknown')", (now - 40 * 86400,))
-            db.execute("DELETE FROM shares WHERE thought IN (SELECT id FROM thoughts WHERE expires<?)", (now - 7 * 86400,))
+            db.execute(
+                "DELETE FROM contacts WHERE at<? AND status NOT IN ('sending','unknown')",
+                (now - 40 * 86400,),
+            )
+            db.execute(
+                "DELETE FROM shares WHERE thought IN (SELECT id FROM thoughts WHERE expires<?)",
+                (now - 7 * 86400,),
+            )
             db.execute("DELETE FROM thoughts WHERE expires<?", (now - 7 * 86400,))
-            db.execute("DELETE FROM shares WHERE NOT EXISTS(SELECT 1 FROM thoughts WHERE id=shares.thought)")
+            db.execute(
+                "DELETE FROM shares WHERE NOT EXISTS(SELECT 1 FROM thoughts WHERE id=shares.thought)"
+            )
             # Keep recent completed facts for follow-up questions, never drop
             # unfinished commitments or delivery-unknown records silently.
-            db.execute("DELETE FROM tasks WHERE due<? AND status IN ('delivered','cancelled','expired')", (now - 40 * 86400,))
+            db.execute(
+                "DELETE FROM tasks WHERE due<? AND status IN ('delivered','cancelled','expired')",
+                (now - 40 * 86400,),
+            )

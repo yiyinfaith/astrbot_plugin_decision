@@ -20,9 +20,20 @@ GROUP = "qq:GroupMessage:100"
 
 
 class Event:
-    def __init__(self, umo=UMO, *, sender="42", role="member", platform_role="member", text="六小时后提醒我看书", message_id="1"):
+    def __init__(
+        self,
+        umo=UMO,
+        *,
+        sender="42",
+        role="member",
+        platform_role="member",
+        text="六小时后提醒我看书",
+        message_id="1",
+    ):
         self.unified_msg_origin, self.role, self.text, self.sender = umo, role, text, sender
-        self.message_obj = SimpleNamespace(message_id=message_id, raw_message={"sender": {"role": platform_role}})
+        self.message_obj = SimpleNamespace(
+            message_id=message_id, raw_message={"sender": {"role": platform_role}}
+        )
         self.extras = {}
 
     def get_sender_id(self):
@@ -45,19 +56,49 @@ def control(tmp_path):
         cfg[key]["enable"] = True
     cfg["friend_settings"].update(enable=True, session_blacklist=True, session_list=[])
     now = [datetime(2026, 10, 25, 10, tzinfo=ZoneInfo("Asia/Shanghai"))]
-    provider = SimpleNamespace(text_chat=AsyncMock(return_value=SimpleNamespace(completion_text="约好的读书时间到啦。")))
-    host = SimpleNamespace(get_using_provider=lambda **kw: provider, cron_manager=SimpleNamespace(
-        add_basic_job=AsyncMock(return_value=SimpleNamespace(job_id="native-job")), delete_job=AsyncMock()))
-    runtime = SimpleNamespace(config=cfg, _now=lambda: now[0], timezone=now[0].tzinfo,
-        personas=SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(id="alice", prompt="学生Alice，喜欢阅读"))),
-        runtime=SimpleNamespace(add_date_job=lambda *args, **kwargs: None, remove=lambda *args: None),
-        context=host, enabled=True, _quiet=lambda: False, delivery_locks={}, delivery_slots=asyncio.Semaphore(2), record_audit=lambda *a: None)
+    provider = SimpleNamespace(
+        text_chat=AsyncMock(return_value=SimpleNamespace(completion_text="约好的读书时间到啦。"))
+    )
+    host = SimpleNamespace(
+        get_using_provider=lambda **kw: provider,
+        cron_manager=SimpleNamespace(
+            add_basic_job=AsyncMock(return_value=SimpleNamespace(job_id="native-job")),
+            delete_job=AsyncMock(),
+        ),
+    )
+    runtime = SimpleNamespace(
+        config=cfg,
+        _now=lambda: now[0],
+        timezone=now[0].tzinfo,
+        personas=SimpleNamespace(
+            resolve=AsyncMock(
+                return_value=SimpleNamespace(id="alice", prompt="学生Alice，喜欢阅读")
+            )
+        ),
+        runtime=SimpleNamespace(
+            add_date_job=lambda *args, **kwargs: None, remove=lambda *args: None
+        ),
+        context=host,
+        enabled=True,
+        _quiet=lambda: False,
+        delivery_locks={},
+        delivery_slots=asyncio.Semaphore(2),
+        record_audit=lambda *a: None,
+    )
     runtime.policy = ProactivePolicy(cfg, SimpleNamespace(sessions={}), now[0].tzinfo)
     ledger = LifeLedger(tmp_path / "control.sqlite3")
     contacts = ContactControl(runtime, ledger)
     temporal = TemporalControl(runtime, ledger, contacts)
     runtime.ledger, runtime.contacts, runtime.temporal = ledger, contacts, temporal
-    return SimpleNamespace(runtime=runtime, ledger=ledger, contacts=contacts, temporal=temporal, cfg=cfg, now=now, provider=provider)
+    return SimpleNamespace(
+        runtime=runtime,
+        ledger=ledger,
+        contacts=contacts,
+        temporal=temporal,
+        cfg=cfg,
+        now=now,
+        provider=provider,
+    )
 
 
 def test_frequency_is_persistent_scoped_and_bounded(control):
@@ -80,7 +121,9 @@ def test_frequency_is_persistent_scoped_and_bounded(control):
         state = c.contacts.summary(UMO, "alice", c.now[0])
         assert 120 <= state["interval"] <= 2880
         old = state["interval"]
-        assert c.contacts.summary(UMO, "alice", c.now[0])["interval"] == old  # once per missed reply
+        assert (
+            c.contacts.summary(UMO, "alice", c.now[0])["interval"] == old
+        )  # once per missed reply
     c.now[0] += timedelta(days=3)
     assert c.contacts.gate(UMO, "alice", c.now[0])[0]
     c.contacts.preference(Event(), "alice", "pause")
@@ -90,12 +133,19 @@ def test_frequency_is_persistent_scoped_and_bounded(control):
     assert c.contacts.gate(UMO, "alice", c.now[0])[0]
 
 
-@pytest.mark.parametrize("role,platform_role,listed,blacklist,expected", [
-    ("admin", "member", False, False, True), ("member", "owner", False, False, True),
-    ("member", "admin", False, False, True), ("member", "member", True, False, True),
-    ("member", "member", False, False, False), ("member", "member", True, True, False),
-    ("admin", "owner", True, True, False), ("member", "member", False, True, True),
-])
+@pytest.mark.parametrize(
+    "role,platform_role,listed,blacklist,expected",
+    [
+        ("admin", "member", False, False, True),
+        ("member", "owner", False, False, True),
+        ("member", "admin", False, False, True),
+        ("member", "member", True, False, True),
+        ("member", "member", False, False, False),
+        ("member", "member", True, True, False),
+        ("admin", "owner", True, True, False),
+        ("member", "member", False, True, True),
+    ],
+)
 def test_real_group_roles_and_qq_lists(control, role, platform_role, listed, blacklist, expected):
     settings = control.cfg["adaptive_settings"]
     settings.update(group_adjust_blacklist=blacklist, group_adjust_users=["42"] if listed else [])
@@ -149,15 +199,23 @@ async def test_time_guard_buffers_reply_before_host_streams_it(control):
 async def test_bot_cannot_claim_user_reservation_without_actual_user_request(control):
     event = Event(text="明天我有考试")
     with pytest.raises(ValueError, match="真实来信"):
-        await control.temporal.manage(event, action="create", delay_seconds=3600, note="惊喜", origin="user")
+        await control.temporal.manage(
+            event, action="create", delay_seconds=3600, note="惊喜", origin="user"
+        )
 
 
 async def test_failed_activity_generation_is_budgeted_and_not_retried_for_same_node(control):
     c = control
     from decision.virtual_life.core.models import DailyPlan, TimelineItem
 
-    plan = DailyPlan(date=c.now[0].date().isoformat(), persona_id="alice", theme="阅读", mood="轻松",
-        outfit=None, timeline=(TimelineItem(id="reading", start="00:00", end="24:00", activity="读书"),))
+    plan = DailyPlan(
+        date=c.now[0].date().isoformat(),
+        persona_id="alice",
+        theme="阅读",
+        mood="轻松",
+        outfit=None,
+        timeline=(TimelineItem(id="reading", start="00:00", end="24:00", activity="读书"),),
+    )
     persona = SimpleNamespace(id="alice", prompt="Alice爱读书")
     c.provider.text_chat.side_effect = TimeoutError()
     with pytest.raises(TimeoutError):
@@ -172,35 +230,49 @@ async def test_synthetic_proactive_event_cannot_force_preferences_or_use_user_qu
     with pytest.raises(ValueError, match="无权"):
         control.contacts.preference(event, "alice", "more")
     with pytest.raises(ValueError, match="冒充"):
-        await control.temporal.manage(event, action="create", delay_seconds=3600, note="自发惊喜", origin="user")
+        await control.temporal.manage(
+            event, action="create", delay_seconds=3600, note="自发惊喜", origin="user"
+        )
 
 
 async def test_bot_surprise_uses_decision_time_without_needing_to_reveal_it(control):
     c = control
     event = Event(text="最近挺忙的")
-    result = json.loads(await c.temporal.manage(event, action="create", delay_seconds=172800, note="分享一个读书小惊喜", origin="bot"))
+    result = json.loads(
+        await c.temporal.manage(
+            event, action="create", delay_seconds=172800, note="分享一个读书小惊喜", origin="bot"
+        )
+    )
     task = c.ledger.get_task(result["task"]["id"])
     assert task["status"] == "pending"
     assert task["due"] == c.now[0].timestamp() + 172800
     with pytest.raises(ValueError, match="间隔"):
-        await c.temporal.manage(event, action="create", delay_seconds=60, note="不允许绕过频率", origin="bot")
+        await c.temporal.manage(
+            event, action="create", delay_seconds=60, note="不允许绕过频率", origin="bot"
+        )
 
 
 async def test_reserving_future_day_does_not_pretend_current_reply_window_expired(control):
     c = control
     c.contacts.delivered(UMO, "alice", c.now[0])
     before = c.contacts.summary(UMO, "alice", c.now[0])["interval"]
-    await c.temporal.manage(Event(), action="create", delay_seconds=172800, note="未来提醒", origin="user")
+    await c.temporal.manage(
+        Event(), action="create", delay_seconds=172800, note="未来提醒", origin="user"
+    )
     after = c.contacts.summary(UMO, "alice", c.now[0])
     assert after["interval"] == before and not after["negative_applied"]
 
 
 async def create(c, **kwargs):
-    result = await c.temporal.manage(Event(), action="create", delay_seconds=6 * 3600, note="提醒看书", **kwargs)
+    result = await c.temporal.manage(
+        Event(), action="create", delay_seconds=6 * 3600, note="提醒看书", **kwargs
+    )
     return json.loads(result)["task"]["id"]
 
 
-async def test_task_reservation_exact_time_duplicate_callback_and_native_scheduler(control, monkeypatch):
+async def test_task_reservation_exact_time_duplicate_callback_and_native_scheduler(
+    control, monkeypatch
+):
     c = control
     ident = await create(c)
     assert c.runtime.context.cron_manager.add_basic_job.await_count == 1
@@ -215,7 +287,9 @@ async def test_task_reservation_exact_time_duplicate_callback_and_native_schedul
     await c.temporal.execute(ident, 1)
     assert send.await_count == 0
     c.now[0] += timedelta(hours=3)
-    await asyncio.gather(c.temporal.execute(ident, 1), c.temporal.execute(ident, 1), c.temporal.execute(ident, 1))
+    await asyncio.gather(
+        c.temporal.execute(ident, 1), c.temporal.execute(ident, 1), c.temporal.execute(ident, 1)
+    )
     assert send.await_count == 1
     assert c.provider.text_chat.await_count == 1
     assert c.ledger.get_task(ident)["status"] == "delivered"
@@ -239,11 +313,23 @@ async def test_daily_reservation_cancel_and_scope(control):
 async def test_bot_relative_time_starts_on_actual_delivery_and_no_budget_bypass(control):
     c = control
     event = Event()
-    result = json.loads(await c.temporal.manage(event, action="create", delay_seconds=21600, note="读完小说", kind="virtual_finish", origin="bot", notify=False))
+    result = json.loads(
+        await c.temporal.manage(
+            event,
+            action="create",
+            delay_seconds=21600,
+            note="读完小说",
+            kind="virtual_finish",
+            origin="bot",
+            notify=False,
+        )
+    )
     ident = result["task"]["id"]
     assert c.ledger.get_task(ident)["status"] == "awaiting_delivery"
     c.now[0] += timedelta(minutes=5)
-    c.provider.text_chat.return_value.completion_text = json.dumps({"commitments": [{"id": ident, "quote": "我六小时后读完小说"}]})
+    c.provider.text_chat.return_value.completion_text = json.dumps(
+        {"commitments": [{"id": ident, "quote": "我六小时后读完小说"}]}
+    )
     await c.temporal.activate_from_event(event, "我六小时后读完小说")
     assert c.ledger.get_task(ident)["due"] == c.now[0].timestamp() + 21600
     c.now[0] += timedelta(hours=3)
@@ -323,7 +409,9 @@ async def test_guard_rewrites_false_completion_and_external_unconfirmed(control)
     c = control
     await create(c, kind="external_finish", notify=False)
     c.now[0] += timedelta(hours=3)
-    c.provider.text_chat.return_value.completion_text = '{"conflict":true,"corrected":"还没好，约好六小时，目前只过了三小时。"}'
+    c.provider.text_chat.return_value.completion_text = (
+        '{"conflict":true,"corrected":"还没好，约好六小时，目前只过了三小时。"}'
+    )
     response = SimpleNamespace(completion_text="已经完成了", tools_call_name=[])
     await c.temporal.guard_response(Event(), response)
     assert "还没好" in response.completion_text
@@ -339,7 +427,9 @@ async def test_guard_rewrites_false_completion_and_external_unconfirmed(control)
 
 async def test_thought_ttl_scope_and_delivery_dedup(control):
     c = control
-    ident = await c.temporal.save_thought("alice", "书的这个比喻很有趣", {"activity": "阅读", "at": c.now[0].isoformat()})
+    ident = await c.temporal.save_thought(
+        "alice", "书的这个比喻很有趣", {"activity": "阅读", "at": c.now[0].isoformat()}
+    )
     assert c.temporal.thought(UMO, "alice")["id"] == ident
     assert c.temporal.thought(UMO, "bob") is None
     c.temporal.mark_shared(ident, UMO)
@@ -349,7 +439,15 @@ async def test_thought_ttl_scope_and_delivery_dedup(control):
     assert c.temporal.thought("qq:FriendMessage:99", "alice") is None
 
 
-@pytest.mark.parametrize("field,value", [("friend_min_minutes", 3000), ("positive_factor", 1), ("group_adjust_users", ["not-a-qq"]), ("negative_factor", float("nan"))])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("friend_min_minutes", 3000),
+        ("positive_factor", 1),
+        ("group_adjust_users", ["not-a-qq"]),
+        ("negative_factor", float("nan")),
+    ],
+)
 def test_invalid_control_settings_rejected(field, value):
     settings = life_defaults()
     settings["adaptive_settings"][field] = value

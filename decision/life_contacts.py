@@ -38,9 +38,14 @@ def explicit_feedback(text):
         return "resume"
     if re.search(r"(?:别再|不要再|停止|暂停|别)(?:主动)?(?:找我|联系我|给我发|发消息|主动)", text):
         return "pause"
-    if re.search(r"(?:太吵|太烦|少(?:一点|点)?(?:主动)?(?:找我|联系|发消息)|主动.{0,8}太频繁|别.{0,4}这么频繁)", text):
+    if re.search(
+        r"(?:太吵|太烦|少(?:一点|点)?(?:主动)?(?:找我|联系|发消息)|主动.{0,8}太频繁|别.{0,4}这么频繁)",
+        text,
+    ):
         return "less"
-    if re.search(r"(?:多(?:一点|点)?(?:主动)?(?:找我|联系|发消息)|主动.{0,8}太少|怎么.{0,6}不找我)", text):
+    if re.search(
+        r"(?:多(?:一点|点)?(?:主动)?(?:找我|联系|发消息)|主动.{0,8}太少|怎么.{0,6}不找我)", text
+    ):
         return "more"
     return ""
 
@@ -76,7 +81,9 @@ class ContactControl:
     def _decay_relationship(self, data, now):
         data.setdefault("relationship_score", 20.0)
         data.setdefault("relationship_updated_at", now.timestamp())
-        if not self.humanization.get("enable", True) or not self.humanization.get("relationship_memory_enable", True):
+        if not self.humanization.get("enable", True) or not self.humanization.get(
+            "relationship_memory_enable", True
+        ):
             return
         try:
             previous = float(data.get("relationship_updated_at", now.timestamp()))
@@ -84,7 +91,9 @@ class ContactControl:
             days = max(1.0, float(self.humanization.get("relationship_decay_days", 30)))
             if elapsed > 0:
                 # Decay toward neutral rather than erasing the relationship.
-                data["relationship_score"] = 50 + (float(data["relationship_score"]) - 50) * (0.5 ** (elapsed / days))
+                data["relationship_score"] = 50 + (float(data["relationship_score"]) - 50) * (
+                    0.5 ** (elapsed / days)
+                )
                 data["relationship_updated_at"] = now.timestamp()
         except (TypeError, ValueError, OverflowError):
             data["relationship_score"] = 20.0
@@ -92,8 +101,12 @@ class ContactControl:
 
     def _relationship_delta(self, data, delta, now):
         self._decay_relationship(data, now)
-        if self.humanization.get("enable", True) and self.humanization.get("relationship_memory_enable", True):
-            data["relationship_score"] = max(0.0, min(100.0, float(data.get("relationship_score", 20.0)) + delta))
+        if self.humanization.get("enable", True) and self.humanization.get(
+            "relationship_memory_enable", True
+        ):
+            data["relationship_score"] = max(
+                0.0, min(100.0, float(data.get("relationship_score", 20.0)) + delta)
+            )
             data["relationship_updated_at"] = now.timestamp()
 
     @staticmethod
@@ -125,7 +138,10 @@ class ContactControl:
                 if item.get("category") != category:
                     continue
                 try:
-                    if now.timestamp() - float(item.get("at", 0)) < settings.get("intent_cooldown_minutes", 240) * 60:
+                    if (
+                        now.timestamp() - float(item.get("at", 0))
+                        < settings.get("intent_cooldown_minutes", 240) * 60
+                    ):
                         return False, "同类主动内容冷却中"
                 except (TypeError, ValueError):
                     continue
@@ -136,7 +152,9 @@ class ContactControl:
         with self.ledger.transaction() as db:
             data = self.profile(db, umo, persona, now)
             history = [item for item in data.get("recent_intents", []) if isinstance(item, dict)]
-            history.append({"category": category, "at": now.timestamp(), "trigger": str(trigger)[:40]})
+            history.append(
+                {"category": category, "at": now.timestamp(), "trigger": str(trigger)[:40]}
+            )
             data["recent_intents"] = history[-8:]
             self.ledger.save_profile(db, umo, persona, data)
 
@@ -145,7 +163,11 @@ class ContactControl:
         data = self.ledger.profile(db, umo, persona, now.timestamp(), low, high)
         self._decay_relationship(data, now)
         data.setdefault("recent_intents", [])
-        if data["awaiting"] and not data["negative_applied"] and now.timestamp() - data["last_sent"] >= self.settings["response_window_minutes"] * 60:
+        if (
+            data["awaiting"]
+            and not data["negative_applied"]
+            and now.timestamp() - data["last_sent"] >= self.settings["response_window_minutes"] * 60
+        ):
             data["interval"] = min(high, data["interval"] * self.settings["negative_factor"])
             data["negative_applied"] = True
         self.ledger.save_profile(db, umo, persona, data)
@@ -163,10 +185,22 @@ class ContactControl:
             latency = float(data.get("response_latency_seconds", 0) or 0)
             rhythm = "unknown"
             if samples:
-                rhythm = "fast" if latency <= 15 * 60 else "normal" if latency <= 2 * 3600 else "slow"
-            return {**data, "relationship": relationship, "response_rhythm": {
-                "bucket": rhythm, "average_seconds": round(latency, 1), "samples": samples,
-            }, "umo": umo, "persona": persona, "today": self.counts(db, umo, persona, now), "bounds_minutes": self.bounds(umo)}
+                rhythm = (
+                    "fast" if latency <= 15 * 60 else "normal" if latency <= 2 * 3600 else "slow"
+                )
+            return {
+                **data,
+                "relationship": relationship,
+                "response_rhythm": {
+                    "bucket": rhythm,
+                    "average_seconds": round(latency, 1),
+                    "samples": samples,
+                },
+                "umo": umo,
+                "persona": persona,
+                "today": self.counts(db, umo, persona, now),
+                "bounds_minutes": self.bounds(umo),
+            }
 
     @staticmethod
     def day_bounds(now):
@@ -176,11 +210,20 @@ class ContactControl:
     def counts(self, db, umo, persona, now, exclude=""):
         start, end = self.day_bounds(now)
         counts = {"ordinary": 0, "agreed": 0}
-        for row in db.execute("SELECT kind,COUNT(*) AS n FROM contacts WHERE umo=? AND persona=? AND at>=? AND at<? AND status IN ('reserved','sending','sent','unknown') AND id<>? GROUP BY kind", (umo, persona, start, end, exclude)):
+        for row in db.execute(
+            "SELECT kind,COUNT(*) AS n FROM contacts WHERE umo=? AND persona=? AND at>=? AND at<? AND status IN ('reserved','sending','sent','unknown') AND id<>? GROUP BY kind",
+            (umo, persona, start, end, exclude),
+        ):
             counts[row["kind"]] = row["n"]
-        for row in db.execute("SELECT * FROM tasks WHERE umo=? AND persona=? AND due>=? AND due<? AND status IN ('pending','preparing','ready','suspended','awaiting_delivery','sending','unknown') AND id<>?", (umo, persona, start, end, exclude)):
+        for row in db.execute(
+            "SELECT * FROM tasks WHERE umo=? AND persona=? AND due>=? AND due<? AND status IN ('pending','preparing','ready','suspended','awaiting_delivery','sending','unknown') AND id<>?",
+            (umo, persona, start, end, exclude),
+        ):
             task = self.ledger.task(row)
-            if db.execute("SELECT 1 FROM contacts WHERE id=? AND status IN ('sent','unknown','sending')", (task["id"],)).fetchone():
+            if db.execute(
+                "SELECT 1 FROM contacts WHERE id=? AND status IN ('sent','unknown','sending')",
+                (task["id"],),
+            ).fetchone():
                 continue
             if task.get("notify", True):
                 counts["agreed" if task["origin"] == "user" else "ordinary"] += 1
@@ -188,7 +231,9 @@ class ContactControl:
 
     def gate(self, umo, persona, now, *, agreed=False, exclude="", frequency=True):
         with self.ledger.transaction() as db:
-            return self._gate(db, umo, persona, now, agreed=agreed, exclude=exclude, frequency=frequency)
+            return self._gate(
+                db, umo, persona, now, agreed=agreed, exclude=exclude, frequency=frequency
+            )
 
     def _gate(self, db, umo, persona, now, *, agreed=False, exclude="", frequency=True):
         # ``now`` may be a future reservation date. Never advance the profile's
@@ -206,7 +251,11 @@ class ContactControl:
             return False, "daily budget exhausted"
         if frequency and not agreed:
             adaptive = self.settings["enable"]
-            interval = data["interval"] if adaptive else self.runtime.policy.settings_for(umo).get("cooldown_minutes", 0)
+            interval = (
+                data["interval"]
+                if adaptive
+                else self.runtime.policy.settings_for(umo).get("cooldown_minutes", 0)
+            )
             anchor = data["last_sent"] or (data["created"] if adaptive else 0)
             if now.timestamp() < anchor + interval * 60:
                 return False, "自适应主动间隔未到"
@@ -224,7 +273,10 @@ class ContactControl:
         action = explicit_feedback(event.get_message_str()) if targeted else ""
         authority = group_authorized(event, self.settings)
         with self.ledger.transaction() as db:
-            if not db.execute("INSERT OR IGNORE INTO signals VALUES (?,?,?,?)", (umo, persona, ident, now.timestamp())).rowcount:
+            if not db.execute(
+                "INSERT OR IGNORE INTO signals VALUES (?,?,?,?)",
+                (umo, persona, ident, now.timestamp()),
+            ).rowcount:
                 return ""
             data = self.profile(db, umo, persona, now)
             if targeted:
@@ -237,23 +289,42 @@ class ContactControl:
                     if last_sample_at and now.timestamp() - last_sample_at > history_days * 86400:
                         samples = 0
                         data["response_latency_seconds"] = 0.0
-                    data["response_latency_seconds"] = ((float(data.get("response_latency_seconds", 0) or 0) * samples) + latency) / (samples + 1)
+                    data["response_latency_seconds"] = (
+                        (float(data.get("response_latency_seconds", 0) or 0) * samples) + latency
+                    ) / (samples + 1)
                     data["response_samples"] = min(100, samples + 1)
                     data["response_last_at"] = now.timestamp()
                 self._relationship_delta(data, 1.0, now)
-                active_exchange = (data["awaiting"] and now.timestamp() - data["last_sent"] <= self.settings["response_window_minutes"] * 60) or (data.get("last_normal_reply", 0) and now.timestamp() - data["last_normal_reply"] <= self.settings["response_window_minutes"] * 60)
-                if not quality_pending and active_exchange and now.timestamp() - data["last_positive"] >= self.settings["adjustment_cooldown_minutes"] * 60:
+                active_exchange = (
+                    data["awaiting"]
+                    and now.timestamp() - data["last_sent"]
+                    <= self.settings["response_window_minutes"] * 60
+                ) or (
+                    data.get("last_normal_reply", 0)
+                    and now.timestamp() - data["last_normal_reply"]
+                    <= self.settings["response_window_minutes"] * 60
+                )
+                if (
+                    not quality_pending
+                    and active_exchange
+                    and now.timestamp() - data["last_positive"]
+                    >= self.settings["adjustment_cooldown_minutes"] * 60
+                ):
                     low, _ = self.bounds(umo)
                     # Explicit preference remains the baseline: an enthusiastic
                     # reply cannot immediately undo a request to be quieter.
                     floor = max(low, data["baseline"] * 0.8)
-                    data["interval"] = max(floor, data["interval"] * self.settings["positive_factor"])
+                    data["interval"] = max(
+                        floor, data["interval"] * self.settings["positive_factor"]
+                    )
                     data["last_positive"] = now.timestamp()
                 data["awaiting"] = False
                 data["unanswered"] = 0
             if action and authority:
                 self._feedback(data, umo, action, now)
-                self._relationship_delta(data, {"more": 2, "less": -2, "pause": -4, "resume": 1}.get(action, 0), now)
+                self._relationship_delta(
+                    data, {"more": 2, "less": -2, "pause": -4, "resume": 1}.get(action, 0), now
+                )
                 event.set_extra("decision_contact_feedback", action)
             self.ledger.save_profile(db, umo, persona, data)
         return action if authority else ""
@@ -263,16 +334,33 @@ class ContactControl:
         with self.ledger.transaction() as db:
             data = self.profile(db, umo, persona, now)
             ident = "quality:" + source["id"]
-            if not db.execute("INSERT OR IGNORE INTO signals VALUES (?,?,?,?)", (umo, persona, ident, now.timestamp())).rowcount:
+            if not db.execute(
+                "INSERT OR IGNORE INTO signals VALUES (?,?,?,?)",
+                (umo, persona, ident, now.timestamp()),
+            ).rowcount:
                 return
             kind = signal.get("engagement", "neutral")
             if not isinstance(kind, str) or kind not in {"engaged", "neutral", "closing", "busy"}:
                 return
-            data["engagement"] = {"kind": kind, "quote": signal["quote"], "at": now.timestamp(), "sender": source["sender"],
-                                  "scope": "member" if ":GroupMessage:" in umo else "conversation"}
-            if kind == "engaged" and self.settings["enable"] and now.timestamp() - data["last_positive"] >= self.settings["adjustment_cooldown_minutes"] * 60 and now.timestamp() - data.get("feedback_at", 0) >= self.settings["adjustment_cooldown_minutes"] * 60:
+            data["engagement"] = {
+                "kind": kind,
+                "quote": signal["quote"],
+                "at": now.timestamp(),
+                "sender": source["sender"],
+                "scope": "member" if ":GroupMessage:" in umo else "conversation",
+            }
+            if (
+                kind == "engaged"
+                and self.settings["enable"]
+                and now.timestamp() - data["last_positive"]
+                >= self.settings["adjustment_cooldown_minutes"] * 60
+                and now.timestamp() - data.get("feedback_at", 0)
+                >= self.settings["adjustment_cooldown_minutes"] * 60
+            ):
                 low, _ = self.bounds(umo)
-                data["interval"] = max(low, data["baseline"] * 0.8, data["interval"] * self.settings["positive_factor"])
+                data["interval"] = max(
+                    low, data["baseline"] * 0.8, data["interval"] * self.settings["positive_factor"]
+                )
                 data["last_positive"] = now.timestamp()
                 self._relationship_delta(data, 5.0, now)
             elif kind == "neutral":
@@ -281,20 +369,34 @@ class ContactControl:
                 self._relationship_delta(data, -1.0, now)
             if kind in {"busy", "closing"}:
                 minutes = signal.get("busy_minutes", 20 if kind == "closing" else 60)
-                if isinstance(minutes, bool) or not isinstance(minutes, (int, float)) or not math.isfinite(minutes):
+                if (
+                    isinstance(minutes, bool)
+                    or not isinstance(minutes, (int, float))
+                    or not math.isfinite(minutes)
+                ):
                     minutes = 20
-                minutes = max(1, min(self.runtime.config["continuity_settings"]["temporary_quiet_minutes"], minutes))
+                minutes = max(
+                    1,
+                    min(
+                        self.runtime.config["continuity_settings"]["temporary_quiet_minutes"],
+                        minutes,
+                    ),
+                )
                 until = now.timestamp() + minutes * 60
                 if ":GroupMessage:" in umo:
                     members = data.setdefault("member_busy", {})
                     members[source["sender"]] = until
-                    data["member_busy"] = dict(sorted(members.items(), key=lambda x: x[1], reverse=True)[:50])
+                    data["member_busy"] = dict(
+                        sorted(members.items(), key=lambda x: x[1], reverse=True)[:50]
+                    )
                 else:
                     data["defer_until"] = max(data.get("defer_until", 0), until)
             self.ledger.save_profile(db, umo, persona, data)
 
     def normal_reply(self, event, persona, now):
-        if event.get_extra("decision_life_proactive", False) or event.get_extra("decision_contact_reply_recorded", False):
+        if event.get_extra("decision_life_proactive", False) or event.get_extra(
+            "decision_contact_reply_recorded", False
+        ):
             return
         umo = str(event.unified_msg_origin)
         with self.ledger.transaction() as db:
@@ -313,7 +415,16 @@ class ContactControl:
         elif action == "resume":
             data["paused_until"] = 0
         else:
-            value = interval if action == "set" else data["interval"] * (self.settings["feedback_factor"] if action == "less" else 1 / self.settings["feedback_factor"])
+            value = (
+                interval
+                if action == "set"
+                else data["interval"]
+                * (
+                    self.settings["feedback_factor"]
+                    if action == "less"
+                    else 1 / self.settings["feedback_factor"]
+                )
+            )
             data["baseline"] = data["interval"] = min(high, max(low, value))
         data["feedback"], data["feedback_at"] = action, now.timestamp()
 
@@ -322,11 +433,16 @@ class ContactControl:
         if action not in {"status", "more", "less", "pause", "resume", "set"}:
             raise ValueError("未知联系偏好操作")
         if action != "status":
-            if event.get_extra("decision_life_proactive", False) or not group_authorized(event, self.settings):
+            if event.get_extra("decision_life_proactive", False) or not group_authorized(
+                event, self.settings
+            ):
                 raise ValueError("当前平台身份无权强制调整本群频率")
             if not self.settings["enable"] or not self.settings["preference_tool_enable"]:
                 raise ValueError("联系偏好调整已关闭")
-            if action == "set" and not self.bounds(umo)[0] <= interval_minutes <= self.bounds(umo)[1]:
+            if (
+                action == "set"
+                and not self.bounds(umo)[0] <= interval_minutes <= self.bounds(umo)[1]
+            ):
                 raise ValueError("间隔须在 WebUI 设置的上下限内")
             if pause_until and pause_until <= now.timestamp():
                 raise ValueError("暂停结束时间须在未来")
@@ -345,9 +461,17 @@ class ContactControl:
             old = db.execute("SELECT status FROM contacts WHERE id=?", (ident,)).fetchone()
             if old and old[0] == "sent":
                 return
-            db.execute("INSERT OR REPLACE INTO contacts VALUES (?,?,?,?,?,?)", (ident, umo, persona, now.timestamp(), kind, "sent"))
+            db.execute(
+                "INSERT OR REPLACE INTO contacts VALUES (?,?,?,?,?,?)",
+                (ident, umo, persona, now.timestamp(), kind, "sent"),
+            )
             data = self.profile(db, umo, persona, now)
-            data.update(last_sent=now.timestamp(), awaiting=True, negative_applied=False, unanswered=data["unanswered"] + 1)
+            data.update(
+                last_sent=now.timestamp(),
+                awaiting=True,
+                negative_applied=False,
+                unanswered=data["unanswered"] + 1,
+            )
             self.ledger.save_profile(db, umo, persona, data)
 
     def seed_legacy(self, umo, persona, state, now):
@@ -355,10 +479,15 @@ class ContactControl:
         if state is None or state.persona_id != persona:
             return
         with self.ledger.transaction() as db:
-            if db.execute("SELECT 1 FROM profiles WHERE umo=? AND persona=?", (umo, persona)).fetchone():
+            if db.execute(
+                "SELECT 1 FROM profiles WHERE umo=? AND persona=?", (umo, persona)
+            ).fetchone():
                 return
             data = self.profile(db, umo, persona, now)
-            for field, old in (("last_sent", state.last_proactive_at), ("last_incoming", state.last_user_message_at)):
+            for field, old in (
+                ("last_sent", state.last_proactive_at),
+                ("last_incoming", state.last_user_message_at),
+            ):
                 if old:
                     try:
                         value = datetime.fromisoformat(old)
@@ -373,4 +502,14 @@ class ContactControl:
             if state.date == now.date().isoformat():
                 prefix = hashlib.sha256((umo + persona + state.date).encode()).hexdigest()
                 for index in range(min(100, state.sent_count)):
-                    db.execute("INSERT OR IGNORE INTO contacts VALUES (?,?,?,?,?,?)", ("legacy:" + prefix + str(index), umo, persona, now.timestamp(), "ordinary", "sent"))
+                    db.execute(
+                        "INSERT OR IGNORE INTO contacts VALUES (?,?,?,?,?,?)",
+                        (
+                            "legacy:" + prefix + str(index),
+                            umo,
+                            persona,
+                            now.timestamp(),
+                            "ordinary",
+                            "sent",
+                        ),
+                    )

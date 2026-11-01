@@ -100,7 +100,11 @@ def build_tools(runtime: Any, kinds: tuple[str, ...]) -> list[Any]:
 
     specs = (
         ("understand_image", "image", "理解当前会话中的图片。动图会按帧序列理解动画过程。"),
-        ("understand_video", "video", "理解当前会话中的视频。短视频按时间顺序抽帧，长视频先概括再精读关键片段。"),
+        (
+            "understand_video",
+            "video",
+            "理解当前会话中的视频。短视频按时间顺序抽帧，长视频先概括再精读关键片段。",
+        ),
         ("understand_audio", "audio", "理解当前会话中的音频，包括语音转录、环境声音与音乐。"),
         ("understand_file", "file", "理解当前会话中发送的文件（PDF/DOCX/PPTX/XLSX/文本等）。"),
     )

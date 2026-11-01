@@ -45,9 +45,7 @@ class MediaRef:
                 version = f"|{stat.st_size}|{stat.st_mtime_ns}"
         except OSError:
             version = ""
-        digest = hashlib.sha256(
-            f"{self.kind}|{self.reference}{version}".encode()
-        ).hexdigest()[:32]
+        digest = hashlib.sha256(f"{self.kind}|{self.reference}{version}".encode()).hexdigest()[:32]
         return digest
 
 

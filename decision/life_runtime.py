@@ -86,11 +86,7 @@ class CurrentPersonaResolver:
         persona = await self.context.persona_manager.get_persona(persona_id)
         return PersonaContext(
             persona_id,
-            str(
-                getattr(persona, "system_prompt", "")
-                or getattr(persona, "prompt", "")
-                or ""
-            ),
+            str(getattr(persona, "system_prompt", "") or getattr(persona, "prompt", "") or ""),
         )
 
 
@@ -211,7 +207,10 @@ class LifeRuntime(VirtualLifeBase):
             self.spawn(self._refresh_all(force=False))
         elif self.config["temporal_settings"]["enable"]:
             self.runtime.scheduler.start()
-        if any(self.config[key]["enable"] for key in ("adaptive_settings", "temporal_settings", "thought_settings")):
+        if any(
+            self.config[key]["enable"]
+            for key in ("adaptive_settings", "temporal_settings", "thought_settings")
+        ):
             self.spawn(self._control_loop())
 
     @property
@@ -283,7 +282,9 @@ class LifeRuntime(VirtualLifeBase):
                         try:
                             persona = await self.personas.resolve(umo)
                             now = self._now()
-                            plan = self.visible_plan(self.storage.get_plan(now.date().isoformat(), persona.id))
+                            plan = self.visible_plan(
+                                self.storage.get_plan(now.date().isoformat(), persona.id)
+                            )
                             if not plan or not plan.has_schedule:
                                 continue
                             self.life_state.current(persona.id, plan, now)
@@ -294,9 +295,19 @@ class LifeRuntime(VirtualLifeBase):
                                 # Failed model/Jev calls must not be retried every
                                 # tick. One retry per 15 min, not a paid busy loop.
                                 key = (umo, persona.id)
-                                if allowed and time.monotonic() - self._contact_attempts.get(key, -1e9) >= 900:
+                                if (
+                                    allowed
+                                    and time.monotonic() - self._contact_attempts.get(key, -1e9)
+                                    >= 900
+                                ):
                                     self._contact_attempts[key] = time.monotonic()
-                                    await self._attempt_unsolicited(umo, persona, plan, "根据联系偏好自然联系；若有合适的暂存想法可择机分享", "adaptive")
+                                    await self._attempt_unsolicited(
+                                        umo,
+                                        persona,
+                                        plan,
+                                        "根据联系偏好自然联系；若有合适的暂存想法可择机分享",
+                                        "adaptive",
+                                    )
                         except asyncio.CancelledError:
                             raise
                         except Exception as exc:
@@ -401,7 +412,9 @@ class LifeRuntime(VirtualLifeBase):
     async def record_incoming(self, event):
         now = self._now()
         event.set_extra("decision_contact_received_at", now.timestamp())
-        if str(event.get_sender_id()) != str(event.get_self_id()) and not self.owner._command_handler_matched(event):
+        if str(event.get_sender_id()) != str(
+            event.get_self_id()
+        ) and not self.owner._command_handler_matched(event):
             if self.config["adaptive_settings"]["enable"]:
                 umo = str(event.unified_msg_origin)
                 targeted = ":FriendMessage:" in umo
@@ -410,13 +423,22 @@ class LifeRuntime(VirtualLifeBase):
                     targeted = at_bot or reply_bot
                 persona = await self.personas.resolve(umo)
                 continuity = self.config["continuity_settings"]
-                self.contacts.observe(event, persona.id, now, targeted=targeted,
-                                      quality_pending=continuity["enable"] and continuity["quality_enabled"])
+                self.contacts.observe(
+                    event,
+                    persona.id,
+                    now,
+                    targeted=targeted,
+                    quality_pending=continuity["enable"] and continuity["quality_enabled"],
+                )
                 if self.policy.is_enabled(umo):
                     self.conversation.enqueue(event, persona.id, targeted=targeted)
-            elif self.config["continuity_settings"]["enable"] and self.policy.is_enabled(str(event.unified_msg_origin)):
+            elif self.config["continuity_settings"]["enable"] and self.policy.is_enabled(
+                str(event.unified_msg_origin)
+            ):
                 umo = str(event.unified_msg_origin)
-                targeted = ":FriendMessage:" in umo or any(self.owner._message_address_flags(event)[:2])
+                targeted = ":FriendMessage:" in umo or any(
+                    self.owner._message_address_flags(event)[:2]
+                )
                 persona = await self.personas.resolve(umo)
                 self.conversation.enqueue(event, persona.id, targeted=targeted)
         if not self.enabled or self.owner._command_handler_matched(event):
@@ -567,7 +589,9 @@ class LifeRuntime(VirtualLifeBase):
             return False
         if self.config["adaptive_settings"]["enable"]:
             ident = self._delivery_contact_ids.get(umo, "")
-            allowed, _ = self.contacts.gate(umo, persona_id, self._now(), exclude=ident, frequency=False)
+            allowed, _ = self.contacts.gate(
+                umo, persona_id, self._now(), exclude=ident, frequency=False
+            )
             if not allowed:
                 return False
         return (await self.personas.resolve(umo)).id == persona_id
@@ -578,7 +602,9 @@ class LifeRuntime(VirtualLifeBase):
         if state is None:
             raise RuntimeError("主动发起确认时找不到当前人格的会话状态")
         self.policy.record_delivery(state, self._now())
-        self.contacts.delivered(umo, state.persona_id, self._now(), self._delivery_contact_ids.get(umo))
+        self.contacts.delivered(
+            umo, state.persona_id, self._now(), self._delivery_contact_ids.get(umo)
+        )
 
     async def _attempt_unsolicited(self, umo, persona, plan, intent, trigger, *, attempt_key=""):
         if not self.enabled:
@@ -628,7 +654,13 @@ class LifeRuntime(VirtualLifeBase):
                     if not allowed:
                         return False, reason
                     current_item = timeline_item_at(plan, now)
-                    if current_item and (current_item.state == "sleep" or current_item.availability == "blocked") and trigger != "sleep":
+                    if (
+                        current_item
+                        and (
+                            current_item.state == "sleep" or current_item.availability == "blocked"
+                        )
+                        and trigger != "sleep"
+                    ):
                         return False, "sleeping or unavailable"
                 intent_allowed, intent_reason = self.contacts.intent_allowed(
                     umo, persona.id, intent, trigger, now
@@ -746,17 +778,34 @@ class LifeRuntime(VirtualLifeBase):
                 "这是群聊。只有最近资料中明确出现的 @ 或回复对象才可以被直接称呼；"
                 "没有明确对象时使用群体表达，不引用任何成员私聊信息。"
             )
-            state["explicit_group_targets"] = sorted({
-                str(target)
-                for row in observed
-                for target in row.get("targets", [])
-                if str(target).strip()
-            })
-        topic = self.conversation.due_topic(umo, persona.id) if self.config["continuity_settings"]["enable"] and self.config["continuity_settings"]["topics_enabled"] else None
-        thought = self.ideas.thought(umo, persona.id) if self.config["thought_settings"]["enable"] else None
+            state["explicit_group_targets"] = sorted(
+                {
+                    str(target)
+                    for row in observed
+                    for target in row.get("targets", [])
+                    if str(target).strip()
+                }
+            )
+        topic = (
+            self.conversation.due_topic(umo, persona.id)
+            if self.config["continuity_settings"]["enable"]
+            and self.config["continuity_settings"]["topics_enabled"]
+            else None
+        )
+        thought = (
+            self.ideas.thought(umo, persona.id)
+            if self.config["thought_settings"]["enable"]
+            else None
+        )
         state["follow_up_candidate"] = topic
-        state["idea_candidate"] = {"text": thought["text"], "source": thought["source"]} if thought else None
-        floor_due = self.config["adaptive_settings"]["enable"] and now.timestamp() - (contact["last_sent"] or contact["created"]) >= self.config["adaptive_settings"]["max_interval_minutes"] * 60
+        state["idea_candidate"] = (
+            {"text": thought["text"], "source": thought["source"]} if thought else None
+        )
+        floor_due = (
+            self.config["adaptive_settings"]["enable"]
+            and now.timestamp() - (contact["last_sent"] or contact["created"])
+            >= self.config["adaptive_settings"]["max_interval_minutes"] * 60
+        )
         try:
             result = await self.owner._evaluate(
                 state=fit_life_state(state, questions, self.owner._context_budget()),
@@ -798,25 +847,44 @@ class LifeRuntime(VirtualLifeBase):
         )
         prompt += "\n[程序记录的联系状态，必须遵守]\n" + json.dumps(contact, ensure_ascii=False)
         if human.get("relationship_memory_enable", True) and contact.get("relationship"):
-            prompt += "\n[关系阶段仅用于调整分寸，不得编造关系事实]\n" + json.dumps(contact["relationship"], ensure_ascii=False)
+            prompt += "\n[关系阶段仅用于调整分寸，不得编造关系事实]\n" + json.dumps(
+                contact["relationship"], ensure_ascii=False
+            )
         if human.get("response_rhythm_enable", True) and contact.get("response_rhythm"):
-            prompt += "\n[用户回复节奏，仅用于调整消息长度和时机]\n" + json.dumps(contact["response_rhythm"], ensure_ascii=False)
+            prompt += "\n[用户回复节奏，仅用于调整消息长度和时机]\n" + json.dumps(
+                contact["response_rhythm"], ensure_ascii=False
+            )
         if ":GroupMessage:" in umo and human.get("group_addressing_enable", True):
             prompt += (
                 "\n[群聊对象边界]\n没有明确 @ 或回复对象时只使用群体表达；"
                 "不要把私聊内容带入群聊，不要凭空点名成员。"
             )
-            prompt += "\n[最近明确出现的群聊对象]\n" + json.dumps(state.get("explicit_group_targets", []), ensure_ascii=False)
+            prompt += "\n[最近明确出现的群聊对象]\n" + json.dumps(
+                state.get("explicit_group_targets", []), ensure_ascii=False
+            )
         continuous_state = self.life_state.current(persona.id, plan, now)
         if continuous_state:
-            prompt += "\n[当前活动的连续状态，不能推断真实外部操作完成]\n" + json.dumps(continuous_state, ensure_ascii=False)
+            prompt += "\n[当前活动的连续状态，不能推断真实外部操作完成]\n" + json.dumps(
+                continuous_state, ensure_ascii=False
+            )
         recent = self.conversation.recent_text(umo, persona.id)
         if recent:
-            prompt += "\n[最近实际发出的内容；不要重复开场、重复追问或换句话重复同一分享]\n" + json.dumps(recent, ensure_ascii=False)
+            prompt += (
+                "\n[最近实际发出的内容；不要重复开场、重复追问或换句话重复同一分享]\n"
+                + json.dumps(recent, ensure_ascii=False)
+            )
         if topic:
-            prompt += "\n[可自然跟进的一件未结束事项；用户尚未说明结果，只能询问，不能假定结果；群聊只面向原发言者]\n" + json.dumps(topic, ensure_ascii=False)
+            prompt += (
+                "\n[可自然跟进的一件未结束事项；用户尚未说明结果，只能询问，不能假定结果；群聊只面向原发言者]\n"
+                + json.dumps(topic, ensure_ascii=False)
+            )
         if thought:
-            prompt += "\n可择机分享的想法（来源时间是真实记录，勿说成刚刚发生，不要编造亲身经历）：\n" + json.dumps({k: thought[k] for k in ("text", "source", "created")}, ensure_ascii=False)
+            prompt += (
+                "\n可择机分享的想法（来源时间是真实记录，勿说成刚刚发生，不要编造亲身经历）：\n"
+                + json.dumps(
+                    {k: thought[k] for k in ("text", "source", "created")}, ensure_ascii=False
+                )
+            )
         if delivery["proactive_timeline_context"]:
             prompt += "\n" + self.smart_context_injector.build_proactive_context(
                 plan, now, self.long_term
@@ -833,8 +901,15 @@ class LifeRuntime(VirtualLifeBase):
         if media:
             prompt += "\n" + media
         sent = await dispatch_life_agent(
-            self, umo, prompt, generation, persona.id, intent, media_choice=media_choice,
-            offered_ideas=[thought] if thought else [], offered_topics=[topic] if topic else [],
+            self,
+            umo,
+            prompt,
+            generation,
+            persona.id,
+            intent,
+            media_choice=media_choice,
+            offered_ideas=[thought] if thought else [],
+            offered_topics=[topic] if topic else [],
         )
         if sent:
             self.offline.pop(umo.split(":", 1)[0], None)
@@ -873,9 +948,13 @@ class LifeRuntime(VirtualLifeBase):
         if self.config["continuity_settings"]["enable"]:
             umo = str(event.unified_msg_origin)
             persona = await self.personas.resolve(umo)
-            plan = self.visible_plan(self.storage.get_plan(self._now().date().isoformat(), persona.id))
-            facts = {"life": self.life_state.current(persona.id, plan, self._now()),
-                     **self.conversation.context(umo, persona.id)}
+            plan = self.visible_plan(
+                self.storage.get_plan(self._now().date().isoformat(), persona.id)
+            )
+            facts = {
+                "life": self.life_state.current(persona.id, plan, self._now()),
+                **self.conversation.context(umo, persona.id),
+            }
             budget = min(12000, max(1000, self.config["smart_context_injection"]["max_chars"]))
             while len(json.dumps(facts, ensure_ascii=False)) > budget:
                 if facts["recent_actual_bot_messages"]:
@@ -887,19 +966,34 @@ class LifeRuntime(VirtualLifeBase):
                 elif facts["topics"]:
                     facts["topics"].pop()
                 else:
-                    facts["life"] = {k: str(v)[:150] for k, v in facts["life"].items() if k in {"activity", "phase", "tone", "planned_end", "source"}}
+                    facts["life"] = {
+                        k: str(v)[:150]
+                        for k, v in facts["life"].items()
+                        if k in {"activity", "phase", "tone", "planned_end", "source"}
+                    }
                     break
             if facts["life"] or facts["topics"] or facts["recent_actual_bot_messages"]:
-                req.extra_user_content_parts.append(temporary_text("[连续生活与真实对话记录：已问过的问题不重复追问；已知结果不再当作未知；禁止捏造新见闻]\n" + json.dumps(facts, ensure_ascii=False)))
+                req.extra_user_content_parts.append(
+                    temporary_text(
+                        "[连续生活与真实对话记录：已问过的问题不重复追问；已知结果不再当作未知；禁止捏造新见闻]\n"
+                        + json.dumps(facts, ensure_ascii=False)
+                    )
+                )
         if self.config["temporal_settings"]["enable"] or self.config["adaptive_settings"]["enable"]:
             umo = str(event.unified_msg_origin)
             persona = await self.personas.resolve(umo)
             text = "[程序时间与联系账本：数据事实优先，禁止猜测进度]\n"
             text += self.temporal.describe(umo, persona.id, self._now())
-            text += "\n联系状态：" + json.dumps(self.contacts.summary(umo, persona.id, self._now()), ensure_ascii=False)
+            text += "\n联系状态：" + json.dumps(
+                self.contacts.summary(umo, persona.id, self._now()), ensure_ascii=False
+            )
             text += "\n用户要求调整频率时使用 adjust_contact_frequency；创建未来联系或承诺某时开始/完成前，必须先用 future_contact 持久化。start=到时开始，virtual_finish=虚拟活动到时可完成，external_finish=外部任务必须另有完成确认。普通回复不消耗主动额度。不要用原生 future_task 绕过这些规则。"
             if event.get_extra("decision_contact_feedback", ""):
-                text += "\n本条真实来信已由程序保存偏好：" + event.get_extra("decision_contact_feedback") + "，不要重复调整。"
+                text += (
+                    "\n本条真实来信已由程序保存偏好："
+                    + event.get_extra("decision_contact_feedback")
+                    + "，不要重复调整。"
+                )
             req.extra_user_content_parts.append(temporary_text(text))
         if not self.enabled:
             return
@@ -938,7 +1032,8 @@ class LifeRuntime(VirtualLifeBase):
                 if umo is None or key.startswith(f"pvd:{self._umo_hash(umo)}:")
             ],
             "sessions": {
-                key: value.to_dict() | {
+                key: value.to_dict()
+                | {
                     "umo": key.rsplit("\x00", 1)[0] if "\x00" in key else key,
                     "persona": value.persona_id,
                 }
@@ -946,10 +1041,22 @@ class LifeRuntime(VirtualLifeBase):
                 if umo is None or key.rsplit("\x00", 1)[0] == umo
             },
             "contact_profiles": self._contact_profiles(umo),
-            "future_contacts": [self.temporal.public_task(t, self._now()) | {"umo": t["umo"], "persona": t["persona"]} for t in self.ledger.tasks(umo, limit=100)],
+            "future_contacts": [
+                self.temporal.public_task(t, self._now())
+                | {"umo": t["umo"], "persona": t["persona"]}
+                for t in self.ledger.tasks(umo, limit=100)
+            ],
         }
 
     def _contact_profiles(self, umo):
         with self.ledger.transaction() as db:
-            rows = db.execute("SELECT umo,persona,data FROM profiles" + (" WHERE umo=?" if umo else "") + " LIMIT 200", (umo,) if umo else ()).fetchall()
-            return [{"umo": row["umo"], "persona": row["persona"], **json.loads(row["data"])} for row in rows]
+            rows = db.execute(
+                "SELECT umo,persona,data FROM profiles"
+                + (" WHERE umo=?" if umo else "")
+                + " LIMIT 200",
+                (umo,) if umo else (),
+            ).fetchall()
+            return [
+                {"umo": row["umo"], "persona": row["persona"], **json.loads(row["data"])}
+                for row in rows
+            ]

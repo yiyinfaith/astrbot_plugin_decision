@@ -113,7 +113,9 @@ def infer_dialogue_target(
     bot_target_ids = {bot_id} if bot_id else {BOT_TARGET_ID}
     targets = _unique_targets(current.at_targets)
     bot_targets = [name for target_id, name in targets if target_id in bot_target_ids]
-    other_targets = [(target_id, name) for target_id, name in targets if target_id not in bot_target_ids]
+    other_targets = [
+        (target_id, name) for target_id, name in targets if target_id not in bot_target_ids
+    ]
     if bot_targets:
         label = "你" if not other_targets else "你和" + "、".join(name for _, name in other_targets)
         return DialogueInference(BOT_TARGET_ID, label, 1.0, "explicit_at_bot")
@@ -348,8 +350,7 @@ class ProactiveState:
                 target = item.talking_to_name or item.talking_to or GROUP_TARGET_NAME
                 target_identity = (
                     f"{target} ({item.talking_to})"
-                    if item.talking_to not in {GROUP_TARGET_ID, BOT_TARGET_ID}
-                    and item.talking_to
+                    if item.talking_to not in {GROUP_TARGET_ID, BOT_TARGET_ID} and item.talking_to
                     else target
                 )
                 lines.append(f"[{identity} → {target_identity}]: {item.text}")

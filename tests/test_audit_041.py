@@ -19,7 +19,11 @@ def audit(request):
 
 
 async def task(c, **extra):
-    data = json.loads(await c.temporal.manage(Event(), action="create", delay_seconds=21600, note="外部处理", **extra))
+    data = json.loads(
+        await c.temporal.manage(
+            Event(), action="create", delay_seconds=21600, note="外部处理", **extra
+        )
+    )
     return data["task"]["id"]
 
 
@@ -57,7 +61,7 @@ async def test_cancel_while_waiting_for_model_slot_never_submits_request(audit):
     for _ in range(100):
         if c.ledger.get_task(ident)["status"] == "preparing":
             break
-        await asyncio.sleep(.001)
+        await asyncio.sleep(0.001)
     await c.temporal.manage(Event(), action="cancel", task_id=ident)
     c.temporal.model_slots.release()
     await asyncio.wait_for(pending, 1)
@@ -69,7 +73,13 @@ async def test_cancel_while_waiting_for_model_slot_never_submits_request(audit):
 async def test_edit_clears_old_prepare_backoff_and_cached_text(audit):
     c = audit
     ident = await task(c)
-    c.temporal.update(ident, 1, next_prepare_at=c.now[0].timestamp() + 86400, error="old failure", prepared="过时正文")
+    c.temporal.update(
+        ident,
+        1,
+        next_prepare_at=c.now[0].timestamp() + 86400,
+        error="old failure",
+        prepared="过时正文",
+    )
     await c.temporal.manage(Event(), action="edit", task_id=ident, delay_seconds=60, note="新提醒")
     await c.temporal.prepare(ident, 2)
     stored = c.ledger.get_task(ident)
@@ -87,7 +97,9 @@ async def test_external_question_is_not_confirmation_and_proven_completion_inval
     with pytest.raises(ValueError, match="没有明确"):
         await c.temporal.manage(Event(text="外部处理做好了吗？"), action="complete", task_id=ident)
     assert not c.ledger.get_task(ident).get("external_confirmed")
-    c.provider.text_chat.return_value.completion_text = '{"confirmed":true,"quote":"外部处理已经做好了"}'
+    c.provider.text_chat.return_value.completion_text = (
+        '{"confirmed":true,"quote":"外部处理已经做好了"}'
+    )
     await c.temporal.manage(Event(text="外部处理已经做好了"), action="complete", task_id=ident)
     stored = c.ledger.get_task(ident)
     assert stored["external_confirmed"] is True
@@ -113,7 +125,19 @@ def test_old_topic_ids_are_preserved_and_not_reopened(audit):
     title = data["topics"][0]["title"]
     legacy = hashlib.sha256((UMO + "alice" + src["sender"] + title).encode()).hexdigest()
     with c.ledger.transaction() as db:
-        db.execute("INSERT INTO topics VALUES (?,?,?,?,?,?,?,?)", (legacy, UMO, "alice", src["sender"], c.now[0].timestamp(), c.now[0].timestamp() + 86400, "asked", json.dumps({"title": title, "note": "已问过", "quote": src["text"]})))
+        db.execute(
+            "INSERT INTO topics VALUES (?,?,?,?,?,?,?,?)",
+            (
+                legacy,
+                UMO,
+                "alice",
+                src["sender"],
+                c.now[0].timestamp(),
+                c.now[0].timestamp() + 86400,
+                "asked",
+                json.dumps({"title": title, "note": "已问过", "quote": src["text"]}),
+            ),
+        )
     c.runtime.conversation.apply(UMO, "alice", [src], data)
     rows = c.runtime.conversation.topics(UMO, "alice")
     assert len(rows) == 1 and rows[0]["id"] == legacy and rows[0]["status"] == "asked"
@@ -123,7 +147,9 @@ def test_old_topic_ids_are_preserved_and_not_reopened(audit):
 async def test_invalid_task_types_do_not_create_or_charge(audit, notify, delay):
     c = audit
     with pytest.raises(ValueError):
-        await c.temporal.manage(Event(), action="create", delay_seconds=delay, note="不应创建", notify=notify)
+        await c.temporal.manage(
+            Event(), action="create", delay_seconds=delay, note="不应创建", notify=notify
+        )
     assert c.ledger.tasks() == [] and c.provider.text_chat.await_count == 0
 
 
@@ -141,7 +167,15 @@ async def test_commitment_waits_for_its_actual_text_and_uses_acknowledgement_tim
     async def receipt(**kwargs):
         assert "我六小时后完成外部处理" in kwargs["prompt"]
         c.now[0] += timedelta(seconds=30)  # model latency cannot shift the promise
-        return type("Response", (), {"completion_text": json.dumps({"commitments": [{"id": ident, "quote": "我六小时后完成外部处理"}]})})()
+        return type(
+            "Response",
+            (),
+            {
+                "completion_text": json.dumps(
+                    {"commitments": [{"id": ident, "quote": "我六小时后完成外部处理"}]}
+                )
+            },
+        )()
 
     c.provider.text_chat.side_effect = receipt
     await c.temporal.activate_from_event(event, "我六小时后完成外部处理")
@@ -155,6 +189,7 @@ async def test_commitment_waits_for_its_actual_text_and_uses_acknowledgement_tim
 
 async def test_failed_send_never_confirms_commitment_or_records_text(audit):
     from types import SimpleNamespace
+
     c = audit
     event = Event()
     ident = await task(c, origin="bot", kind="virtual_finish", notify=False)
@@ -185,7 +220,15 @@ async def test_commitment_receipt_cannot_cross_scope_or_activate_cancelled_revis
 
     async def receipt(**kwargs):
         await c.temporal.manage(event, action="cancel", task_id=ident)
-        return type("Response", (), {"completion_text": json.dumps({"commitments": [{"id": ident, "quote": "我六小时后完成外部处理"}]})})()
+        return type(
+            "Response",
+            (),
+            {
+                "completion_text": json.dumps(
+                    {"commitments": [{"id": ident, "quote": "我六小时后完成外部处理"}]}
+                )
+            },
+        )()
 
     c.provider.text_chat.side_effect = receipt
     await c.temporal.activate_from_event(event, "我六小时后完成外部处理")
@@ -206,25 +249,43 @@ def test_malformed_analysis_arrays_do_not_change_state(audit, bad):
 def test_malformed_quality_kind_does_not_crash_or_change_state(audit):
     c = audit
     src = source(c)
-    c.runtime.conversation.apply(UMO, "alice", [src], {"signals": [{"source_id": src["id"], "quote": src["text"], "engagement": [], "confidence": .99}]})
+    c.runtime.conversation.apply(
+        UMO,
+        "alice",
+        [src],
+        {
+            "signals": [
+                {"source_id": src["id"], "quote": src["text"], "engagement": [], "confidence": 0.99}
+            ]
+        },
+    )
     assert not c.contacts.summary(UMO, "alice", c.now[0]).get("engagement")
 
 
 async def test_last_four_duplicate_baseline_survives_retention_without_time_limit(audit):
     c = audit
     for i in range(6):
-        await c.runtime.delivery.record(UMO, "alice", f"old{i}", f"这是第{i}条足够长的真实主动发送消息，用于测试保留最近四条。")
+        await c.runtime.delivery.record(
+            UMO, "alice", f"old{i}", f"这是第{i}条足够长的真实主动发送消息，用于测试保留最近四条。"
+        )
         c.now[0] += timedelta(days=1)
     c.now[0] += timedelta(days=90)
     c.ledger.prune(c.now[0].timestamp())
     assert len(c.runtime.conversation.recent(UMO, "alice", 10)) == 4
-    assert c.runtime.delivery.repeated(UMO, "alice", "这是第5条足够长的真实主动发送消息，用于测试保留最近四条。")
-    assert not c.runtime.delivery.repeated(UMO, "bob", "这是第5条足够长的真实主动发送消息，用于测试保留最近四条。")
+    assert c.runtime.delivery.repeated(
+        UMO, "alice", "这是第5条足够长的真实主动发送消息，用于测试保留最近四条。"
+    )
+    assert not c.runtime.delivery.repeated(
+        UMO, "bob", "这是第5条足够长的真实主动发送消息，用于测试保留最近四条。"
+    )
 
 
-@pytest.mark.parametrize("invalid", [{}, {"conflict": "false"}, {"conflict": True, "corrected": {"text": "invalid"}}])
+@pytest.mark.parametrize(
+    "invalid", [{}, {"conflict": "false"}, {"conflict": True, "corrected": {"text": "invalid"}}]
+)
 async def test_invalid_guard_schema_never_releases_unchecked_completion(audit, invalid):
     from types import SimpleNamespace
+
     c = audit
     await task(c, kind="external_finish")
     c.provider.text_chat.return_value.completion_text = json.dumps(invalid)

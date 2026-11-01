@@ -24,8 +24,24 @@ HARD_MAX_BYTES = 512 * 1024 * 1024
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".apng"}
 TEXT_SUFFIXES = {
-    ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".yaml", ".yml",
-    ".log", ".ini", ".toml", ".py", ".js", ".ts", ".html", ".css", ".xml", ".sql",
+    ".txt",
+    ".md",
+    ".markdown",
+    ".csv",
+    ".tsv",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".log",
+    ".ini",
+    ".toml",
+    ".py",
+    ".js",
+    ".ts",
+    ".html",
+    ".css",
+    ".xml",
+    ".sql",
 }
 AUDIO_SUFFIXES = {".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".opus", ".amr", ".silk"}
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".flv", ".m4v", ".ts"}
@@ -122,9 +138,7 @@ def _resize_to_edge(frame: Any, edge: int) -> Any:
     if max(width, height) <= edge:
         return frame
     scale = edge / float(max(width, height))
-    return frame.resize(
-        (max(1, int(width * scale)), max(1, int(height * scale))), Image.LANCZOS
-    )
+    return frame.resize((max(1, int(width * scale)), max(1, int(height * scale))), Image.LANCZOS)
 
 
 def prepare_image(path: Path, settings: Any, workdir: Path) -> Prepared:
@@ -155,9 +169,7 @@ def prepare_image(path: Path, settings: Any, workdir: Path) -> Prepared:
             # format, otherwise re-encode to PNG.
             if image.format in {"PNG", "JPEG", "WEBP"}:
                 prepared.images.append(str(path))
-                prepared.notes.append(
-                    f"静态图片 {image.format} {width}x{height}"
-                )
+                prepared.notes.append(f"静态图片 {image.format} {width}x{height}")
                 return prepared
             target = workdir / f"{path.stem}-still.png"
             _flatten_alpha(image).save(target, "PNG")
@@ -189,9 +201,7 @@ def prepare_image(path: Path, settings: Any, workdir: Path) -> Prepared:
             "请描述画面随时间的变化，而不是只描述某一帧。"
         )
         prepared.notes.insert(0, header)
-        logger.debug(
-            "Decision Engine 动图解码：%s 帧取 %s 帧", frames_total, len(prepared.images)
-        )
+        logger.debug("Decision Engine 动图解码：%s 帧取 %s 帧", frames_total, len(prepared.images))
     return prepared
 
 
@@ -254,9 +264,7 @@ def require_ffmpeg() -> None:
     missing = [name for name, ok in status.items() if not ok]
     if missing:
         raise ValueError(
-            "缺少 "
-            + " / ".join(missing)
-            + "，无法处理视频或转换音频；请先安装 FFmpeg 后重试"
+            "缺少 " + " / ".join(missing) + "，无法处理视频或转换音频；请先安装 FFmpeg 后重试"
         )
 
 
@@ -264,8 +272,14 @@ async def probe_video(path: Path) -> dict[str, Any]:
     require_ffmpeg()
     code, out, _ = await run_command(
         [
-            "ffprobe", "-v", "error", "-print_format", "json",
-            "-show_format", "-show_streams", str(path),
+            "ffprobe",
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            str(path),
         ],
         timeout=60,
     )
@@ -311,18 +325,21 @@ async def extract_frames(
     frames: list[str] = []
     for order, moment in enumerate(timestamps):
         target = workdir / f"v-{order:03d}.png"
-        scale = (
-            f"scale='min({edge},iw)':-2"
-            if edge
-            else "scale=iw:-2"
-        )
+        scale = f"scale='min({edge},iw)':-2" if edge else "scale=iw:-2"
         code, _, _ = await run_command(
             [
-                "ffmpeg", "-v", "error", "-y",
-                "-ss", f"{max(0.0, moment):.3f}",
-                "-i", str(path),
-                "-frames:v", "1",
-                "-vf", scale,
+                "ffmpeg",
+                "-v",
+                "error",
+                "-y",
+                "-ss",
+                f"{max(0.0, moment):.3f}",
+                "-i",
+                str(path),
+                "-frames:v",
+                "1",
+                "-vf",
+                scale,
                 str(target),
             ],
             timeout=90,
@@ -336,8 +353,18 @@ async def extract_audio_track(path: Path, workdir: Path) -> str:
     target = workdir / "v-audio.mp3"
     code, _, _ = await run_command(
         [
-            "ffmpeg", "-v", "error", "-y", "-i", str(path),
-            "-vn", "-ac", "1", "-ar", "16000", str(target),
+            "ffmpeg",
+            "-v",
+            "error",
+            "-y",
+            "-i",
+            str(path),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            str(target),
         ],
         timeout=180,
     )
@@ -351,10 +378,22 @@ async def audio_is_silent(path: Path) -> bool | None:
     A silent codec stream must not invite the model to invent sounds.
     """
     try:
-        code, _, error = await run_command([
-            "ffmpeg", "-hide_banner", "-nostdin", "-i", str(path), "-vn",
-            "-af", "volumedetect", "-f", "null", "-",
-        ], timeout=60)
+        code, _, error = await run_command(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-nostdin",
+                "-i",
+                str(path),
+                "-vn",
+                "-af",
+                "volumedetect",
+                "-f",
+                "null",
+                "-",
+            ],
+            timeout=60,
+        )
     except (OSError, RuntimeError, TimeoutError):
         return None
     match = re.search(r"max_volume:\s*(-?inf|[-\d.]+)\s*dB", error.decode("utf-8", "replace"))
@@ -404,9 +443,7 @@ async def probe_audio(path: Path) -> dict[str, Any]:
     return {"duration": max(0.0, duration)}
 
 
-async def prepare_audio(
-    path: Path, settings: Any, workdir: Path
-) -> Prepared:
+async def prepare_audio(path: Path, settings: Any, workdir: Path) -> Prepared:
     prepared = Prepared()
     _guard_size(path, int(settings.int("mm_max_file_mb")))
     info = await probe_audio(path)
@@ -421,8 +458,18 @@ async def prepare_audio(
         converted = workdir / "audio.mp3"
         code, _, _ = await run_command(
             [
-                "ffmpeg", "-v", "error", "-y", "-i", str(path),
-                "-vn", "-ac", "1", "-ar", "16000", str(converted),
+                "ffmpeg",
+                "-v",
+                "error",
+                "-y",
+                "-i",
+                str(path),
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                str(converted),
             ],
             timeout=180,
         )
@@ -439,9 +486,21 @@ async def prepare_audio(
             target = workdir / f"a-{index:02d}.mp3"
             code, _, _ = await run_command(
                 [
-                    "ffmpeg", "-v", "error", "-y", "-ss", f"{start:.1f}",
-                    "-t", f"{segment}", "-i", str(source),
-                    "-ac", "1", "-ar", "16000", str(target),
+                    "ffmpeg",
+                    "-v",
+                    "error",
+                    "-y",
+                    "-ss",
+                    f"{start:.1f}",
+                    "-t",
+                    f"{segment}",
+                    "-i",
+                    str(source),
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "16000",
+                    str(target),
                 ],
                 timeout=180,
             )

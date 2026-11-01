@@ -109,8 +109,19 @@ async def test_life_control_gates_native_and_raw_media_tools_before_jev(host):
     plugin = host.module.DecisionPlugin(host.context, host.config)
     config = life_defaults()
     plugin._life_runtime = SimpleNamespace(config=config)
-    names = ["adjust_contact_frequency", "future_contact", "save_life_thought", "future_task",
-             "generate_image", "generate_video", "generate_audio", "take_photo", "take_video", "send_voice", "unrelated_tool"]
+    names = [
+        "adjust_contact_frequency",
+        "future_contact",
+        "save_life_thought",
+        "future_task",
+        "generate_image",
+        "generate_video",
+        "generate_audio",
+        "take_photo",
+        "take_video",
+        "send_voice",
+        "unrelated_tool",
+    ]
     req = SimpleNamespace(func_tool=SimpleNamespace(tools=[SimpleNamespace(name=n) for n in names]))
     extras = {"decision_life_proactive": True}
     event = SimpleNamespace(get_extra=lambda key, default=None: extras.get(key, default))
@@ -120,7 +131,11 @@ async def test_life_control_gates_native_and_raw_media_tools_before_jev(host):
     req.func_tool.tools = [SimpleNamespace(name=n) for n in names]
     extras["decision_life_media_kind"] = "photo"
     await plugin.life_control_tool_state(event, req)
-    assert {t.name for t in req.func_tool.tools} == {"future_contact", "take_photo", "unrelated_tool"}
+    assert {t.name for t in req.func_tool.tools} == {
+        "future_contact",
+        "take_photo",
+        "unrelated_tool",
+    }
 
 
 def test_life_tasks_payload_drops_base64_images(host):
@@ -204,9 +219,7 @@ def test_life_job_limit_evicts_a_finished_job_first(host):
     }
     # Simulate the eviction loop exactly as the endpoint runs it.
     while len(plugin._life_jobs) >= plugin._life_job_limit:
-        removable = next(
-            (k for k, v in plugin._life_jobs.items() if v["state"] != "running"), None
-        )
+        removable = next((k for k, v in plugin._life_jobs.items() if v["state"] != "running"), None)
         assert removable is not None
         plugin._life_jobs.pop(removable, None)
     plugin._life_jobs["new"] = {"state": "running"}
@@ -302,8 +315,10 @@ async def test_removed_auto_switch_is_dropped_on_load_save_and_reload(host):
         "jev_pre_prompt": "keep my policy",
         "proactive_whitelist": ["keep-session"],
         "multimodal": {
-            "mm_enabled": True, "mm_auto_enabled": False,
-            "mm_auto_image": True, "mm_auto_scope": ["keep-session"],
+            "mm_enabled": True,
+            "mm_auto_enabled": False,
+            "mm_auto_image": True,
+            "mm_auto_scope": ["keep-session"],
             "mm_default_model": "keep-model",
         },
     }
@@ -313,7 +328,9 @@ async def test_removed_auto_switch_is_dropped_on_load_save_and_reload(host):
     assert "mm_auto_enabled" not in plugin._detail_settings["multimodal"]
     assert "mm_auto_enabled" not in plugin._multimodal_page_settings()
     # A stale client cannot write the removed switch back into the settings.
-    host.body.update(always_keep_tools=[], dialogue_enhancement={"multimodal": {"mm_auto_enabled": True}})
+    host.body.update(
+        always_keep_tools=[], dialogue_enhancement={"multimodal": {"mm_auto_enabled": True}}
+    )
     result = await plugin.page_save_settings()
     assert result.get("saved") is True, result
     saved = json.loads(host.path.read_text(encoding="utf-8"))
@@ -331,7 +348,9 @@ async def test_removed_auto_switch_is_dropped_on_load_save_and_reload(host):
 async def test_multimodal_stream_default_and_save_reload(host):
     plugin = host.module.DecisionPlugin(host.context, host.config)
     assert plugin._multimodal_page_settings()["mm_stream_enabled"] is True
-    host.body.update(always_keep_tools=[], dialogue_enhancement={"multimodal": {"mm_stream_enabled": False}})
+    host.body.update(
+        always_keep_tools=[], dialogue_enhancement={"multimodal": {"mm_stream_enabled": False}}
+    )
     result = await plugin.page_save_settings()
     assert result.get("saved") is True, result
     assert plugin._multimodal_settings()["mm_stream_enabled"] is False
@@ -345,9 +364,15 @@ async def test_multimodal_stream_default_and_save_reload(host):
 async def test_gateway_stream_compat_saves_without_replacing_model_or_other_policy(host):
     plugin = host.module.DecisionPlugin(host.context, host.config)
     assert plugin._multimodal_page_settings()["mm_gateway_openai_stream"] is False
-    host.body.update(always_keep_tools=[], dialogue_enhancement={"multimodal": {
-        "mm_gateway_openai_stream": True, "mm_default_model": "chosen-model",
-    }})
+    host.body.update(
+        always_keep_tools=[],
+        dialogue_enhancement={
+            "multimodal": {
+                "mm_gateway_openai_stream": True,
+                "mm_default_model": "chosen-model",
+            }
+        },
+    )
     assert (await plugin.page_save_settings()).get("saved") is True
     reloaded = host.module.DecisionPlugin(host.context, host.config)
     assert reloaded._multimodal_page_settings()["mm_gateway_openai_stream"] is True
@@ -425,9 +450,7 @@ def test_native_provider_schema_uses_live_decision_provider_ids(host):
             )
 
     host.config.schema = host.schema
-    host.context.provider_manager = SimpleNamespace(
-        decision_provider_insts=[NativeProvider()]
-    )
+    host.context.provider_manager = SimpleNamespace(decision_provider_insts=[NativeProvider()])
     host.module.DecisionPlugin(host.context, host.config)
     assert host.schema["decision_provider_id"]["options"] == ["", "production-jev"]
     assert host.schema["decision_provider_id"]["labels"] == [
@@ -1318,8 +1341,11 @@ async def test_direct_wake_bypasses_life_reply_waiting(host):
         ({"enable": True}, True, True),
         ({"enable": True, "enable_llm_update_tool": False}, False, True),
         ({"enable": True, "enable_llm_query_tool": False}, True, False),
-        ({"enable": True, "enable_llm_update_tool": False, "enable_llm_query_tool": False},
-         False, False),
+        (
+            {"enable": True, "enable_llm_update_tool": False, "enable_llm_query_tool": False},
+            False,
+            False,
+        ),
     ],
 )
 async def test_network_tool_visibility_follows_its_switches(

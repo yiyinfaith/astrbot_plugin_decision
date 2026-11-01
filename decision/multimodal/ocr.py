@@ -38,7 +38,10 @@ def _tesseract_ready() -> tuple[bool, str]:
     except ImportError:
         return False, "未安装 pytesseract（pip install pytesseract）"
     if shutil.which("tesseract") is None:
-        return False, "未安装 tesseract 可执行程序（apt install tesseract-ocr tesseract-ocr-chi-sim）；Python 包安装命令：pip install pytesseract"
+        return (
+            False,
+            "未安装 tesseract 可执行程序（apt install tesseract-ocr tesseract-ocr-chi-sim）；Python 包安装命令：pip install pytesseract",
+        )
     return True, ""
 
 
@@ -71,11 +74,12 @@ def resolve_engine(requested: str) -> tuple[str, str]:
         return requested, ""
     if requested in ENGINE_LABELS and not status[requested]["available"]:
         reason = status[requested]["reason"]
-        fallback = next(
-            (name for name in ENGINE_LABELS if status[name]["available"]), ""
-        )
+        fallback = next((name for name in ENGINE_LABELS if status[name]["available"]), "")
         if fallback:
-            return fallback, f"{ENGINE_LABELS[requested]}不可用（{reason}），已改用{ENGINE_LABELS[fallback]}"
+            return (
+                fallback,
+                f"{ENGINE_LABELS[requested]}不可用（{reason}），已改用{ENGINE_LABELS[fallback]}",
+            )
         return "", f"{ENGINE_LABELS[requested]}不可用：{reason}"
     for name in ("tesseract", "paddleocr"):
         if status[name]["available"]:
@@ -124,9 +128,7 @@ async def ocr_image(
                 asyncio.to_thread(_ocr_tesseract, path, lang), timeout=timeout
             )
         else:
-            text = await asyncio.wait_for(
-                asyncio.to_thread(_ocr_paddle, path), timeout=timeout
-            )
+            text = await asyncio.wait_for(asyncio.to_thread(_ocr_paddle, path), timeout=timeout)
     except TimeoutError:
         return OcrResult(text="", engine=chosen, error=f"{ENGINE_LABELS[chosen]}识别超时")
     except Exception as exc:

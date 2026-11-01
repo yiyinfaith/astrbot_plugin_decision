@@ -1,4 +1,5 @@
 """Exercise Gemini's REST state/answer boundary over an actual local socket."""
+
 from __future__ import annotations
 
 import pytest
@@ -11,7 +12,9 @@ install()
 from decision.multimodal.native_video import agentic_generate  # noqa: E402
 
 
-@pytest.mark.parametrize("status", ["completed", "incomplete", "requires_action", "success", "failed"])
+@pytest.mark.parametrize(
+    "status", ["completed", "incomplete", "requires_action", "success", "failed"]
+)
 async def test_only_completed_interactions_publish_a_final_answer(status):
     calls = {"create": 0, "cancel": 0}
 
@@ -20,11 +23,17 @@ async def test_only_completed_interactions_publish_a_final_answer(status):
         body = await request.json()
         assert body["input"][0]["processing"] == "agentic"
         calls["create"] += 1
-        return web.json_response({"id": "audit", "status": status, "steps": [
-            {"type": "user_input", "content": [{"type": "text", "text": "USER PRIVATE"}]},
-            {"type": "thought", "content": [{"type": "text", "text": "THOUGHT PRIVATE"}]},
-            {"type": "model_output", "content": [{"type": "text", "text": "FINAL ONLY"}]},
-        ]})
+        return web.json_response(
+            {
+                "id": "audit",
+                "status": status,
+                "steps": [
+                    {"type": "user_input", "content": [{"type": "text", "text": "USER PRIVATE"}]},
+                    {"type": "thought", "content": [{"type": "text", "text": "THOUGHT PRIVATE"}]},
+                    {"type": "model_output", "content": [{"type": "text", "text": "FINAL ONLY"}]},
+                ],
+            }
+        )
 
     async def cancel(request):
         calls["cancel"] += 1
@@ -39,7 +48,14 @@ async def test_only_completed_interactions_publish_a_final_answer(status):
     await site.start()
     port = site._server.sockets[0].getsockname()[1]
     try:
-        kwargs = dict(api_key="private-test-key", base=f"http://127.0.0.1:{port}", model="test", file_uri="files/test", prompt="describe", timeout=2)
+        kwargs = dict(
+            api_key="private-test-key",
+            base=f"http://127.0.0.1:{port}",
+            model="test",
+            file_uri="files/test",
+            prompt="describe",
+            timeout=2,
+        )
         if status == "completed":
             assert await agentic_generate(**kwargs) == "FINAL ONLY"
         else:

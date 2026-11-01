@@ -71,7 +71,10 @@ async def perform_life_action(runtime, umo, action, text="", date_range=""):
                 if r.persona_id == persona.id
             ],
             "contact_control": runtime.contacts.summary(umo, persona.id, runtime._now()),
-            "future_contacts": [runtime.temporal.public_task(t, runtime._now()) for t in runtime.ledger.tasks(umo, persona.id, limit=60)],
+            "future_contacts": [
+                runtime.temporal.public_task(t, runtime._now())
+                for t in runtime.ledger.tasks(umo, persona.id, limit=60)
+            ],
             "pending_thought": runtime.temporal.thought(umo, persona.id),
             "topics": runtime.conversation.topics(umo, persona.id),
             "recent_messages": runtime.conversation.recent(umo, persona.id, 12),
@@ -125,23 +128,48 @@ async def perform_control_action(runtime, umo, payload):
             if not existing or existing["umo"] != umo or existing["persona"] != persona.id:
                 raise ValueError("当前会话人格下没有该任务")
             notify = existing.get("notify", True)
-        return json.loads(await runtime.temporal.manage(event,
-            action={"create_task": "create", "edit_task": "edit", "cancel_task": "cancel"}[action],
-            task_id=str(payload.get("task_id", "")), note=str(payload.get("note", "")),
-            run_at=str(payload.get("run_at", "")), origin="user", notify=notify))
+        return json.loads(
+            await runtime.temporal.manage(
+                event,
+                action={"create_task": "create", "edit_task": "edit", "cancel_task": "cancel"}[
+                    action
+                ],
+                task_id=str(payload.get("task_id", "")),
+                note=str(payload.get("note", "")),
+                run_at=str(payload.get("run_at", "")),
+                origin="user",
+                notify=notify,
+            )
+        )
     with runtime.ledger.transaction() as db:
         if action == "resolve_topic":
-            row = db.execute("SELECT data FROM topics WHERE id=? AND umo=? AND persona=?", (str(payload.get("topic_id", "")), umo, persona.id)).fetchone()
+            row = db.execute(
+                "SELECT data FROM topics WHERE id=? AND umo=? AND persona=?",
+                (str(payload.get("topic_id", "")), umo, persona.id),
+            ).fetchone()
             if not row:
                 raise ValueError("当前会话人格下没有该话题")
             data = json.loads(row[0])
-            data.update(resolved_at=runtime._now().timestamp(), outcome="管理员标记结束", outcome_source="authenticated_webui")
-            db.execute("UPDATE topics SET status='resolved',data=? WHERE id=? AND umo=? AND persona=?", (json.dumps(data, ensure_ascii=False), str(payload["topic_id"]), umo, persona.id))
+            data.update(
+                resolved_at=runtime._now().timestamp(),
+                outcome="管理员标记结束",
+                outcome_source="authenticated_webui",
+            )
+            db.execute(
+                "UPDATE topics SET status='resolved',data=? WHERE id=? AND umo=? AND persona=?",
+                (json.dumps(data, ensure_ascii=False), str(payload["topic_id"]), umo, persona.id),
+            )
         elif action == "dismiss_idea":
-            row = db.execute("SELECT data FROM thoughts WHERE id=? AND persona=?", (str(payload.get("idea_id", "")), persona.id)).fetchone()
+            row = db.execute(
+                "SELECT data FROM thoughts WHERE id=? AND persona=?",
+                (str(payload.get("idea_id", "")), persona.id),
+            ).fetchone()
             if not row or json.loads(row[0]).get("scope") not in {None, umo}:
                 raise ValueError("当前会话人格下没有该想法")
-            db.execute("INSERT OR REPLACE INTO shares VALUES (?,?,'dismissed')", (str(payload["idea_id"]), umo))
+            db.execute(
+                "INSERT OR REPLACE INTO shares VALUES (?,?,'dismissed')",
+                (str(payload["idea_id"]), umo),
+            )
         else:
             raise ValueError("未知会话控制操作")
     return {"saved": True}

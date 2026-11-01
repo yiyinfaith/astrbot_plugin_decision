@@ -110,9 +110,10 @@ class AstrBotDecisionProvider:
 
     @property
     def configured(self) -> bool:
-        return callable(getattr(self.context, "decision", None)) or getattr(
-            self.context, "decision", None
-        ) is not None
+        return (
+            callable(getattr(self.context, "decision", None))
+            or getattr(self.context, "decision", None) is not None
+        )
 
     async def start(self) -> None:
         """Retained as a lifecycle hook; AstrBot owns provider startup."""
@@ -139,8 +140,7 @@ class AstrBotDecisionProvider:
             )
         types = _native_types()
         native_questions = {
-            str(key): _native_question(question, types)
-            for key, question in questions.items()
+            str(key): _native_question(question, types) for key, question in questions.items()
         }
         last_error: Exception | None = None
         for attempt in range(self.retries + 1):

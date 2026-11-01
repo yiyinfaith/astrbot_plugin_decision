@@ -316,7 +316,10 @@ class DecisionPlugin(Star):
                 "通过 aigen 保持外貌与今日穿搭；不访问真实摄像头。",
                 self._take_video,
                 {
-                    "scene": {"type": "string", "description": "视频内容、动作和镜头要求，可留空。"},
+                    "scene": {
+                        "type": "string",
+                        "description": "视频内容、动作和镜头要求，可留空。",
+                    },
                     "subject": {
                         "type": "string",
                         "description": (
@@ -392,9 +395,12 @@ class DecisionPlugin(Star):
         from .decision.life_control_tools import control_tools
 
         for name, description, handler, properties, required in control_tools(self):
-            tool = DecisionFunctionTool(name=name, description=description,
+            tool = DecisionFunctionTool(
+                name=name,
+                description=description,
                 parameters={"type": "object", "properties": properties, "required": required},
-                handler=handler)
+                handler=handler,
+            )
             self._life_tools.append(tool)
             self.context.add_llm_tools(tool)
         # The merged Personal Network tools keep their upstream names so stored
@@ -416,7 +422,10 @@ class DecisionPlugin(Star):
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "ref": {"type": "string", "description": "本次调用内的临时引用名"},
+                                    "ref": {
+                                        "type": "string",
+                                        "description": "本次调用内的临时引用名",
+                                    },
                                     "id": {"type": "string", "description": "已存在人物的 UUID"},
                                     "name": {"type": "string", "description": "人物姓名"},
                                     "aliases": {
@@ -450,7 +459,10 @@ class DecisionPlugin(Star):
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "source": {"type": "string", "description": "主体，可用 persona 表示当前人格"},
+                                    "source": {
+                                        "type": "string",
+                                        "description": "主体，可用 persona 表示当前人格",
+                                    },
                                     "target": {"type": "string", "description": "关系目标"},
                                     "type": {"type": "string", "description": "关系类型"},
                                     "strength": {"type": "integer", "description": "亲密度 0-100"},
@@ -476,8 +488,14 @@ class DecisionPlugin(Star):
                                     },
                                     "type": {"type": "string", "description": "经历类型"},
                                     "summary": {"type": "string", "description": "经历摘要"},
-                                    "occurred_at": {"type": "string", "description": "ISO 8601 时间"},
-                                    "importance": {"type": "integer", "description": "重要度 0-100"},
+                                    "occurred_at": {
+                                        "type": "string",
+                                        "description": "ISO 8601 时间",
+                                    },
+                                    "importance": {
+                                        "type": "integer",
+                                        "description": "重要度 0-100",
+                                    },
                                     "emotional_tone": {"type": "string", "description": "情绪基调"},
                                 },
                                 "required": ["participants", "type", "summary"],
@@ -758,9 +776,7 @@ class DecisionPlugin(Star):
             try:
                 await self._multimodal.terminate()
             except Exception as exc:
-                logger.warning(
-                    "Decision Engine 多模态关闭失败：%s", _safe_error(exc)
-                )
+                logger.warning("Decision Engine 多模态关闭失败：%s", _safe_error(exc))
             self._multimodal = None
         if self._life_runtime is not None:
             try:
@@ -772,9 +788,7 @@ class DecisionPlugin(Star):
             try:
                 await self._personal_network.terminate()
             except Exception as exc:
-                logger.warning(
-                    "Decision Engine 人际网络关闭失败：%s", _safe_error(exc)
-                )
+                logger.warning("Decision Engine 人际网络关闭失败：%s", _safe_error(exc))
             self._personal_network = None
         if self.provider is not None:
             try:
@@ -2503,9 +2517,7 @@ class DecisionPlugin(Star):
             if getattr(self, "_settings_path", None)
             else Path.cwd()
         )
-        runtime = MultimodalRuntime(
-            self, data_dir=base, settings=self._multimodal_settings()
-        )
+        runtime = MultimodalRuntime(self, data_dir=base, settings=self._multimodal_settings())
         self._multimodal = runtime
         return runtime
 
@@ -2524,9 +2536,7 @@ class DecisionPlugin(Star):
         wanted = set(runtime.settings.tool_kinds)
         existing = {tool.name: tool for tool in self._multimodal_tools}
         for name, tool in list(existing.items()):
-            if name not in {
-                f"understand_{kind}" for kind in wanted
-            }:
+            if name not in {f"understand_{kind}" for kind in wanted}:
                 self._life_tools.remove(tool) if tool in self._life_tools else None
                 self._multimodal_tools.remove(tool)
         for tool in build_tools(runtime, tuple(wanted)):
@@ -2675,7 +2685,9 @@ class DecisionPlugin(Star):
         runtime = await self._get_life_runtime()
         return await runtime._add_schedule_requirement(event, date_range, requirement)
 
-    async def _adjust_contact_frequency(self, event, action="status", interval_minutes=0, pause_until=""):
+    async def _adjust_contact_frequency(
+        self, event, action="status", interval_minutes=0, pause_until=""
+    ):
         from .decision.life_temporal import parse_time
 
         runtime = await self._get_life_runtime()
@@ -2686,12 +2698,31 @@ class DecisionPlugin(Star):
         except (ValueError, TypeError) as exc:
             return "未修改联系偏好：" + str(exc)
 
-    async def _future_contact(self, event, action="list", task_id="", run_at="", delay_seconds=0,
-                              note="", origin="user", kind="reminder", notify=True):
+    async def _future_contact(
+        self,
+        event,
+        action="list",
+        task_id="",
+        run_at="",
+        delay_seconds=0,
+        note="",
+        origin="user",
+        kind="reminder",
+        notify=True,
+    ):
         runtime = await self._get_life_runtime()
         try:
-            return await runtime.temporal.manage(event, action=action, task_id=task_id, run_at=run_at,
-                delay_seconds=delay_seconds, note=note, origin=origin, kind=kind, notify=notify)
+            return await runtime.temporal.manage(
+                event,
+                action=action,
+                task_id=task_id,
+                run_at=run_at,
+                delay_seconds=delay_seconds,
+                note=note,
+                origin=origin,
+                kind=kind,
+                notify=notify,
+            )
         except (ValueError, TypeError) as exc:
             return "未来任务未修改：" + str(exc)
 
@@ -2700,13 +2731,23 @@ class DecisionPlugin(Star):
 
         runtime = await self._get_life_runtime()
         persona = await runtime.personas.resolve(str(event.unified_msg_origin))
-        plan = runtime.visible_plan(runtime.storage.get_plan(runtime._now().date().isoformat(), persona.id))
+        plan = runtime.visible_plan(
+            runtime.storage.get_plan(runtime._now().date().isoformat(), persona.id)
+        )
         item = timeline_item_at(plan, runtime._now()) if plan else None
         if not item:
             return "没有可验证的当前日程活动，未保存想法。"
         try:
-            ident = await runtime.ideas.save_thought(persona.id, text,
-                {"activity": item.activity, "location": item.location, "at": runtime._now().isoformat()}, scope=str(event.unified_msg_origin))
+            ident = await runtime.ideas.save_thought(
+                persona.id,
+                text,
+                {
+                    "activity": item.activity,
+                    "location": item.location,
+                    "at": runtime._now().isoformat(),
+                },
+                scope=str(event.unified_msg_origin),
+            )
             return "想法已暂存，是否分享由限频与偏好决定。记录 " + ident
         except ValueError as exc:
             return str(exc)
@@ -2719,9 +2760,11 @@ class DecisionPlugin(Star):
             return
         settings = runtime.config
         hide = set()
-        for name, group, flag in (("adjust_contact_frequency", "adaptive_settings", "preference_tool_enable"),
+        for name, group, flag in (
+            ("adjust_contact_frequency", "adaptive_settings", "preference_tool_enable"),
             ("future_contact", "temporal_settings", "task_tool_enable"),
-            ("save_life_thought", "thought_settings", "share_tool_enable")):
+            ("save_life_thought", "thought_settings", "share_tool_enable"),
+        ):
             if not settings[group]["enable"] or not settings[group][flag]:
                 hide.add(name)
         if settings["temporal_settings"]["enable"]:
@@ -2730,7 +2773,11 @@ class DecisionPlugin(Star):
             # Only Decision wrappers can enforce the one-kind/count budget.
             hide.update({"generate_image", "generate_video", "generate_audio"})
             kind = event.get_extra("decision_life_media_kind", "")
-            for name, media_kind in (("take_photo", "photo"), ("take_video", "video"), ("send_voice", "audio")):
+            for name, media_kind in (
+                ("take_photo", "photo"),
+                ("take_video", "video"),
+                ("send_voice", "audio"),
+            ):
                 if kind != media_kind:
                     hide.add(name)
         if event.get_extra("decision_temporal_guard", False):
@@ -2748,7 +2795,10 @@ class DecisionPlugin(Star):
                 self._life_runtime._mark_conversation_activity(str(event.unified_msg_origin))
                 return
             await self._life_runtime.temporal.prepare_event(event)
-            if self._life_runtime.config["continuity_settings"]["enable"] or self._life_runtime.config["temporal_settings"]["enable"]:
+            if (
+                self._life_runtime.config["continuity_settings"]["enable"]
+                or self._life_runtime.config["temporal_settings"]["enable"]
+            ):
                 persona = await self._life_runtime.personas.resolve(str(event.unified_msg_origin))
                 self._life_runtime.delivery.wrap_event(event, persona.id)
             await self._life_runtime.record_incoming(event)
@@ -2776,9 +2826,7 @@ class DecisionPlugin(Star):
             if refs:
                 event.set_extra("decision_mm_refs", refs)
         except Exception as exc:
-            logger.debug(
-                "Decision Engine 多模态观察跳过：%s", _safe_error(exc)
-            )
+            logger.debug("Decision Engine 多模态观察跳过：%s", _safe_error(exc))
 
     @staticmethod
     def _mm_allowed_tool_names(settings: dict[str, Any]) -> set[str]:
@@ -2786,11 +2834,7 @@ class DecisionPlugin(Star):
 
         if not settings.get("mm_enabled") or not settings.get("mm_tools_enabled"):
             return set()
-        return {
-            f"understand_{kind}"
-            for kind in MEDIA_KINDS
-            if settings.get(f"mm_tool_{kind}")
-        }
+        return {f"understand_{kind}" for kind in MEDIA_KINDS if settings.get(f"mm_tool_{kind}")}
 
     async def _apply_multimodal_tool_state(self, settings: dict[str, Any]) -> None:
         """Activate or deactivate the understanding tools inside AstrBot itself.
@@ -2815,9 +2859,7 @@ class DecisionPlugin(Star):
                     if callable(deactivate):
                         await deactivate(name)
             except Exception as exc:  # pragma: no cover - host API differences
-                logger.debug(
-                    "Decision Engine 切换多模态工具 %s 失败：%s", name, _safe_error(exc)
-                )
+                logger.debug("Decision Engine 切换多模态工具 %s 失败：%s", name, _safe_error(exc))
 
     def _mm_scope_allows(self, event: AstrMessageEvent, settings: dict[str, Any]) -> bool:
         """Apply the multi-modal auto-understanding black/white list."""
@@ -2830,9 +2872,7 @@ class DecisionPlugin(Star):
         return matched
 
     @filter.on_llm_request(priority=900)
-    async def multimodal_prepare_request(
-        self, event: AstrMessageEvent, req: ProviderRequest
-    ):
+    async def multimodal_prepare_request(self, event: AstrMessageEvent, req: ProviderRequest):
         """Make GIFs provider-safe and inject the media digest."""
 
         settings = self._multimodal_settings()
@@ -2900,9 +2940,13 @@ class DecisionPlugin(Star):
     @getattr(filter, "after_message_sent", lambda **kw: lambda fn: fn)()
     async def life_after_send(self, event):
         if self._life_runtime:
-            if self._life_runtime.config["adaptive_settings"]["enable"] and getattr(event, "__is_llm_reply", False):
+            if self._life_runtime.config["adaptive_settings"]["enable"] and getattr(
+                event, "__is_llm_reply", False
+            ):
                 persona = await self._life_runtime.personas.resolve(str(event.unified_msg_origin))
-                self._life_runtime.contacts.normal_reply(event, persona.id, self._life_runtime._now())
+                self._life_runtime.contacts.normal_reply(
+                    event, persona.id, self._life_runtime._now()
+                )
         if self._life_runtime and not event.get_extra("decision_life_proactive", False):
             await self._life_runtime.mark_active_conversation(event)
 
@@ -3045,11 +3089,13 @@ class DecisionPlugin(Star):
             result = job.get("result")
             if isinstance(result, list):
                 texts = [
-                    part for part in result
+                    part
+                    for part in result
                     if isinstance(part, Mapping) and part.get("type") == "text"
                 ]
                 images = sum(
-                    1 for part in result
+                    1
+                    for part in result
                     if isinstance(part, Mapping) and part.get("type") == "image"
                 )
                 entry["result"] = texts
@@ -3306,10 +3352,7 @@ class DecisionPlugin(Star):
             return []
         # <data>/plugin_data/<plugin>/billing.sqlite3
         db_path = (
-            Path(get_astrbot_config_path()).parent
-            / "plugin_data"
-            / directory
-            / "billing.sqlite3"
+            Path(get_astrbot_config_path()).parent / "plugin_data" / directory / "billing.sqlite3"
         )
         if not db_path.is_file():
             return []
@@ -3385,9 +3428,10 @@ class DecisionPlugin(Star):
                         "images": await store.list(persona_id, previews=True),
                         "description": await store.get_description(persona_id)
                         or str(
-                            ((self._setting("life", {}) or {}).get("appearance_settings", {}) or {}).get(
-                                "description", ""
-                            )
+                            (
+                                (self._setting("life", {}) or {}).get("appearance_settings", {})
+                                or {}
+                            ).get("description", "")
                         ),
                     }
                 )
@@ -3402,7 +3446,13 @@ class DecisionPlugin(Star):
         payload = await request.json(default={})
         if not isinstance(payload, Mapping):
             return error_response("请求必须是对象", status_code=400)
-        if not isinstance(payload.get("action"), str) or payload["action"] not in {"create_task", "edit_task", "cancel_task", "resolve_topic", "dismiss_idea"}:
+        if not isinstance(payload.get("action"), str) or payload["action"] not in {
+            "create_task",
+            "edit_task",
+            "cancel_task",
+            "resolve_topic",
+            "dismiss_idea",
+        }:
             return error_response("未知会话控制操作", status_code=400)
         try:
             umo = validate_umo(str(payload.get("umo", "")))
@@ -3541,9 +3591,7 @@ class DecisionPlugin(Star):
             proactive[key] = value
         return json_response(
             {
-                "decision_provider_id": str(
-                    self._setting("decision_provider_id", "") or ""
-                ),
+                "decision_provider_id": str(self._setting("decision_provider_id", "") or ""),
                 "decision_providers": decision_provider_catalog(self.context),
                 "always_keep_tools": always_keep,
                 "message_interjection_enabled": self._bool("message_interjection_enabled", True),
@@ -4003,18 +4051,14 @@ class DecisionPlugin(Star):
             self._int("proactive_max_sessions", 500),
         )
         if self.provider is not None and decision_provider_id is not None:
-            self.provider.provider_id = str(
-                self._setting("decision_provider_id", "") or ""
-            ).strip()
+            self.provider.provider_id = str(self._setting("decision_provider_id", "") or "").strip()
         if pending_multimodal is not None and self._multimodal is not None:
             self._multimodal.refresh(self._multimodal_settings())
             self._sync_multimodal_tools(self._multimodal)
             try:
                 await self._apply_multimodal_tool_state(self._multimodal_settings())
             except Exception as exc:  # pragma: no cover - host API differences
-                logger.warning(
-                    "Decision Engine 多模态工具状态刷新失败：%s", _safe_error(exc)
-                )
+                logger.warning("Decision Engine 多模态工具状态刷新失败：%s", _safe_error(exc))
         await self._configure_output_runtime()
         if life_values is not None:
             try:
@@ -4025,9 +4069,7 @@ class DecisionPlugin(Star):
         return json_response(
             {
                 "saved": True,
-                "decision_provider_id": str(
-                    self._setting("decision_provider_id", "") or ""
-                ),
+                "decision_provider_id": str(self._setting("decision_provider_id", "") or ""),
                 "decision_providers": decision_provider_catalog(self.context),
                 "always_keep_tools": cleaned,
                 "always_keep_recommend_tools": cleaned_recommend,

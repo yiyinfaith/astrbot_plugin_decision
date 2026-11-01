@@ -59,11 +59,15 @@ class OutputPipelineRuntime:
             # Minimal/test adapters may omit UMO. Never merge platforms, bot
             # accounts, or private/group conversations sharing a numeric ID.
             group = str(event.get_group_id() or "")
-            umo = json.dumps([
-                str(getattr(event, "platform_meta", "") or type(event).__module__),
-                str(event.get_self_id() or ""), "group" if group else "private",
-                group or str(event.get_sender_id() or ""),
-            ], ensure_ascii=False)
+            umo = json.dumps(
+                [
+                    str(getattr(event, "platform_meta", "") or type(event).__module__),
+                    str(event.get_self_id() or ""),
+                    "group" if group else "private",
+                    group or str(event.get_sender_id() or ""),
+                ],
+                ensure_ascii=False,
+            )
         key = f"{self._state_namespace}:{umo}"
         self._state_keys.add(key)
         return key
@@ -184,7 +188,10 @@ class OutputPipelineRuntime:
             if getattr(event, "set_extra", None):
                 from .outputpro.core.model import StepName
 
-                event.set_extra("decision_output_handled", self._plugin_config.pipeline.is_enabled_step(StepName.SPLIT))
+                event.set_extra(
+                    "decision_output_handled",
+                    self._plugin_config.pipeline.is_enabled_step(StepName.SPLIT),
+                )
         except Exception as exc:
             # Output enhancement is fail-open.  A formatting step must never
             # prevent AstrBot from sending the original response.
@@ -242,4 +249,3 @@ class OutputPipelineRuntime:
             for key in self._state_keys:
                 StateManager._groups.pop(key, None)
             self._state_keys.clear()
-

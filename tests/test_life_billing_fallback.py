@@ -69,9 +69,7 @@ def test_empty_account_refuses_automatic_selection(tmp_path):
 
 def test_accounts_on_another_platform_are_never_selected(tmp_path):
     instance = media(tmp_path, settings())
-    instance.refresh_billing_accounts(
-        [{"platform": "telegram", "user_id": "333", "amount": 900}]
-    )
+    instance.refresh_billing_accounts([{"platform": "telegram", "user_id": "333", "amount": 900}])
     try:
         instance._billing_event(Event(), Event(), instance._settings)
     except BillingConfigurationError:
@@ -82,9 +80,7 @@ def test_accounts_on_another_platform_are_never_selected(tmp_path):
 
 def test_zero_balance_account_is_not_relevant_to_selection(tmp_path):
     instance = media(tmp_path, settings())
-    instance.refresh_billing_accounts(
-        [{"platform": "aiocqhttp", "user_id": "999", "amount": 0}]
-    )
+    instance.refresh_billing_accounts([{"platform": "aiocqhttp", "user_id": "999", "amount": 0}])
     try:
         instance._billing_event(Event(), Event(), instance._settings)
     except BillingConfigurationError:
@@ -107,8 +103,9 @@ def test_explicit_account_still_wins(tmp_path):
 def test_non_proactive_is_never_wrapped(tmp_path):
     instance = media(tmp_path, settings(proactive_billing_user_id="777"))
     instance.refresh_billing_accounts(ACCOUNTS)
-    billed = instance._billing_event(Event(proactive=False), Event(proactive=False),
-                                     instance._settings)
+    billed = instance._billing_event(
+        Event(proactive=False), Event(proactive=False), instance._settings
+    )
     assert not isinstance(billed, BillingEvent)
 
 
@@ -137,7 +134,12 @@ def test_missing_fixed_identity_is_rejected_without_ledger_lookup(tmp_path):
 def test_refresh_handles_garbage_rows(tmp_path):
     instance = media(tmp_path, settings())
     instance.refresh_billing_accounts(
-        [None, {}, {"platform": "x"}, {"user_id": "1"}, {"platform": "y", "user_id": "2",
-                                                          "amount": "not-a-number"}]
+        [
+            None,
+            {},
+            {"platform": "x"},
+            {"user_id": "1"},
+            {"platform": "y", "user_id": "2", "amount": "not-a-number"},
+        ]
     )
     assert not hasattr(instance, "_billing_cache")

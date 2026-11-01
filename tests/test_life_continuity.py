@@ -44,11 +44,30 @@ async def continuity(request):
 
 
 def source(c, text="我周五要去面试", *, ident="s1", sender="42"):
-    return {"id": ident, "sender": sender, "at": c.now[0].isoformat(), "text": text, "can_adjust": False}
+    return {
+        "id": ident,
+        "sender": sender,
+        "at": c.now[0].isoformat(),
+        "text": text,
+        "can_adjust": False,
+    }
 
 
 def topic_data(c, src, **extra):
-    return {"signals": [], "topics": [{"source_id": src["id"], "quote": src["text"], "action": "upsert", "title": "面试结果", "note": "询问面试结果，不能假定成功", "follow_up_at": (c.now[0] + timedelta(hours=3)).isoformat(), **extra}]}
+    return {
+        "signals": [],
+        "topics": [
+            {
+                "source_id": src["id"],
+                "quote": src["text"],
+                "action": "upsert",
+                "title": "面试结果",
+                "note": "询问面试结果，不能假定成功",
+                "follow_up_at": (c.now[0] + timedelta(hours=3)).isoformat(),
+                **extra,
+            }
+        ],
+    }
 
 
 def test_neutral_closing_and_quality_are_not_message_count(continuity):
@@ -58,10 +77,19 @@ def test_neutral_closing_and_quality_are_not_message_count(continuity):
     c.contacts.observe(Event(text="嗯嗯"), "alice", c.now[0], targeted=True, quality_pending=True)
     assert c.contacts.summary(UMO, "alice", c.now[0])["interval"] == before
     src = source(c, "嗯嗯")
-    c.runtime.conversation.apply(UMO, "alice", [src], {"signals": [{"source_id": "s1", "quote": "嗯嗯", "engagement": "neutral", "confidence": .95}]})
+    c.runtime.conversation.apply(
+        UMO,
+        "alice",
+        [src],
+        {
+            "signals": [
+                {"source_id": "s1", "quote": "嗯嗯", "engagement": "neutral", "confidence": 0.95}
+            ]
+        },
+    )
     assert c.contacts.summary(UMO, "alice", c.now[0])["interval"] == before
     src = source(c, "这个话题太有意思了，你再给我讲讲", ident="s2")
-    signal = {"source_id": "s2", "quote": src["text"], "engagement": "engaged", "confidence": .95}
+    signal = {"source_id": "s2", "quote": src["text"], "engagement": "engaged", "confidence": 0.95}
     c.runtime.conversation.apply(UMO, "alice", [src], {"signals": [signal]})
     assert c.contacts.summary(UMO, "alice", c.now[0])["interval"] < before
     after = c.contacts.summary(UMO, "alice", c.now[0])["interval"]
@@ -73,7 +101,13 @@ def test_neutral_closing_and_quality_are_not_message_count(continuity):
 def test_temporary_busy_is_bounded_and_group_member_cannot_pause_the_group(continuity):
     c = continuity
     src = source(c, "我现在忙，晚点再聊")
-    signal = {"source_id": "s1", "quote": src["text"], "engagement": "busy", "confidence": .99, "busy_minutes": 999999}
+    signal = {
+        "source_id": "s1",
+        "quote": src["text"],
+        "engagement": "busy",
+        "confidence": 0.99,
+        "busy_minutes": 999999,
+    }
     c.runtime.conversation.apply(UMO, "alice", [src], {"signals": [signal]})
     profile = c.contacts.summary(UMO, "alice", c.now[0])
     assert profile["defer_until"] == c.now[0].timestamp() + 240 * 60
@@ -97,7 +131,16 @@ def test_topic_scope_resolution_expiry_and_member_ownership(continuity):
     c.now[0] += timedelta(hours=3)
     assert c.runtime.conversation.due_topic(UMO, "alice")["id"] == topics[0]["id"]
     outcome = source(c, "面试已经通过了", ident="s2", sender="99")
-    resolved = {"topics": [{"source_id": "s2", "quote": outcome["text"], "action": "resolve", "topic_id": topics[0]["id"]}]}
+    resolved = {
+        "topics": [
+            {
+                "source_id": "s2",
+                "quote": outcome["text"],
+                "action": "resolve",
+                "topic_id": topics[0]["id"],
+            }
+        ]
+    }
     c.runtime.conversation.apply(UMO, "alice", [outcome], resolved)
     assert c.runtime.conversation.topics(UMO, "alice")[0]["status"] == "open"
     outcome["sender"] = "42"
@@ -112,7 +155,10 @@ async def test_analysis_batches_dedup_sources_and_counts_real_provider_calls(con
     c = continuity
     src = source(c)
     c.provider.text_chat.return_value.completion_text = json.dumps(topic_data(c, src))
-    await asyncio.gather(c.runtime.conversation.analyze(UMO, "alice", [src]), c.runtime.conversation.analyze(UMO, "alice", [src]))
+    await asyncio.gather(
+        c.runtime.conversation.analyze(UMO, "alice", [src]),
+        c.runtime.conversation.analyze(UMO, "alice", [src]),
+    )
     assert c.provider.text_chat.await_count == 1
     assert len(c.runtime.conversation.topics(UMO, "alice")) == 1
     assert c.runtime.conversation.usage(UMO, "alice")["used"] == 1
@@ -126,7 +172,9 @@ async def test_analysis_batches_dedup_sources_and_counts_real_provider_calls(con
 
 async def test_offered_idea_is_not_consumed_by_an_unrelated_actual_message(continuity):
     c = continuity
-    ident = await c.runtime.ideas.save_thought("alice", "阅读像是用别人的眼睛重新观察世界", {"activity": "读书"})
+    ident = await c.runtime.ideas.save_thought(
+        "alice", "阅读像是用别人的眼睛重新观察世界", {"activity": "读书"}
+    )
     idea = c.runtime.ideas.thought(UMO, "alice")
     c.provider.text_chat.return_value.completion_text = '{"matches":[]}'
     await c.runtime.delivery.record(UMO, "alice", "out-1", "晚上好，今天过得怎么样？", ideas=[idea])
@@ -144,18 +192,28 @@ async def test_offered_idea_is_not_consumed_by_an_unrelated_actual_message(conti
 
 async def test_paraphrase_receipt_requires_actual_quote_and_valid_offered_id(continuity):
     c = continuity
-    ident = await c.runtime.ideas.save_thought("alice", "阅读像是用别人的眼睛重新观察世界", {"activity": "读书"}, scope=UMO)
+    ident = await c.runtime.ideas.save_thought(
+        "alice", "阅读像是用别人的眼睛重新观察世界", {"activity": "读书"}, scope=UMO
+    )
     idea = c.runtime.ideas.thought(UMO, "alice")
     text = "看书的时候，好像也借到了另一双看世界的眼睛。"
-    c.provider.text_chat.return_value.completion_text = json.dumps({"matches": [{"kind": "idea", "id": ident, "quote": text}]})
+    c.provider.text_chat.return_value.completion_text = json.dumps(
+        {"matches": [{"kind": "idea", "id": ident, "quote": text}]}
+    )
     await c.runtime.delivery.record(UMO, "alice", "out-3", text, ideas=[idea])
     await asyncio.gather(*c.background)
     assert c.runtime.ideas.thought(UMO, "alice") is None
-    c.provider.text_chat.return_value.completion_text = json.dumps({"matches": [{"kind": "idea", "id": ident, "quote": text}]})
-    await c.runtime.delivery.record("qq:FriendMessage:99", "alice", "cross-scope", text, ideas=[idea])
+    c.provider.text_chat.return_value.completion_text = json.dumps(
+        {"matches": [{"kind": "idea", "id": ident, "quote": text}]}
+    )
+    await c.runtime.delivery.record(
+        "qq:FriendMessage:99", "alice", "cross-scope", text, ideas=[idea]
+    )
     await asyncio.gather(*c.background)
     with c.ledger.transaction() as db:
-        assert not db.execute("SELECT 1 FROM shares WHERE thought=? AND umo=?", (ident, "qq:FriendMessage:99")).fetchone()
+        assert not db.execute(
+            "SELECT 1 FROM shares WHERE thought=? AND umo=?", (ident, "qq:FriendMessage:99")
+        ).fetchone()
 
 
 async def test_topic_question_is_recorded_only_after_actual_sending(continuity):
@@ -165,7 +223,9 @@ async def test_topic_question_is_recorded_only_after_actual_sending(continuity):
     c.now[0] += timedelta(hours=4)
     topic = c.runtime.conversation.due_topic(UMO, "alice")
     text = "你之前提到的面试怎么样了，顺利吗？"
-    c.provider.text_chat.return_value.completion_text = json.dumps({"matches": [{"kind": "topic", "id": topic["id"], "quote": text}]})
+    c.provider.text_chat.return_value.completion_text = json.dumps(
+        {"matches": [{"kind": "topic", "id": topic["id"], "quote": text}]}
+    )
     assert c.runtime.conversation.due_topic(UMO, "alice")
     await c.runtime.delivery.record(UMO, "alice", "follow-up", text, topics=[topic])
     await asyncio.gather(*c.background)
@@ -175,15 +235,25 @@ async def test_topic_question_is_recorded_only_after_actual_sending(continuity):
 
 def test_life_progress_survives_restart_and_is_not_external_completion(continuity):
     c = continuity
-    plan = DailyPlan(date=c.now[0].date().isoformat(), persona_id="alice", theme="阅读", mood="轻松", outfit=None,
-        timeline=(TimelineItem(id="sleep", start="00:00", end="10:00", activity="休息", state="sleep"),
-                  TimelineItem(id="reading", start="10:00", end="16:00", activity="读小说", state="focus"),
-                  TimelineItem(id="rest", start="16:00", end="24:00", activity="休息")))
+    plan = DailyPlan(
+        date=c.now[0].date().isoformat(),
+        persona_id="alice",
+        theme="阅读",
+        mood="轻松",
+        outfit=None,
+        timeline=(
+            TimelineItem(id="sleep", start="00:00", end="10:00", activity="休息", state="sleep"),
+            TimelineItem(
+                id="reading", start="10:00", end="16:00", activity="读小说", state="focus"
+            ),
+            TimelineItem(id="rest", start="16:00", end="24:00", activity="休息"),
+        ),
+    )
     first = c.runtime.life_state.current("alice", plan, c.now[0])
     assert first["progress"] == 0 and first["phase"] == "刚进入活动"
     c.now[0] += timedelta(hours=3)
     middle = c.runtime.life_state.current("alice", plan, c.now[0])
-    assert middle["progress"] == .5
+    assert middle["progress"] == 0.5
     restored = PersonaLifeState(c.runtime, c.ledger).current("alice", plan, c.now[0])
     assert restored == middle
     c.now[0] += timedelta(hours=3)
@@ -198,16 +268,28 @@ def test_life_progress_survives_restart_and_is_not_external_completion(continuit
 
 async def test_webui_controls_cannot_cancel_other_sessions_or_invent_user_outcomes(continuity):
     c = continuity
-    created = await perform_control_action(c.runtime, UMO, {"action": "create_task", "note": "喝水", "run_at": (c.now[0] + timedelta(hours=1)).isoformat()})
+    created = await perform_control_action(
+        c.runtime,
+        UMO,
+        {
+            "action": "create_task",
+            "note": "喝水",
+            "run_at": (c.now[0] + timedelta(hours=1)).isoformat(),
+        },
+    )
     task_id = created["task"]["id"]
     with pytest.raises(ValueError, match="没有该任务"):
-        await perform_control_action(c.runtime, "qq:FriendMessage:99", {"action": "cancel_task", "task_id": task_id})
+        await perform_control_action(
+            c.runtime, "qq:FriendMessage:99", {"action": "cancel_task", "task_id": task_id}
+        )
     await perform_control_action(c.runtime, UMO, {"action": "cancel_task", "task_id": task_id})
     assert c.ledger.get_task(task_id)["status"] == "cancelled"
     src = source(c)
     c.runtime.conversation.apply(UMO, "alice", [src], topic_data(c, src))
     topic = c.runtime.conversation.topics(UMO, "alice")[0]
-    await perform_control_action(c.runtime, UMO, {"action": "resolve_topic", "topic_id": topic["id"]})
+    await perform_control_action(
+        c.runtime, UMO, {"action": "resolve_topic", "topic_id": topic["id"]}
+    )
     done = c.runtime.conversation.topics(UMO, "alice")[0]
     assert done["outcome_source"] == "authenticated_webui" and done["outcome"] == "管理员标记结束"
 
@@ -223,8 +305,26 @@ async def test_model_session_identity_includes_persona_and_full_umo(continuity):
 
 async def test_webui_edit_preserves_non_notifying_commitment(continuity):
     c = continuity
-    task = json.loads(await c.temporal.manage(Event(), action="create", delay_seconds=21600, note="读书进度", kind="virtual_finish", notify=False))["task"]
-    await perform_control_action(c.runtime, UMO, {"action": "edit_task", "task_id": task["id"], "note": "读书进度补充", "run_at": task["run_at"]})
+    task = json.loads(
+        await c.temporal.manage(
+            Event(),
+            action="create",
+            delay_seconds=21600,
+            note="读书进度",
+            kind="virtual_finish",
+            notify=False,
+        )
+    )["task"]
+    await perform_control_action(
+        c.runtime,
+        UMO,
+        {
+            "action": "edit_task",
+            "task_id": task["id"],
+            "note": "读书进度补充",
+            "run_at": task["run_at"],
+        },
+    )
     stored = c.ledger.get_task(task["id"])
     assert stored["notify"] is False and stored["kind"] == "virtual_finish"
 
@@ -233,7 +333,10 @@ def test_duplicate_text_suppression_is_scoped(continuity):
     c = continuity
     text = "突然想到一个有趣的事，阅读好像也是另一种旅行。"
     with c.ledger.transaction() as db:
-        db.execute("INSERT INTO utterances VALUES (?,?,?,?,?)", ("old", UMO, "alice", c.now[0].timestamp(), json.dumps({"text": text})))
+        db.execute(
+            "INSERT INTO utterances VALUES (?,?,?,?,?)",
+            ("old", UMO, "alice", c.now[0].timestamp(), json.dumps({"text": text})),
+        )
     assert c.runtime.delivery.repeated(UMO, "alice", text)
     assert not c.runtime.delivery.repeated(UMO, "bob", text)
     assert not c.runtime.delivery.repeated("qq:FriendMessage:99", "alice", text)
@@ -241,7 +344,9 @@ def test_duplicate_text_suppression_is_scoped(continuity):
 
 async def test_prompt_history_only_contains_actual_text_not_unshared_candidates(continuity):
     c = continuity
-    ident = await c.runtime.ideas.save_thought("alice", "不应该被冒充为已经说过的想法", {"activity": "阅读"})
+    ident = await c.runtime.ideas.save_thought(
+        "alice", "不应该被冒充为已经说过的想法", {"activity": "阅读"}
+    )
     idea = c.runtime.ideas.thought(UMO, "alice")
     c.provider.text_chat.return_value.completion_text = '{"matches":[]}'
     await c.runtime.delivery.record(UMO, "alice", "actual-only", "今天过得怎么样？", ideas=[idea])

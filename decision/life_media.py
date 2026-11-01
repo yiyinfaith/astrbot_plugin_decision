@@ -100,9 +100,7 @@ def media_instruction(kind: str, low: int, high: int) -> str:
     if kind == "audio":
         # Each call speaks one text, so the configured range is a per-run budget
         # that the model spends by calling the tool again with new content.
-        quantity = (
-            f"最多 {low} 段" if low == high else f"最多 {high} 段（至少 {low} 段）"
-        )
+        quantity = f"最多 {low} 段" if low == high else f"最多 {high} 段（至少 {low} 段）"
         return (
             f"本次主动发起可以附带{label}。若要开口，请调用 {tool} 工具，每次生成一段，"
             f"本次共{quantity}，多段时每段内容或情绪应有所不同，由你根据场景自行决定。"
@@ -324,8 +322,29 @@ class LifeMedia:
         if instance is None:
             return None
         if kind in MEDIA_KINDS:
-            return instance if callable(getattr(instance, {"photo": "generate_image", "video": "generate_video", "audio": "generate_audio"}[kind], None)) else None
-        return instance if any(callable(getattr(instance, method, None)) for method in ("generate_image", "generate_video", "generate_audio")) else None
+            return (
+                instance
+                if callable(
+                    getattr(
+                        instance,
+                        {
+                            "photo": "generate_image",
+                            "video": "generate_video",
+                            "audio": "generate_audio",
+                        }[kind],
+                        None,
+                    )
+                )
+                else None
+            )
+        return (
+            instance
+            if any(
+                callable(getattr(instance, method, None))
+                for method in ("generate_image", "generate_video", "generate_audio")
+            )
+            else None
+        )
 
     @classmethod
     def _backend_units(cls, event, fallback: int) -> int:
@@ -386,7 +405,9 @@ class LifeMedia:
             persona = await runtime.personas.resolve(umo)
             uses_persona = str(subject or "self") == "self"
             refs = await self.appearance.list(persona.id) if uses_persona else []
-            appearance_text = await self.appearance.get_description(persona.id) if uses_persona else ""
+            appearance_text = (
+                await self.appearance.get_description(persona.id) if uses_persona else ""
+            )
             if not refs and kind != "audio" and uses_persona:
                 return "当前人格尚未上传外貌参考图，请在 WebUI 的主动发起页面上传后再拍摄。"
             reference_persona = persona.id
@@ -502,9 +523,7 @@ class LifeMedia:
                         f"本次需要生成 {planned_units} 个媒体单位，"
                         f"但本会话今日仅剩 {daily_limit - quota} 个额度，未提交生成任务。"
                     )
-                usage["usage"] = {
-                    k: v for k, v in usage_map.items() if k.startswith(today)
-                }
+                usage["usage"] = {k: v for k, v in usage_map.items() if k.startswith(today)}
                 usage["usage"][key] = quota + planned_units
                 await self.usage.save(usage)
                 self.last_call[umo] = time.monotonic()
@@ -556,9 +575,7 @@ class LifeMedia:
                     # segment, or the requested ``n`` image artifacts for a
                     # batched image call.  A later failed call must not erase
                     # units that were already generated successfully.
-                    completed_units += self._backend_units(
-                        event, resolved_count if batched else 1
-                    )
+                    completed_units += self._backend_units(event, resolved_count if batched else 1)
             except Exception as exc:
                 if not results:
                     return f"aigen 生成失败：{str(exc)[:180]}。未自动重试，请先确认任务状态。"

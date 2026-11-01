@@ -111,9 +111,7 @@ def describe_provider(provider: Any) -> dict[str, Any]:
         "modalities_label": "、".join(
             MODALITY_LABELS.get(name, name) for name in caps if name != "tool_use"
         ),
-        "supports": {
-            kind: kind_supported(provider, kind) for kind in KIND_LABELS
-        },
+        "supports": {kind: kind_supported(provider, kind) for kind in KIND_LABELS},
         "capability": {kind: classify_kind(provider, kind) for kind in KIND_LABELS},
         "video_route_label": (
             "自动：短片完整视频；长片抽帧与 Agentic Seeking"
@@ -150,9 +148,7 @@ def resolve_provider(context: Any, provider_id: str, kind: str) -> ProviderChoic
     try:
         provider = getter(provider_id)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning(
-            "Decision Engine 获取多模态模型 %s 失败：%s", provider_id, str(exc)[:160]
-        )
+        logger.warning("Decision Engine 获取多模态模型 %s 失败：%s", provider_id, str(exc)[:160])
         return None
     if provider is None:
         return None
@@ -210,11 +206,20 @@ async def call_provider(
         from . import openai_transport
 
         kind = str((getattr(provider, "provider_config", None) or {}).get("type") or "")
-        if ("gemini" in kind or "google" in kind) and openai_transport.credentials(provider, model or "")[0]:
-            return await asyncio.wait_for(openai_transport.generate(
-                provider, model=model or "", prompt=prompt, images=images, audio=audio,
+        if ("gemini" in kind or "google" in kind) and openai_transport.credentials(
+            provider, model or ""
+        )[0]:
+            return await asyncio.wait_for(
+                openai_transport.generate(
+                    provider,
+                    model=model or "",
+                    prompt=prompt,
+                    images=images,
+                    audio=audio,
+                    timeout=timeout,
+                ),
                 timeout=timeout,
-            ), timeout=timeout)
+            )
 
     chat = getattr(provider, "text_chat", None)
     if not callable(chat):
@@ -259,7 +264,11 @@ async def _stream_final_text(stream: Any) -> str:
     final = ""
     async with aclosing(stream):
         async for response in stream:
-            is_chunk = response.get("is_chunk", False) if isinstance(response, dict) else getattr(response, "is_chunk", False)
+            is_chunk = (
+                response.get("is_chunk", False)
+                if isinstance(response, dict)
+                else getattr(response, "is_chunk", False)
+            )
             if not is_chunk:
                 final = _extract_text(response)
     if not final:

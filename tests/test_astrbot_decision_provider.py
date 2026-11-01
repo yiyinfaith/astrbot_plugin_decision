@@ -44,26 +44,34 @@ async def test_native_adapter_routes_all_decision_types_through_astrbot(monkeypa
         return {
             "yes": SimpleNamespace(probability=0.91),
             "choice": SimpleNamespace(
-                choice="keep", probability=0.8,
-                probabilities={"keep": 0.8, "drop": 0.2}, confidence=0.9,
+                choice="keep",
+                probability=0.8,
+                probabilities={"keep": 0.8, "drop": 0.2},
+                confidence=0.9,
             ),
             "score": SimpleNamespace(
-                score=1.5, legend={"0": "low", "1": "mid", "2": "high"},
-                probabilities={"0": 0.1, "1": 0.3, "2": 0.6}, confidence=0.7,
+                score=1.5,
+                legend={"0": "low", "1": "mid", "2": "high"},
+                probabilities={"0": 0.1, "1": 0.3, "2": 0.6},
+                confidence=0.7,
             ),
         }
 
-    provider = AstrBotDecisionProvider(SimpleNamespace(decision=SimpleNamespace(ask=ask)), provider_id="jev-7")
+    provider = AstrBotDecisionProvider(
+        SimpleNamespace(decision=SimpleNamespace(ask=ask)), provider_id="jev-7"
+    )
     result = await provider.evaluate(
         state="conversation context",
         questions={
             "yes": {"type": "noul", "instructions": "Is this useful?"},
             "choice": {
-                "type": "choice", "instructions": "Choose one",
+                "type": "choice",
+                "instructions": "Choose one",
                 "criteria": {"keep": "Keep", "drop": "Drop"},
             },
             "score": {
-                "type": "score", "instructions": "Rate it",
+                "type": "score",
+                "instructions": "Rate it",
                 "criteria": ["low", "mid", "high"],
             },
         },
@@ -132,14 +140,17 @@ def test_provider_catalog_lists_only_native_decision_providers():
 
     context = SimpleNamespace(
         provider_manager=SimpleNamespace(
-            decision_provider_insts=[NativeProvider("decision-1", "jev-fast", "system_one_decision")],
+            decision_provider_insts=[
+                NativeProvider("decision-1", "jev-fast", "system_one_decision")
+            ],
             provider_insts=[NativeProvider("chat-1", "chat-model", "openai")],
         )
     )
     assert decision_provider_catalog(context) == [
         {
-            "id": "decision-1", "name": "decision-1 · jev-fast · system_one_decision",
-            "model": "jev-fast", "type": "system_one_decision",
+            "id": "decision-1",
+            "name": "decision-1 · jev-fast · system_one_decision",
+            "model": "jev-fast",
+            "type": "system_one_decision",
         }
     ]
-

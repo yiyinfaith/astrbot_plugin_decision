@@ -20,8 +20,11 @@ from decision.multimodal.runtime import MultimodalRuntime  # noqa: E402
 class RecordingProvider:
     def __init__(self, provider_type, base):
         self.provider_config = {
-            "id": "route-provider", "type": provider_type, "api_base": base,
-            "key": ["test-key"], "modalities": ["text", "image", "audio"],
+            "id": "route-provider",
+            "type": provider_type,
+            "api_base": base,
+            "key": ["test-key"],
+            "modalities": ["text", "image", "audio"],
         }
         self.calls = []
 
@@ -77,25 +80,34 @@ def video_pipeline(tmp_path, monkeypatch):
 def runtime_for(tmp_path, provider, strategy="auto"):
     context = SimpleNamespace(get_provider_by_id=lambda ident: provider)
     return MultimodalRuntime(
-        SimpleNamespace(context=context), data_dir=tmp_path / "runtime",
-        settings={"mm_enabled": True, "mm_default_model": "route-provider",
-                  "mm_video_strategy": strategy, "mm_retries": 0,
-                  "mm_video_agentic_rounds": 1, "mm_video_agentic_segments": 2},
+        SimpleNamespace(context=context),
+        data_dir=tmp_path / "runtime",
+        settings={
+            "mm_enabled": True,
+            "mm_default_model": "route-provider",
+            "mm_video_strategy": strategy,
+            "mm_retries": 0,
+            "mm_video_agentic_rounds": 1,
+            "mm_video_agentic_segments": 2,
+        },
     )
 
 
-@pytest.mark.parametrize("base,expected", [
-    (None, True),
-    ("https://generativelanguage.googleapis.com", True),
-    ("https://generativelanguage.googleapis.com:443/v1beta", True),
-    ("https://gateway.example", False),
-    ("https://generativelanguage.googleapis.com.gateway.example", False),
-    ("https://aiplatform.googleapis.com", False),
-    ("http://generativelanguage.googleapis.com", False),
-    ("https://generativelanguage.googleapis.com/proxy", False),
-    ("https://generativelanguage.googleapis.com?secret=test", False),
-    ("https://generativelanguage.googleapis.com:invalid", False),
-])
+@pytest.mark.parametrize(
+    "base,expected",
+    [
+        (None, True),
+        ("https://generativelanguage.googleapis.com", True),
+        ("https://generativelanguage.googleapis.com:443/v1beta", True),
+        ("https://gateway.example", False),
+        ("https://generativelanguage.googleapis.com.gateway.example", False),
+        ("https://aiplatform.googleapis.com", False),
+        ("http://generativelanguage.googleapis.com", False),
+        ("https://generativelanguage.googleapis.com/proxy", False),
+        ("https://generativelanguage.googleapis.com?secret=test", False),
+        ("https://generativelanguage.googleapis.com:invalid", False),
+    ],
+)
 def test_auto_native_preference_only_uses_the_official_endpoint(base, expected):
     provider = RecordingProvider("googlegenai_chat_completion", base)
     assert native_video.auto_native_available(provider) is expected
@@ -105,7 +117,10 @@ def test_auto_native_preference_only_uses_the_official_endpoint(base, expected):
 @pytest.mark.parametrize("provider_type", ["openai_chat_completion", "googlegenai_chat_completion"])
 @pytest.mark.parametrize("duration", [5.0, 120.0])
 async def test_auto_gateway_uses_provider_frames_without_files(
-    tmp_path, video_pipeline, provider_type, duration,
+    tmp_path,
+    video_pipeline,
+    provider_type,
+    duration,
 ):
     video, state = video_pipeline
     state["duration"] = duration
@@ -118,7 +133,9 @@ async def test_auto_gateway_uses_provider_frames_without_files(
         assert item.ok, item.error
         assert state["native_calls"] == [], "auto must not probe Files/Interactions on a gateway"
         inline = provider_type == "googlegenai_chat_completion" and duration == 5
-        assert item.meta["mode"] == ("inline" if inline else "frames" if duration == 5 else "agentic")
+        assert item.meta["mode"] == (
+            "inline" if inline else "frames" if duration == 5 else "agentic"
+        )
         assert len(state["inline_calls"]) == int(inline)
         if inline:
             assert not provider.calls and not state["frame_calls"]
@@ -133,11 +150,17 @@ async def test_auto_gateway_uses_provider_frames_without_files(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("strategy,base", [
-    ("native", "https://gateway.example"),
-])
+@pytest.mark.parametrize(
+    "strategy,base",
+    [
+        ("native", "https://gateway.example"),
+    ],
+)
 async def test_official_auto_and_explicit_native_keep_native_route(
-    tmp_path, video_pipeline, strategy, base,
+    tmp_path,
+    video_pipeline,
+    strategy,
+    base,
 ):
     video, state = video_pipeline
     state["duration"] = 120.0
@@ -145,7 +168,9 @@ async def test_official_auto_and_explicit_native_keep_native_route(
     runtime = runtime_for(tmp_path, provider, strategy)
     try:
         await runtime.initialize()
-        item = await runtime.understand(MediaRef(kind="video", reference=str(video), urn="v", umo="chat:1"))
+        item = await runtime.understand(
+            MediaRef(kind="video", reference=str(video), urn="v", umo="chat:1")
+        )
         assert item.ok and item.meta["mode"] == "agentic_native"
         assert len(state["native_calls"]) == 1 and state["native_calls"][0]["agentic"]
         assert not provider.calls and not state["frame_calls"]
@@ -189,9 +214,12 @@ async def test_gemini_multiframe_stream_uses_only_complete_snapshot():
 
     provider = SimpleNamespace(
         provider_config={"type": "googlegenai_chat_completion"},
-        text_chat=no_chat, text_chat_stream=stream,
+        text_chat=no_chat,
+        text_chat_stream=stream,
     )
-    text = await adapters.call_provider(provider, prompt="inspect", images=["a.png", "b.png"], model="m")
+    text = await adapters.call_provider(
+        provider, prompt="inspect", images=["a.png", "b.png"], model="m"
+    )
     assert text == "final answer 7429"
     assert calls == [(1, {"prompt": "inspect", "image_urls": ["a.png", "b.png"], "model": "m"})]
 
@@ -206,7 +234,8 @@ async def test_gemini_stream_never_returns_partial_or_thought_only_output(termin
 
     provider = SimpleNamespace(
         provider_config={"type": "googlegenai_chat_completion"},
-        text_chat=lambda **kwargs: None, text_chat_stream=stream,
+        text_chat=lambda **kwargs: None,
+        text_chat_stream=stream,
     )
     with pytest.raises(RuntimeError, match="完整"):
         await adapters.call_provider(provider, prompt="inspect", images=["a", "b"])
@@ -230,10 +259,11 @@ async def test_gemini_stream_timeout_closes_generator_without_paid_fallback():
 
     provider = SimpleNamespace(
         provider_config={"type": "googlegenai_chat_completion"},
-        text_chat=chat, text_chat_stream=stream,
+        text_chat=chat,
+        text_chat_stream=stream,
     )
     with pytest.raises(TimeoutError):
-        await adapters.call_provider(provider, prompt="inspect", images=["a", "b"], timeout=.02)
+        await adapters.call_provider(provider, prompt="inspect", images=["a", "b"], timeout=0.02)
     assert closed.is_set() and calls == ["stream"]
 
 
@@ -251,7 +281,9 @@ async def test_stream_switch_selects_one_transport_per_request(provider_type):
         calls.append("chat")
         return SimpleNamespace(completion_text="buffered")
 
-    provider = SimpleNamespace(provider_config={"type": provider_type}, text_chat=chat, text_chat_stream=stream)
+    provider = SimpleNamespace(
+        provider_config={"type": provider_type}, text_chat=chat, text_chat_stream=stream
+    )
     assert await adapters.call_provider(provider, prompt="hello") == "complete"
     assert await adapters.call_provider(provider, prompt="hello", stream=False) == "buffered"
     assert calls == ["stream", "chat"]

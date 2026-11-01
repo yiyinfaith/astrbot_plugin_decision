@@ -95,8 +95,9 @@ def media_settings(**overrides):
 async def make_media(tmp_path, *, settings=None, aigen=None):
     settings = settings or media_settings()
     aigen = aigen if aigen is not None else FakeAigen()
-    plan = SimpleNamespace(has_outfit=True, outfit=None, date="2026-10-21", timeline=(),
-                           theme="t", mood="m")
+    plan = SimpleNamespace(
+        has_outfit=True, outfit=None, date="2026-10-21", timeline=(), theme="t", mood="m"
+    )
 
     async def resolve(_umo):
         return SimpleNamespace(id="alice")
@@ -105,8 +106,10 @@ async def make_media(tmp_path, *, settings=None, aigen=None):
         return SimpleNamespace(id="alice"), plan
 
     runtime = SimpleNamespace(
-        config={"media_settings": settings,
-                "appearance_settings": {"description": "银色长发", "use_reference_outfit": True}},
+        config={
+            "media_settings": settings,
+            "appearance_settings": {"description": "银色长发", "use_reference_outfit": True},
+        },
         closed=False,
         personas=SimpleNamespace(resolve=resolve),
         _ensure_plan_for_umo=ensure_plan,
@@ -118,23 +121,31 @@ async def make_media(tmp_path, *, settings=None, aigen=None):
         return runtime
 
     owner = SimpleNamespace(
-        context=SimpleNamespace(get_all_stars=lambda: [
-            SimpleNamespace(name="astrbot_plugin_aigen", activated=True, star_cls=aigen)]),
+        context=SimpleNamespace(
+            get_all_stars=lambda: [
+                SimpleNamespace(name="astrbot_plugin_aigen", activated=True, star_cls=aigen)
+            ]
+        ),
         _get_life_runtime=get_runtime,
     )
     media = LifeMedia(owner, tmp_path)
     buffer = io.BytesIO()
     Image.new("RGB", (8, 8), (10, 20, 30)).save(buffer, format="PNG")
     await media.appearance.upload(
-        "alice", "ref.png",
+        "alice",
+        "ref.png",
         "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode(),
     )
     return media, aigen
 
 
 def proactive_event(**extra):
-    base = {"decision_life_proactive": True, "decision_life_generation": 0,
-            "decision_life_media_kind": "photo", "decision_life_media_max": 10}
+    base = {
+        "decision_life_proactive": True,
+        "decision_life_generation": 0,
+        "decision_life_media_kind": "photo",
+        "decision_life_media_max": 10,
+    }
     base.update(extra)
     return FakeEvent(extras=base)
 

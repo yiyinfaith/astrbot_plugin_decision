@@ -19,7 +19,21 @@ def run_js(script):
     if not node:
         pytest.skip("Node.js unavailable for the frontend mapping test")
     module = ROOT / "pages/dashboard/life-workspace.js"
-    result = subprocess.run([node, "-e", "const api=require(" + json.dumps(str(module)) + ");const schema=JSON.parse(require('fs').readFileSync(0,'utf8'));" + script], input=json.dumps(life_schema()), text=True, encoding="utf-8", capture_output=True, check=True)
+    result = subprocess.run(
+        [
+            node,
+            "-e",
+            "const api=require("
+            + json.dumps(str(module))
+            + ");const schema=JSON.parse(require('fs').readFileSync(0,'utf8'));"
+            + script,
+        ],
+        input=json.dumps(life_schema()),
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=True,
+    )
     return json.loads(result.stdout)
 
 
@@ -36,7 +50,12 @@ for(const [group,node] of Object.entries(schema)) {
 }
 console.log(JSON.stringify({missing,duplicates,unchanged:before===JSON.stringify(schema),panels:api.panels.map(p=>p.id)}));
 """)
-    assert result == {"missing": [], "duplicates": [], "unchanged": True, "panels": ["contact", "life", "reminders", "media", "status", "advanced"]}
+    assert result == {
+        "missing": [],
+        "duplicates": [],
+        "unchanged": True,
+        "panels": ["contact", "life", "reminders", "media", "status", "advanced"],
+    }
 
 
 def test_advanced_search_and_common_unit_display_keep_original_values():
@@ -49,8 +68,10 @@ console.log(JSON.stringify({unit:common.max_interval_minutes.durationUnit,label:
 """)
     assert result["unit"] == "minutes" and result["percentage"] is True
     assert "（分）" not in result["label"]
-    assert result["value"] == .173 and result["hidden"] is True
-    assert "schedule_llm_provider" in result["models"] and "proactive_llm_provider" in result["models"]
+    assert result["value"] == 0.173 and result["hidden"] is True
+    assert (
+        "schedule_llm_provider" in result["models"] and "proactive_llm_provider" in result["models"]
+    )
 
 
 def test_workspace_has_clear_scope_and_two_distinct_contact_flows():
