@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from astrbot import logger
+from astrbot.api import logger
 
 DEFAULT_BASE = "https://generativelanguage.googleapis.com"
 KIND_LABELS = {"native": "原生视频", "frames": "抽帧精读"}

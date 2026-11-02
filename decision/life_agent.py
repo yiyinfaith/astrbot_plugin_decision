@@ -154,7 +154,7 @@ async def dispatch_life_agent(
     offered_ideas=(),
     offered_topics=(),
 ) -> bool:
-    from astrbot import logger
+    from astrbot.api import logger
     from astrbot.api.message_components import Plain
     from astrbot.core.astr_main_agent import MainAgentBuildConfig, build_main_agent
     from astrbot.core.cron.events import CronMessageEvent

@@ -8,10 +8,14 @@ host that has AstrBot installed.
 from __future__ import annotations
 
 import importlib.util
-import logging
 import sys
 from types import ModuleType
 from typing import Any
+
+
+class _TestLogger:
+    def __getattr__(self, _name):
+        return lambda *args, **kwargs: None
 
 
 class TextPart:
@@ -127,7 +131,7 @@ def install() -> None:
 
     astrbot = module("astrbot")
     if not hasattr(astrbot, "logger"):
-        astrbot.logger = logging.getLogger("tests.personal_network.astrbot")
+        astrbot.logger = _TestLogger()
     api = module("astrbot.api")
     api.logger = astrbot.logger
     web = module("astrbot.api.web")

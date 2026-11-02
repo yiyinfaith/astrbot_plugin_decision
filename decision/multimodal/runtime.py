@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from astrbot import logger
+from astrbot.api import logger
 
 try:  # pragma: no cover - AstrBot always provides this
     from astrbot.core.agent.message import TextPart

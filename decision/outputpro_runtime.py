@@ -16,12 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-try:  # Keep utility imports usable by offline documentation/test tooling.
-    from astrbot import logger
-except ImportError:  # pragma: no cover - AstrBot supplies this in production
-    import logging
-
-    logger = logging.getLogger("astrbot_plugin_decision.output")
+from astrbot.api import logger
 
 from .outputpro_defaults import DEFAULT_OUTPUT_CONFIG
 

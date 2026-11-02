@@ -14,7 +14,7 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any
 
-from astrbot import logger
+from astrbot.api import logger
 
 # Which provider modality a media kind ultimately needs.
 # Video is understood as a frame sequence (image) plus optional audio; a file is

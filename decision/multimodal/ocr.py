@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from astrbot import logger
+from astrbot.api import logger
 
 ENGINE_LABELS = {"tesseract": "Tesseract", "paddleocr": "PaddleOCR"}
 

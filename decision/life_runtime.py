@@ -9,7 +9,7 @@ from collections import deque
 from dataclasses import replace
 from datetime import timedelta
 
-from astrbot import logger
+from astrbot.api import logger
 
 from .life_agent import PlatformSendError, PlatformUnavailableError, dispatch_life_agent
 from .life_contacts import ContactControl

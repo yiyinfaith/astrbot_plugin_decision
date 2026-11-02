@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from astrbot import logger
+from astrbot.api import logger
 
 # Files larger than this are refused before any decoding happens.
 HARD_MAX_BYTES = 512 * 1024 * 1024

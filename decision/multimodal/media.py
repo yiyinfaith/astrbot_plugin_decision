@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from aiohttp.abc import AbstractResolver
-from astrbot import logger
+from astrbot.api import logger
 
 from .models import MediaIndexEntry, MediaRef
 

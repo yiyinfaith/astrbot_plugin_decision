@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
-import logging
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -14,6 +13,11 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class _TestLogger:
+    def __getattr__(self, _name):
+        return lambda *args, **kwargs: None
 
 
 @pytest.fixture
@@ -34,8 +38,9 @@ def host(monkeypatch, tmp_path):
     class Config(dict):
         config_path = str(tmp_path / "data" / "config" / "astrbot_plugin_decision_config.json")
 
-    module("astrbot", logger=logging.getLogger("test.astrbot"))
-    module("astrbot.api")
+    test_logger = _TestLogger()
+    module("astrbot", logger=test_logger)
+    module("astrbot.api", logger=test_logger)
     module(
         "astrbot.api.event",
         AstrMessageEvent=object,
