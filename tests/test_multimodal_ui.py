@@ -7,13 +7,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tests.dashboard_source import dashboard_source  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
-PAGE = ROOT / "pages" / "dashboard" / "index.html"
 MAIN = ROOT / "main.py"
 
 
 def page_text() -> str:
-    return PAGE.read_text(encoding="utf-8")
+    return dashboard_source()
 
 
 def test_flow_enhancement_has_two_sub_tabs():

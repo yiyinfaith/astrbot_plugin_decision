@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./network-view.css?v=0.4.6" />
+    <!-- style.css is the default AstrBot-style theme; app.js swaps it for liquid.css when the liquid-glass switch is on. -->
+    <link id="default-theme" rel="stylesheet" href="./style.css?v=0.4.6" />
+    <title>jev决策综合插件设置</title>
+    <script src="./vendor/vue.global.prod.js"></script>
+    <script src="./life-workspace.js?v=0.4.6"></script>
+  </head>
+  <body>
+    <div id="app" v-cloak class="app-shell">
+      <header class="hero">
+        <liquid-glass v-if="liquidGlass" class="glass-backdrop" v-show="glassReady" mode="siri-wave" variant="wave" speed="0.85" scale="1.18" dpr="1" aria-hidden="true"></liquid-glass>
+        <div class="hero-content">
+          <div class="hero-top">
+            <div class="eyebrow">jev决策综合插件</div>
+            <!-- A plain switch in both themes, so the effect can always be turned off. -->
+            <label v-if="loaded" class="liquid-switch">
+              <span>液态玻璃</span>
+              <input type="checkbox" role="switch" class="plain-switch" :checked="liquidGlass" :disabled="switchingGlass" aria-label="液态玻璃效果" @change="toggleLiquidGlass($event.target)">
+            </label>
+          </div>
+          <h1>jev决策综合插件设置</h1>
+          <p>用 Jev 判断当前需要的 Tool、MCP、Skill 与 SubAgent，为每一次主动回复留出恰当的时机。</p>
+          <div class="hero-meta">
+            <span class="status-pill"><i class="status-dot" :class="{off: !toolsEnabled}"></i>Tool/MCP/Skill/SubAgent {{ toolsEnabled ? '已启用' : '已停用' }}</span>
+            <span class="status-pill"><i class="status-dot" :class="{off: !proactiveEnabled}"></i>主动对话 {{ proactiveEnabled ? '已启用' : '已停用' }}</span>
+            <span class="status-pill"><i class="status-dot" :class="{off: !flowEnabled}"></i>对话流增强 {{ flowEnabled ? '已启用' : '已停用' }}</span>
+            <span class="status-pill">{{ tools.length }} 个能力</span>
+          </div>
+        </div>
+      </header>
+
+      <nav class="tabbar" :class="{'glass-tabbar': glassReady}" aria-label="设置分区">
+        <liquid-glass v-if="liquidGlass" id="glassNav" v-show="glassReady" class="tab-glass" mode="single-bottom-tabs" dark wallpaper="gradient" dpr="1.5"></liquid-glass>
+        <div v-show="!glassReady" class="native-tabs" role="tablist">
+          <button v-for="tab in tabs" :key="tab.id" type="button" role="tab" class="native-tab" :class="{selected: activeTab === tab.id}" :aria-selected="activeTab === tab.id" @click="activeTab = tab.id"><strong>{{ tab.label }}</strong><span>{{ tab.caption }}</span></button>
+        </div>
+      </nav>
+
+      <main>
+        <section v-show="activeTab === 'tools'" class="tools-page">
+          <div class="tools-top-grid">
+            <div class="glass-card">
+              <div class="card-heading"><div><div class="section-kicker">AstrBot Native JEV</div><h2>Jev 模型提供商</h2><p>连接、密钥、模型和请求超时由 AstrBot 管理；此处只选择用于 Decision 的原生 JEV Provider。</p></div></div>
+              <div class="field"><label for="decision-provider-select">Jev 模型提供商 <span>来自 AstrBot 已配置的 Decision Provider</span></label><select id="decision-provider-select" v-model="form.decision_provider_id"><option value="">使用 AstrBot 默认判断 Provider</option><option v-for="provider in decisionProviders" :key="provider.id" :value="provider.id">{{ provider.name || provider.id }}</option><option v-if="form.decision_provider_id && !decisionProviders.some(provider => provider.id === form.decision_provider_id)" :value="form.decision_provider_id">{{ form.decision_provider_id }}（不可用，请重新选择）</option></select><p class="hint" v-if="!decisionProviders.length">尚未发现可用的原生 JEV Provider。请先在 AstrBot「模型提供方」中添加 Decision 类型的 Provider，然后重新加载此页面。</p><p class="hint" v-else>此选择会用于 Tool/MCP/Skill/SubAgent 判断、消息接话、主动发起和所有其他 Jev 判断。</p></div>
+              <div class="card-heading"><div><div class="section-kicker">Prompts</div><h2>判断提示词</h2><p>Jev 使用前提示词和判断后给主 LLM 的推荐提示词。</p></div></div>
+              <div class="field"><label>Jev 判断前提示词</label><textarea v-model="form.jev_pre_prompt" spellcheck="false"></textarea><p class="hint">发送给 Jev，不会包含主 LLM 的人格 system prompt。</p></div>
+              <div class="field"><label>判断后注入主 LLM</label><textarea v-model="form.main_llm_post_prompt" spellcheck="false"></textarea><p class="hint">支持 {tools}、{mcps}、{skills} 和 {subagents} 占位符，会追加到 AstrBot 原有系统提示词。</p></div>
+              <div class="routing-rules-table-wrap compact-rules"><table class="routing-rules-table"><thead><tr><th>判断</th><th>过滤</th><th>主 LLM 可见</th><th>推荐提示</th></tr></thead><tbody><tr><td>开</td><td>开</td><td>选中 + 始终保留</td><td>选中 + 始终推荐</td></tr><tr><td>开</td><td>关</td><td>全量</td><td>选中 + 始终推荐</td></tr><tr><td>关</td><td>开</td><td>仅始终保留</td><td>仅始终推荐</td></tr><tr><td>关</td><td>关</td><td>全量</td><td>仅始终推荐</td></tr></tbody></table></div>
+              <p class="routing-rules-note">四类能力的 Jev 判断会合并为一次请求；只有超过上下文上限时才分批。</p>
+            </div>
+            <div class="glass-card">
+              <div class="card-heading"><div><div class="section-kicker">Decision Rules</div><h2>判断与过滤规则</h2><p>Tool、MCP、Skill 与 SubAgent 使用相同的四种组合规则，但各自独立开关。</p></div></div>
+              <div class="scope-mode"><div><strong>{{ form.tools_scope_blacklist ? 'Tool/MCP/Skill/SubAgent 决策黑名单' : 'Tool/MCP/Skill/SubAgent 决策白名单' }}</strong><small>{{ form.tools_scope_blacklist ? '名单内不进行 Tool、MCP、Skill、SubAgent 决策；名单为空时全部应用。' : '只对名单内会话进行 Tool、MCP、Skill、SubAgent 决策；名单为空时全部不应用。' }}</small></div><button class="scope-toggle" type="button" @click="form.tools_scope_blacklist = !form.tools_scope_blacklist">{{ form.tools_scope_blacklist ? '黑名单' : '白名单' }}</button></div>
+              <div class="field"><label>{{ form.tools_scope_blacklist ? '不应用 Tool/MCP/Skill/SubAgent 决策的会话' : '应用 Tool/MCP/Skill/SubAgent 决策的会话' }} <span>每行一个群聊 ID、私聊用户 ID 或 unified_msg_origin</span></label><textarea v-model="form.tools_scope" class="list-editor" placeholder="群聊 ID\n私聊用户 ID"></textarea></div>
+              <div class="switch-row"><div class="switch-copy"><strong>判断 Tool</strong><small>开启后把Tool 交给 Jev 逐项判断；关闭后不请求 Tool。</small></div><label class="switch"><input v-model="form.tool_decision_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="switch-row"><div class="switch-copy"><strong>过滤 Tool</strong><small>开启后主 LLM 只看到 Jev 选中项与始终保留项；关闭后全量保留。</small></div><label class="switch"><input v-model="form.tool_filter_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="switch-row"><div class="switch-copy"><strong>判断 MCP</strong><small>开启后把 MCP 工具交给 Jev 逐项判断；关闭后不请求 MCP 判断。</small></div><label class="switch"><input v-model="form.mcp_decision_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="switch-row"><div class="switch-copy"><strong>过滤 MCP</strong><small>开启后主 LLM 只看到 Jev 选中项与始终保留项；关闭后全量保留。</small></div><label class="switch"><input v-model="form.mcp_filter_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="switch-row"><div class="switch-copy"><strong>判断 Skill</strong><small>开启后把 Skill 交给 Jev 逐项判断；关闭后不请求 Skill 判断。</small></div><label class="switch"><input v-model="form.skill_decision_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="switch-row"><div class="switch-copy"><strong>过滤 Skill</strong><small>开启后主 LLM 只看到 Jev 选中项与始终保留项；关闭后全量保留。</small></div><label class="switch"><input v-model="form.skill_filter_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="switch-row"><div class="switch-copy"><strong>判断 SubAgent</strong><small>开启后把 SubAgent 交给 Jev 逐项判断；关闭后不请求 SubAgent。</small></div><label class="switch"><input v-model="form.subagent_decision_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="switch-row"><div class="switch-copy"><strong>过滤 SubAgent</strong><small>开启后主 LLM 只看到 Jev 选中项与始终保留项；关闭后全量保留。</small></div><label class="switch"><input v-model="form.subagent_filter_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="field"><label>判断阈值 <span>{{ Number(form.tool_noul_threshold).toFixed(2) }}</span></label><liquid-glass v-if="liquidGlass" id="thresholdGlass" v-show="glassReady" class="threshold-glass" mode="slider-card" dark wallpaper="gradient" dpr="1.5" aria-hidden="true"></liquid-glass><input :class="{'glass-overlay': glassReady}" class="native-threshold" v-model.number="form.tool_noul_threshold" type="range" min="0" max="1" step="0.01" aria-label="判断阈值"><p class="hint">Jev 分数达到此值才会推荐；数值越高越严格。默认 0.65。</p></div>
+              <div v-if="liquidGlass" v-show="glassReady" class="routing-visual"><div class="routing-visual-copy"><strong>Jev 严格度</strong><p>数值越高，推荐候选越少。</p></div><liquid-glass id="decisionRing" class="decision-ring" mode="ring-progress" dark wallpaper="gradient" dpr="1" aria-label="Jev 严格度"></liquid-glass></div>
+            </div>
+          </div>
+        <section class="glass-card tool-library-card">
+          <div class="card-heading"><div><div class="section-kicker">Tool, MCP, Skill &amp; SubAgent</div><h2>Tool/MCP/Skill/SubAgent 决策</h2><p>四类能力分开管理。每类都支持手动始终保留和手动始终推荐给主 LLM；Jev 自动推荐仍然独立生效。</p></div><span class="tool-count">{{ visibleTools.length }} / {{ tools.length }}</span></div>
+          <div class="tool-toolbar"><input v-model="toolSearch" type="search" placeholder="搜索工具名、来源或描述"></div>
+          <section class="management-section"><div class="management-heading"><h3>Tool</h3><span class="tool-count">{{ ordinaryVisibleTools.length }} 个</span></div><div class="tool-toolbar compact"><div v-if="liquidGlass" v-show="glassReady" class="bulk-actions-row"><div class="bulk-action-shell"><liquid-glass id="ordinarySelectGlass" mode="buttons" dark wallpaper="gradient" dpr="2" aria-hidden="true"></liquid-glass><button type="button" class="bulk-action-button blue" aria-label="全选 Tool" @click="selectVisibleTools">全选 Tool</button></div><div class="bulk-action-shell"><liquid-glass id="ordinaryClearGlass" mode="buttons" dark wallpaper="gradient" dpr="2" aria-hidden="true"></liquid-glass><button type="button" class="bulk-action-button purple" aria-label="清空 Tool" @click="clearVisibleTools">清空 Tool</button></div></div><div v-if="!glassReady" class="native-actions"><button class="button secondary" @click="selectVisibleTools">全选 Tool</button><button class="button ghost" @click="clearVisibleTools">清空 Tool</button></div></div><div class="tool-groups"><div v-for="group in groupedTools" :key="group.origin" class="tool-group"><div class="tool-group-title">{{ group.origin }} <span class="tool-count">{{ group.items.length }}</span></div><div v-for="tool in group.items" :key="tool.name" class="tool-row"><div><div class="tool-name">{{ tool.name }} <span class="origin" :class="{builtin: tool.builtin}">{{ tool.origin_display }}</span></div><div class="tool-description">{{ tool.description }}<span v-if="!tool.active">（未激活）</span></div></div><div class="tool-controls"><label class="mini-check"><input type="checkbox" :checked="isKept(tool.name)" :disabled="!tool.active" @change="toggleKeep(tool)">始终保留</label><label class="mini-check"><input type="checkbox" :checked="isRecommended(tool.name)" :disabled="!tool.active || !isKept(tool.name)" @change="toggleRecommend(tool)">始终推荐给主 LLM</label></div></div></div><div v-if="!groupedTools.length" class="empty">没有匹配的 Tool</div></div></section>
+          <section class="management-section subagent-section"><div class="management-heading"><div><h3>MCP</h3><p>独立配置 MCP 工具的始终保留与始终推荐；每个 MCP 工具都会单独参与 Jev 判断。</p></div><span class="tool-count">{{ mcpVisibleTools.length }} 个</span></div><div class="tool-toolbar compact"><div v-if="liquidGlass" v-show="glassReady" class="bulk-actions-row"><div class="bulk-action-shell"><liquid-glass id="mcpSelectGlass" mode="buttons" dark wallpaper="gradient" dpr="2" aria-hidden="true"></liquid-glass><button type="button" class="bulk-action-button blue" aria-label="全选 MCP" @click="selectVisibleMcp">全选 MCP</button></div><div class="bulk-action-shell"><liquid-glass id="mcpClearGlass" mode="buttons" dark wallpaper="gradient" dpr="2" aria-hidden="true"></liquid-glass><button type="button" class="bulk-action-button purple" aria-label="清空 MCP" @click="clearVisibleMcp">清空 MCP</button></div></div><div v-if="!glassReady" class="native-actions"><button class="button secondary" @click="selectVisibleMcp">全选 MCP</button><button class="button ghost" @click="clearVisibleMcp">清空 MCP</button></div></div><div class="tool-groups"><div v-for="group in groupedMcp" :key="group.origin" class="tool-group"><div class="tool-group-title">{{ group.origin }} <span class="tool-count">{{ group.items.length }}</span></div><div v-for="tool in group.items" :key="tool.name" class="tool-row"><div><div class="tool-name">{{ tool.name }} <span class="tool-badge">MCP · Jev 逐个判断</span><span class="origin" :class="{builtin: tool.builtin}">{{ tool.origin_display }}</span></div><div class="tool-description">{{ tool.description }}<span v-if="!tool.active">（未激活）</span></div></div><div class="tool-controls"><label class="mini-check"><input type="checkbox" :checked="isKept(tool.name, false, true)" :disabled="!tool.active" @change="toggleKeep(tool)">始终保留</label><label class="mini-check"><input type="checkbox" :checked="isRecommended(tool.name, false, true)" :disabled="!tool.active || !isKept(tool.name, false, true)" @change="toggleRecommend(tool)">始终推荐给主 LLM</label></div></div></div><div v-if="!groupedMcp.length" class="empty">没有匹配的 MCP 工具</div></div></section>
+          <section class="management-section subagent-section"><div class="management-heading"><div><h3>Skill</h3><p>独立配置 Skill 的始终保留与始终推荐；属于插件的 Skill 按插件分组，独立安装的 Skill 归入 Skill。</p></div><span class="tool-count">{{ skillVisibleTools.length }} 个</span></div><div class="tool-toolbar compact"><div v-if="liquidGlass" v-show="glassReady" class="bulk-actions-row"><div class="bulk-action-shell"><liquid-glass id="skillSelectGlass" mode="buttons" dark wallpaper="gradient" dpr="2" aria-hidden="true"></liquid-glass><button type="button" class="bulk-action-button blue" aria-label="全选 Skill" @click="selectVisibleSkills">全选 Skill</button></div><div class="bulk-action-shell"><liquid-glass id="skillClearGlass" mode="buttons" dark wallpaper="gradient" dpr="2" aria-hidden="true"></liquid-glass><button type="button" class="bulk-action-button purple" aria-label="清空 Skill" @click="clearVisibleSkills">清空 Skill</button></div></div><div v-if="!glassReady" class="native-actions"><button class="button secondary" @click="selectVisibleSkills">全选 Skill</button><button class="button ghost" @click="clearVisibleSkills">清空 Skill</button></div></div><div class="tool-groups"><div v-for="group in groupedSkills" :key="group.origin" class="tool-group"><div class="tool-group-title">{{ group.origin }} <span class="tool-count">{{ group.items.length }}</span></div><div v-for="tool in group.items" :key="tool.name" class="tool-row"><div><div class="tool-name">{{ tool.name }} <span class="tool-badge">Skill · Jev 逐个判断</span><span class="origin">{{ tool.origin_display }}</span></div><div class="tool-description">{{ tool.description }}<span v-if="!tool.active">（未激活）</span></div></div><div class="tool-controls"><label class="mini-check"><input type="checkbox" :checked="isKept(tool.name, false, false, true)" :disabled="!tool.active" @change="toggleKeep(tool)">始终保留</label><label class="mini-check"><input type="checkbox" :checked="isRecommended(tool.name, false, false, true)" :disabled="!tool.active || !isKept(tool.name, false, false, true)" @change="toggleRecommend(tool)">始终推荐给主 LLM</label></div></div></div><div v-if="!groupedSkills.length" class="empty">没有匹配的 Skill</div></div></section>
+          <section class="management-section subagent-section"><div class="management-heading"><div><h3>SubAgent</h3><p>独立配置 SubAgent 的始终保留与始终推荐；不与 Tool、MCP、Skill 的选择混合。</p></div><span class="tool-count">{{ subagentVisibleTools.length }} 个</span></div><div class="tool-toolbar compact"><div v-if="liquidGlass" v-show="glassReady" class="bulk-actions-row"><div class="bulk-action-shell"><liquid-glass id="subagentSelectGlass" mode="buttons" dark wallpaper="gradient" dpr="2" aria-hidden="true"></liquid-glass><button type="button" class="bulk-action-button blue" aria-label="全选 SubAgent" @click="selectVisibleSubagents">全选 SubAgent</button></div><div class="bulk-action-shell"><liquid-glass id="subagentClearGlass" mode="buttons" dark wallpaper="gradient" dpr="2" aria-hidden="true"></liquid-glass><button type="button" class="bulk-action-button purple" aria-label="清空 SubAgent" @click="clearVisibleSubagents">清空 SubAgent</button></div></div><div v-if="!glassReady" class="native-actions"><button class="button secondary" @click="selectVisibleSubagents">全选 SubAgent</button><button class="button ghost" @click="clearVisibleSubagents">清空 SubAgent</button></div></div><div class="tool-groups"><div v-for="group in groupedSubagents" :key="group.origin" class="tool-group"><div class="tool-group-title">{{ group.origin }} <span class="tool-count">{{ group.items.length }}</span></div><div v-for="tool in group.items" :key="tool.name" class="tool-row"><div><div class="tool-name">{{ tool.name }} <span class="tool-badge">SubAgent · Jev 逐个判断</span><span class="origin" :class="{builtin: tool.builtin}">{{ tool.origin_display }}</span></div><div class="tool-description">{{ tool.description }}<span v-if="!tool.active">（未激活）</span></div></div><div class="tool-controls"><label class="mini-check"><input type="checkbox" :checked="isKept(tool.name, true)" :disabled="!tool.active" @change="toggleKeep(tool)">始终保留</label><label class="mini-check"><input type="checkbox" :checked="isRecommended(tool.name, true)" :disabled="!tool.active || !isKept(tool.name, true)" @change="toggleRecommend(tool)">始终推荐给主 LLM</label></div></div></div><div v-if="!groupedSubagents.length" class="empty">没有匹配的 SubAgent</div></div></section>
+        </section>
+        </section>
+
+        <section v-show="activeTab === 'proactive'" class="proactive-page">
+          <div class="life-subnav" role="tablist" aria-label="主动对话模式"><button type="button" :class="{selected: proactiveTab === 'reactive'}" @click="proactiveTab = 'reactive'" role="tab" :aria-selected="proactiveTab === 'reactive'">消息接话<span>收到消息后，自然参与对话</span></button><button type="button" :class="{selected: proactiveTab === 'initiative'}" @click="proactiveTab = 'initiative'" role="tab" :aria-selected="proactiveTab === 'initiative'">主动发起<span>有自己的生活，也会主动联系</span></button></div>
+          <div v-show="proactiveTab === 'reactive'" class="section-grid">
+          <div class="glass-card">
+            <div class="card-heading"><div><div class="section-kicker">Proactive Chat</div><h2>主动对话策略</h2><p>主动对话总开关在 AstrBot 原生配置页；这里配置触发范围和判断方式。</p></div></div>
+            <div class="switch-row"><div class="switch-copy"><strong>启用消息接话</strong><small>仅控制收到消息后的 Jev 接话判断，不影响主动发起。</small></div><label class="switch"><input v-model="messageInterjection" type="checkbox"><span class="switch-track"></span></label></div>
+            <div class="switch-row"><div class="switch-copy"><strong>非文字消息是否进入判断</strong><small>关闭时纯图片/视频/音频/文件消息不会进入 Jev 接话判断；开启后这些消息会带上媒体摘要参与判断。只影响接话候选，不影响多模态自动理解。文字+媒体混合消息始终保留文字。</small></div><label class="switch"><input v-model="form.proactive.non_text_proactive_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+            <div class="scope-mode"><div><strong>{{ form.proactive.proactive_scope_blacklist ? '主动对话黑名单' : '主动对话白名单' }}</strong><small>{{ form.proactive.proactive_scope_blacklist ? '名单内不进行主动对话；名单为空时全部应用。' : '只对名单内会话进行主动对话；名单为空时全部不应用。' }}</small></div><button class="scope-toggle" type="button" @click="form.proactive.proactive_scope_blacklist = !form.proactive.proactive_scope_blacklist">{{ form.proactive.proactive_scope_blacklist ? '黑名单' : '白名单' }}</button></div>
+            <div class="field"><label>{{ form.proactive.proactive_scope_blacklist ? '不应用主动对话的会话' : '应用主动对话的会话' }} <span>每行一个群聊 ID、私聊用户 ID 或 unified_msg_origin</span></label><textarea v-model="form.proactive.proactive_whitelist" class="list-editor" placeholder="群聊 ID\n私聊用户 ID"></textarea></div>
+            <div class="two-col"><div class="field"><label>直接回复前缀</label><input v-model="form.proactive.direct_reply_prefixes" type="text" placeholder="/、@"></div><div class="field"><label>机器人昵称</label><input v-model="form.proactive.proactive_alias" type="text" placeholder="AI|助手"></div></div>
+            <div class="switch-row"><div class="switch-copy"><strong>@ 或回复机器人时强制回复</strong><small>明确唤醒时跳过主动判断 Jev，直接进入 AstrBot 原生 Agent。</small></div><label class="switch"><input v-model="form.proactive.force_reply_when_summoned" type="checkbox"><span class="switch-track"></span></label></div>
+            <div class="two-col"><div class="field"><label>综合介入阈值</label><input v-model.number="form.proactive.proactive_score_threshold" type="number" min="0" max="1" step="0.01"></div><div class="field"><label>直接指向阈值</label><input v-model.number="form.proactive.addressing_threshold" type="number" min="0" max="1" step="0.01"></div><div class="field"><label>自然介入阈值</label><input v-model.number="form.proactive.interject_threshold" type="number" min="0" max="1" step="0.01"></div><div class="field"><label>判断间隔（秒）</label><input v-model.number="form.proactive.no_reply_cooldown_seconds" type="number" min="0" step="0.1"></div></div>
+          </div>
+          <div class="glass-card">
+            <div class="card-heading"><div><div class="section-kicker">Guardrails</div><h2>冷却与状态</h2><p>控制主动回复频率、历史规模和会话资源。</p></div></div>
+            <div class="two-col"><div class="field"><label>回复冷却（秒）</label><input v-model.number="form.proactive.cooldown_seconds" type="number" min="0" step="1"></div><div class="field"><label>回复窗口（秒）</label><input v-model.number="form.proactive.reply_window_seconds" type="number" min="1" step="1"></div><div class="field"><label>窗口最多回复</label><input v-model.number="form.proactive.max_replies_per_window" type="number" min="0" step="1"></div><div class="field"><label>历史消息数</label><input v-model.number="form.proactive.proactive_history_max_messages" type="number" min="2" step="1"></div><div class="field"><label>最多会话数</label><input v-model.number="form.proactive.proactive_max_sessions" type="number" min="1" step="1"></div><div class="field"><label>观测超时（秒）</label><input v-model.number="form.proactive.observation_timeout_seconds" type="number" min="1" step="1"></div></div>
+            <div class="field"><label>复读检测：条数 / 窗口秒数</label><div class="two-col"><input v-model.number="form.proactive.echo_detection_threshold" type="number" min="2" step="1"><input v-model.number="form.proactive.echo_detection_window_seconds" type="number" min="1" step="1"></div></div>
+            <div class="field"><label>密集对话：消息数 / 窗口秒数 / 最少参与人数</label><div class="two-col"><input v-model.number="form.proactive.dense_conversation_threshold" type="number" min="1" step="1"><input v-model.number="form.proactive.dense_conversation_window_seconds" type="number" min="1" step="1"><input v-model.number="form.proactive.min_participant_count" type="number" min="1" step="1"></div></div>
+          </div>
+          </div>
+          <div v-show="proactiveTab === 'initiative'" class="life-page">
+            <div class="glass-card life-workspace-header">
+              <div class="card-heading"><div><div class="section-kicker">主动发起工作台</div><h2>让联系有分寸，让生活有连续性</h2><p>下方设置是全局规则；选择会话只切换人格资料、任务与状态的查看范围。</p></div><span class="status-pill">{{ lifeConfig.adaptive_settings?.enable ? '自适应联系' : '传统规则联系' }}</span></div>
+              <div v-if="lifeToast" class="life-toast" :class="lifeToast.kind" role="status" aria-live="polite"><span v-if="lifeToast.kind === 'busy'" class="life-toast-spin"></span><strong>{{ lifeToast.title }}</strong><span>{{ lifeToast.text }}</span><button type="button" aria-label="关闭提示" @click="lifeToast = null">×</button></div><div class="two-col"><div class="field"><label>目标会话 <span>可搜索选择，也可直接粘贴完整 UMO</span></label><div class="life-picker"><input type="text" :value="sessionSearch" :disabled="lifeBusy" placeholder="搜索会话标题 / 平台，或粘贴 aiocqhttp:FriendMessage:用户ID" autocomplete="off" aria-label="目标会话" @focus="showSessionList = true" @input="onSessionInput($event.target.value)" @keydown.esc="showSessionList = false" @blur="hidePicker('session')"><div v-if="showSessionList" class="life-picker-list"><button v-for="row in filteredSessions" :key="row.umo" type="button" :class="{active: row.umo === lifeUmo}" @mousedown.prevent="pickSession(row)"><strong>{{ row.title || row.umo }}</strong><small>{{ [row.platform, row.message_type, row.persona_name, row.umo].filter(Boolean).join(' · ') }}</small></button><div v-if="!filteredSessions.length" class="life-picker-empty">没有匹配的会话；可直接粘贴完整 UMO。</div></div></div><p class="hint">会话列表来自 AstrBot 的会话；选中的 UMO 决定读取哪个人格的生活与外貌。当前实际 UMO：{{ lifeUmo || '未选择' }}</p></div><div class="field"><label>当前人格</label><div class="life-persona">{{ appearancePersona || '选择会话后自动读取' }}</div><p class="hint">当前人格由所选会话决定，不可在此直接修改。</p></div></div>
+              <div class="life-process" aria-label="主动发起流程"><span>生活与对话提供素材</span><b>→</b><span>联系规则与 Jev 判断</span><b>→</b><span>原生 Agent 生成与发送</span><b>→</b><span>按实际发送更新记录</span></div>
+              <p class="hint">明确提醒单独预留额度、提前准备、到点复核；自然话题跟进只作为普通主动候选。两者都遵守名单、暂停与免打扰。</p>
+              <nav class="life-workspace-tabs" aria-label="主动发起功能板块"><button v-for="panel in lifePanels" :key="panel.id" type="button" :class="{selected:lifePanel===panel.id,advanced:panel.id==='advanced'}" :aria-pressed="lifePanel===panel.id" @click="lifePanel=panel.id">{{ panel.label }}</button></nav>
+              <p class="life-panel-purpose">{{ lifePanels.find(p=>p.id===lifePanel)?.description }}</p>
+              <div v-if="lifePanel==='advanced'" class="field"><label>搜索高级设置</label><input v-model="lifeAdvancedSearch" type="search" aria-label="搜索高级设置" placeholder="例如：模型、提示词、超时、传统规则"></div>
+              <p class="hint" v-if="lifePanel==='advanced'">全部原有参数保留；自适应开启时，传统随机预算和连续未回应停发不再作为普通主动的硬限制。隐藏或切换板块不会清空设置。</p>
+            </div>
+
+
+            <div class="life-pair" v-show="lifePanel === 'contact'">
+            <div v-if="lifeConfig.friend_settings" class="glass-card">
+              <div class="card-heading"><div><div class="section-kicker">Private Chat</div><h2>私聊主动</h2><p>控制虚拟生活是否、以及多久才在私聊里主动开口；名单模式决定下方名单的含义。</p></div><span class="status-pill">{{ lifeConfig.friend_settings.enable ? '已启用' : '未启用' }}</span></div>
+              <div class="switch-row"><div class="switch-copy"><strong>启用私聊主动</strong><small>关闭后私聊完全不会主动发起，但仍会正常接话。</small></div><label class="switch"><input type="checkbox" aria-label="启用私聊主动" v-model="lifeConfig.friend_settings.enable"><span class="switch-track"></span></label></div>
+              <div class="scope-mode" v-show="lifeConfig.friend_settings.enable"><div><strong>{{ lifeConfig.friend_settings.session_blacklist ? '私聊主动黑名单' : '私聊主动白名单' }}</strong><small>{{ lifeConfig.friend_settings.session_blacklist ? '名单内的私聊不会主动发起；名单为空时全部私聊都会主动发起。' : '只对名单内的私聊主动发起；名单为空时全部私聊都不会主动发起。' }}</small></div><button class="scope-toggle" type="button" @click="toggleScope('friend_settings')">{{ lifeConfig.friend_settings.session_blacklist ? '黑名单' : '白名单' }}</button></div>
+              <div class="field" v-show="lifeConfig.friend_settings.enable"><label>{{ lifeConfig.friend_settings.session_blacklist ? '不主动发起的私聊会话' : '允许主动发起的私聊会话' }} <span>每行一个完整 UMO</span></label><textarea :value="listText('friend_settings','session_list')" @input="setScopeList('friend_settings','session_list',$event.target.value)" class="list-editor" placeholder="aiocqhttp:FriendMessage:用户ID"></textarea></div>
+              <div v-show="lifeConfig.friend_settings.enable" class="two-col" v-if="!lifeConfig.adaptive_settings?.enable"><div class="field"><label>最短沉默时间 <span>分钟</span></label><input v-model.number="lifeConfig.friend_settings.idle_min_minutes" type="number" min="1" step="1"></div><div class="field"><label>最长沉默时间 <span>分钟</span></label><input v-model.number="lifeConfig.friend_settings.idle_max_minutes" type="number" min="1" step="1"></div><div class="field"><label>发送冷却 <span>分钟</span></label><input v-model.number="lifeConfig.friend_settings.cooldown_minutes" type="number" min="0" step="1"></div><div class="field"><label>日预算下限</label><input v-model.number="lifeConfig.friend_settings.daily_budget_min" type="number" min="0" step="1"></div><div class="field"><label>日预算上限</label><input v-model.number="lifeConfig.friend_settings.daily_budget_max" type="number" min="0" step="1"></div><div class="field"><label>LLM 额外预算</label><input v-model.number="lifeConfig.friend_settings.llm_bonus_max" type="number" min="0" step="1"></div><div class="field"><label>日硬上限 <span>不超过 100</span></label><input v-model.number="lifeConfig.friend_settings.daily_hard_max" type="number" min="0" max="100" step="1"></div></div>
+              <div v-else v-show="lifeConfig.friend_settings.enable" class="field"><label>每日普通主动上限</label><input v-model.number="lifeConfig.friend_settings.daily_hard_max" type="number" min="0" max="100" step="1"><p class="hint">实际间隔由下方“联系频率与权限”统一管理；明确约定提醒有独立额度，正常聊天回复不占主动额度。</p></div>
+              <p class="hint">白名单 + 空名单 = 全部不主动；黑名单 + 空名单 = 全部主动。名单里只能填私聊 UMO（FriendMessage）。</p>
+              <p v-if="!lifeConfig.adaptive_settings?.enable" class="hint life-rule-note">「沉默时间」与「发送冷却」是两个独立条件：沉默到点只是进入候选，还要等冷却结束才能真的发出。若冷却比最长沉默时间还长，沉默区间就会被冷却完全覆盖，实际发送间隔只由冷却决定。</p>
+            </div>
+            <div v-if="lifeConfig.group_settings" class="glass-card">
+              <div class="card-heading"><div><div class="section-kicker">Group Chat</div><h2>群聊主动</h2><p>控制虚拟生活是否、以及多久才在群聊里主动开口；名单模式决定下方名单的含义。</p></div><span class="status-pill">{{ lifeConfig.group_settings.enable ? '已启用' : '未启用' }}</span></div>
+              <div class="switch-row"><div class="switch-copy"><strong>启用群聊主动</strong><small>关闭后群聊完全不会主动发起，但仍会正常接话。</small></div><label class="switch"><input type="checkbox" aria-label="启用群聊主动" v-model="lifeConfig.group_settings.enable"><span class="switch-track"></span></label></div>
+              <div class="scope-mode" v-show="lifeConfig.group_settings.enable"><div><strong>{{ lifeConfig.group_settings.session_blacklist ? '群聊主动黑名单' : '群聊主动白名单' }}</strong><small>{{ lifeConfig.group_settings.session_blacklist ? '名单内的群聊不会主动发起；名单为空时全部群聊都会主动发起。' : '只对名单内的群聊主动发起；名单为空时全部群聊都不会主动发起。' }}</small></div><button class="scope-toggle" type="button" @click="toggleScope('group_settings')">{{ lifeConfig.group_settings.session_blacklist ? '黑名单' : '白名单' }}</button></div>
+              <div class="field" v-show="lifeConfig.group_settings.enable"><label>{{ lifeConfig.group_settings.session_blacklist ? '不主动发起的群聊会话' : '允许主动发起的群聊会话' }} <span>每行一个完整 UMO</span></label><textarea :value="listText('group_settings','session_list')" @input="setScopeList('group_settings','session_list',$event.target.value)" class="list-editor" placeholder="aiocqhttp:GroupMessage:群号"></textarea></div>
+              <div v-show="lifeConfig.group_settings.enable" class="two-col" v-if="!lifeConfig.adaptive_settings?.enable"><div class="field"><label>最短沉默时间 <span>分钟</span></label><input v-model.number="lifeConfig.group_settings.idle_min_minutes" type="number" min="1" step="1"></div><div class="field"><label>最长沉默时间 <span>分钟</span></label><input v-model.number="lifeConfig.group_settings.idle_max_minutes" type="number" min="1" step="1"></div><div class="field"><label>发送冷却 <span>分钟</span></label><input v-model.number="lifeConfig.group_settings.cooldown_minutes" type="number" min="0" step="1"></div><div class="field"><label>日预算下限</label><input v-model.number="lifeConfig.group_settings.daily_budget_min" type="number" min="0" step="1"></div><div class="field"><label>日预算上限</label><input v-model.number="lifeConfig.group_settings.daily_budget_max" type="number" min="0" step="1"></div><div class="field"><label>LLM 额外预算</label><input v-model.number="lifeConfig.group_settings.llm_bonus_max" type="number" min="0" step="1"></div><div class="field"><label>日硬上限 <span>不超过 100</span></label><input v-model.number="lifeConfig.group_settings.daily_hard_max" type="number" min="0" max="100" step="1"></div></div>
+              <div v-else v-show="lifeConfig.group_settings.enable" class="field"><label>每日普通主动上限</label><input v-model.number="lifeConfig.group_settings.daily_hard_max" type="number" min="0" max="100" step="1"><p class="hint">实际间隔由下方“联系频率与权限”统一管理；明确约定提醒有独立额度，正常聊天回复不占主动额度。</p></div>
+              <p class="hint">白名单 + 空名单 = 全部不主动；黑名单 + 空名单 = 全部主动。名单里只能填群聊 UMO（GroupMessage）。</p>
+              <p v-if="!lifeConfig.adaptive_settings?.enable" class="hint life-rule-note">「沉默时间」与「发送冷却」是两个独立条件：沉默到点只是进入候选，还要等冷却结束才能真的发出。若冷却比最长沉默时间还长，沉默区间就会被冷却完全覆盖，实际发送间隔只由冷却决定。</p>
+            </div>
+            </div>
+            <div class="life-workspace glass-card" v-show="lifePanel === 'life'">
+              <div class="card-heading"><div><div class="section-kicker">Today &amp; Appearance</div><h2>今日生活与外貌</h2><p>先选择会话，页面按该会话解析并读取当前人格；参考图按人格保存，照片与视频使用今日穿搭。</p></div><span class="status-pill">aigen {{ aigenAvailable ? '已连接' : '未连接' }}</span></div>
+
+              <div class="life-actions"><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('generate')">生成今日内容</button><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('rewrite_schedule')">重写日程</button><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('rewrite_outfit')">重写穿搭</button></div>
+              <p class="hint">{{ lifeBusy ? '正在处理，请稍候…' : '操作使用已保存的设置；修改配置后请先保存。生成与重写会请求日程模型，不会自动发送聊天消息。' }}</p>
+              <div class="field"><label>补充要求 / 长期阶段自然语言要求</label><textarea v-model="lifeActionText" placeholder="例如今天穿浅色休闲服，下午在书店。导入阶段时填写完整 JSON。"></textarea></div>
+              <div v-if="lifeInspection.plan" class="life-today"><div><h3>{{ lifeInspection.plan.theme || '今日生活' }}</h3><p>{{ lifeInspection.plan.mood }}</p><p v-if="lifeInspection.plan.outfit">{{ lifeInspection.plan.outfit.summary }}</p><div class="life-outfit-chips" v-if="lifeInspection.plan.outfit"><span v-for="(item,idx) in lifeInspection.plan.outfit.items" :key="idx">{{ item.name }} · {{ item.details }}</span></div></div><ol class="life-timeline"><li v-for="item in lifeInspection.plan.timeline" :key="item.id"><time>{{ item.start }}—{{ item.end }}</time><div><strong>{{ item.activity }}</strong><small>{{ item.location }} {{ item.state }}</small></div></li></ol></div>
+              <div class="life-actions"><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('render_schedule')">日程图片</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('render_outfit')">穿搭图片</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('render_timeline')">长期阶段图片</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('render_stage')">当前阶段详情</button><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('initiate')">请求立即发起（会发送）</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('settle_delay')">结算回复等待</button></div>
+            </div>
+<div class="glass-card" v-show="lifePanel === 'life'"><div class="card-heading"><div><div class="section-kicker">Long-term continuity</div><h2>长期生活计划与一次性要求</h2><p>长期阶段支持草稿、批准、拒绝、重生成和 JSON 导入；日程要求只在指定日期首次成功生成后消费。</p></div></div><div class="life-actions"><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('generate_timeline')">生成追加草稿</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('regenerate_timeline')">生成替换草稿</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('import_timeline')">从要求框导入 JSON</button><button class="button secondary" :disabled="lifeBusy || !lifeInspection.draft" @click="lifeAction('approve_timeline')">批准草稿</button><button class="button ghost" :disabled="lifeBusy || !lifeInspection.draft" @click="lifeAction('reject_timeline')">拒绝 / 按意见重写</button></div><div class="field"><label>未来日期或区间</label><input type="text" v-model="lifeDateRange" placeholder="2026-12-01..2026-12-03"></div><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('add_requirement')">添加一次性日程要求</button><details v-if="lifeInspection.timeline || lifeInspection.draft"><summary>查看已批准阶段与待批准草稿</summary><pre class="life-json">{{ JSON.stringify({timeline:lifeInspection.timeline,draft:lifeInspection.draft,requirements:lifeInspection.requirements},null,2) }}</pre></details></div>
+            <div class="life-pair">
+            <details class="glass-card life-config-section" v-show="lifePanel === 'life'"><summary><span>外貌参考图（按人格）</span><small>默认收起 · 点击展开</small></summary><div class="collapsible-body">
+              <div class="card-heading"><div><div class="section-kicker">Appearance References</div><p>参考图按 AstrBot 人格保存，与具体会话无关；换会话不会换参考图，换人格才会。</p></div></div>
+              <div class="field"><label>目标人格 <span>可搜索选择</span></label><div class="life-picker"><input type="text" v-model="personaSearch" :disabled="lifeBusy" placeholder="搜索人格 ID" autocomplete="off" aria-label="目标人格" @focus="showPersonaList = true" @input="showPersonaList = true" @keydown.esc="showPersonaList = false" @blur="hidePicker('persona')"><div v-if="showPersonaList" class="life-picker-list"><button v-for="row in filteredPersonas" :key="row.id" type="button" :class="{active: row.id === appearancePersonaId}" @mousedown.prevent="pickPersona(row)"><strong>{{ row.name || row.id }}</strong><small>{{ row.id }}</small></button><div v-if="!filteredPersonas.length" class="life-picker-empty">没有匹配的人格。</div></div></div></div>
+              <div class="life-reference-grid"><div v-for="image in appearanceImages" :key="image.id" class="life-reference"><img :src="image.preview" :alt="image.name"><div><span>{{ image.name }}</span><button class="button ghost" :disabled="lifeBusy" @click="removeAppearance(image.id)">删除</button></div></div><label class="life-upload"><span>＋ 上传外貌参考图</span><small>PNG / JPEG / WebP · 每张最多 8MB · 每人格最多 5 张</small><input type="file" accept="image/png,image/jpeg,image/webp" :disabled="lifeBusy" @change="uploadAppearance"></label></div>
+              <div class="field"><label>外貌补充描述 <span>只保存到当前人格</span></label><textarea v-model="appearanceDescription" @blur="saveAppearanceDescription" spellcheck="false" placeholder="只写参考图无法体现的外貌信息，例如身高、体型、发型细节、常戴饰品。"></textarea><p class="hint">这段文字和参考图一样按人格保存，不随会话切换；只描述外貌，不填写今日穿搭。</p></div>
+              <div v-if="lifeConfig.appearance_settings" class="switch-row"><div class="switch-copy"><strong>无今日穿搭时沿用参考图穿搭</strong><small>开启后，当天尚未生成穿搭时，拍照与拍视频会沿用参考图中的服装。</small></div><label class="switch"><input type="checkbox" aria-label="无今日穿搭时沿用参考图穿搭" v-model="lifeConfig.appearance_settings.use_reference_outfit"><span class="switch-track"></span></label></div>
+              <p class="hint">参考图按人格保存，与具体会话无关；参考图中的穿搭作为该人格的默认穿搭；若几张参考图穿搭不一致，插件不做额外处理。</p>
+              <p v-if="!appearancePersonaId" class="hint">请先在上方选择一个目标人格，再上传参考图。</p>
+            </div></details>
+            <details class="glass-card life-config-section" v-show="lifePanel === 'life'"><summary><span>人际网络</span><small>默认收起 · 点击展开</small></summary><div v-if="lifeConfig.personal_network_integration && lifeSchema.personal_network_integration" class="collapsible-body">
+              <div class="card-heading"><div><div class="section-kicker">Personal Network</div><p>人际网络已并入本插件，无需再安装 astrbot_plugin_personal_network。关系上下文会按下方设置注入对话，虚拟生活生成新人物时也走同一份数据。</p></div></div>
+              <life-settings :schema="lifePanelSchema('personal_network_integration')" :value="lifeConfig.personal_network_integration" :providers="lifeProviders"></life-settings>
+              <div class="network-manager">
+                <div class="network-bar">
+                  <div class="field"><label>目标人格 <span>可搜索选择</span></label><div class="life-picker"><input type="text" v-model="networkPersonaSearch" placeholder="搜索人格 ID" autocomplete="off" aria-label="人际网络人格" @focus="showNetworkPersonaList = true" @input="showNetworkPersonaList = true" @keydown.esc="showNetworkPersonaList = false" @blur="hidePicker('networkPersona')"><div v-if="showNetworkPersonaList" class="life-picker-list"><button v-for="row in filteredNetworkPersonas" :key="row.id" type="button" :class="{active: row.id === networkPersonaId}" @mousedown.prevent="pickNetworkPersona(row)"><strong>{{ row.name || row.id }}</strong><small>{{ row.id }}</small></button><div v-if="!filteredNetworkPersonas.length" class="life-picker-empty">没有匹配的人格。</div></div></div></div>
+                  <div class="network-bar-actions"><div class="switch-copy"><strong>该人格的人际网络</strong><small>{{ networkEnabled ? '已启用：写入关系上下文并记录日程经历' : '已停用：只保留数据，不注入也不记录' }}</small></div><label class="switch"><input type="checkbox" aria-label="启用该人格的人际网络" :checked="networkEnabled" :disabled="!networkPersonaId" @change="toggleNetworkEnabled($event.target.checked)"><span class="switch-track"></span></label></div>
+                </div>
+                <p v-if="!networkPersonaId" class="hint">先选择一个目标人格，下面的内容才会加载。</p>
+                <template v-else>
+                  <div class="network-counts"><span>{{ networkStats.characters }} 个人物</span><span>{{ networkStats.relationships }} 条关系</span><span>{{ networkStats.events }} 条经历</span><button class="button ghost" type="button" :disabled="networkBusy" @click="reloadNetwork">刷新</button></div>
+                  <details class="network-section" open><summary>人物（{{ networkCharacters.length }}）</summary>
+                    <div v-for="row in networkCharacters" :key="row.id" class="network-row">
+                      <div class="network-row-main"><strong>{{ row.name }}</strong><small>{{ row.is_persona ? '人格本人' : (row.bio || '未填写简介') }}</small></div>
+                      <button class="button ghost" type="button" :disabled="networkBusy" @click="removeNetworkCharacter(row)">删除</button>
+                    </div>
+                    <div class="network-form">
+                      <div class="two-col"><div class="field"><label>姓名</label><input type="text" v-model="networkNewCharacter.name" placeholder="人物姓名"></div><div class="field"><label>简介</label><input type="text" v-model="networkNewCharacter.bio" placeholder="身份、与本人关系"></div></div>
+                      <div class="field"><label>性格 / 偏好</label><input type="text" v-model="networkNewCharacter.personality" placeholder="例如 温柔、话少；喜欢猫"></div>
+                      <button class="button secondary" type="button" :disabled="networkBusy || !networkNewCharacter.name.trim()" @click="addNetworkCharacter">添加人物</button>
+                    </div>
+                  </details>
+                  <details class="network-section"><summary>关系（{{ networkRelations.length }}）</summary>
+                    <div v-for="row in networkRelations" :key="row.id" class="network-row"><div class="network-row-main"><strong>{{ networkNameOf(row.source_id) }} → {{ networkNameOf(row.target_id) }}</strong><small>{{ row.relation_type }} · 亲密度 {{ row.strength }} · {{ row.status }}</small></div><button class="button ghost" type="button" :disabled="networkBusy" @click="removeNetworkRelation(row)">删除</button></div>
+                    <div class="network-form">
+                      <div class="two-col"><div class="field"><label>主体</label><input type="text" v-model="networkNewRelation.source" placeholder="人格本人或人物姓名"></div><div class="field"><label>对象</label><input type="text" v-model="networkNewRelation.target" placeholder="人物姓名"></div><div class="field"><label>关系类型</label><input type="text" v-model="networkNewRelation.type" placeholder="例如 同学、邻居"></div><div class="field"><label>亲密度 0-100</label><input type="number" min="0" max="100" v-model.number="networkNewRelation.strength"></div></div>
+                      <button class="button secondary" type="button" :disabled="networkBusy || !networkNewRelation.target.trim() || !networkNewRelation.type.trim()" @click="addNetworkRelation">添加关系</button>
+                    </div>
+                  </details>
+                  <details class="network-section"><summary>共同经历（{{ networkEvents.length }}）</summary>
+                    <div v-for="row in networkEvents" :key="row.id" class="network-row"><div class="network-row-main"><strong>{{ row.event_type }} · {{ row.occurred_at }}</strong><small>{{ row.summary }}</small></div><button class="button ghost" type="button" :disabled="networkBusy" @click="removeNetworkEvent(row)">删除</button></div>
+                    <div class="network-form">
+                      <div class="two-col"><div class="field"><label>参与者</label><input type="text" v-model="networkNewEvent.participants" placeholder="人物姓名，多个用逗号分隔"></div><div class="field"><label>类型</label><input type="text" v-model="networkNewEvent.type" placeholder="例如 见面、聊天"></div></div>
+                      <div class="field"><label>摘要</label><input type="text" v-model="networkNewEvent.summary" placeholder="发生了什么"></div>
+                      <button class="button secondary" type="button" :disabled="networkBusy || !networkNewEvent.summary.trim()" @click="addNetworkEvent">添加经历</button>
+                    </div>
+                  </details>
+                  <p v-if="networkMessage" class="hint">{{ networkMessage }}</p>
+                  <p class="hint">上面的增删改都在本页完成。关系图视图、人物卡片、批量生成、头像与导入导出在页面底部的「人际网络详情」里。</p>
+                </template>
+              </div>
+            </div></details>
+            </div>
+            <div class="glass-card" v-show="lifePanel === 'status'" v-if="lifeInspection.contact_control">
+              <div class="card-heading"><div><div class="section-kicker">Contact &amp; Time</div><h2>当前会话的联系频率与时间承诺</h2><p>按所选会话和当前人格隔离。选择会话后自动读取；真实来信回复不占主动额度。</p></div></div>
+              <div class="two-col"><div class="life-persona">目标间隔 {{ Math.round(lifeInspection.contact_control.interval) }} 分钟</div><div class="life-persona">{{ lifeInspection.contact_control.paused_until === -1 ? '主动联系已暂停，等待用户恢复' : (lifeInspection.contact_control.paused_until > Date.now()/1000 ? '主动联系暂时暂停' : '主动联系未暂停') }}</div><div class="life-persona" v-if="lifeInspection.contact_control.relationship">关系阶段：{{ lifeInspection.contact_control.relationship.stage }}</div><div class="life-persona" v-if="lifeInspection.contact_control.response_rhythm">回复节奏：{{ ({fast:'较快',normal:'通常',slow:'较慢',unknown:'样本不足'})[lifeInspection.contact_control.response_rhythm.bucket] || '样本不足' }}</div></div>
+              <p class="hint">今日普通主动（含已预留）：{{ lifeInspection.contact_control.today.ordinary }}；明确约定（含已预留）：{{ lifeInspection.contact_control.today.agreed }}；未回应：{{ lifeInspection.contact_control.unanswered }}。明确偏好：{{ lifeInspection.contact_control.feedback || '尚未设置' }}。关系阶段只用于调整分寸，不会突破频率上限。</p>
+              <div v-for="task in lifeInspection.future_contacts || []" :key="task.id" class="switch-row"><div class="switch-copy"><strong>{{ task.note }}</strong><small>{{ task.run_at }} · {{ task.status }} · {{ task.progress }}</small><small v-if="task.blocked_reason || task.error">{{ task.blocked_reason || task.error }}</small><small>任务 ID：{{ task.id }}</small></div></div>
+              <p v-if="lifeInspection.pending_thought" class="hint">待择机分享：{{ lifeInspection.pending_thought.text }}。分享受间隔、额度、偏好和免打扰限制，已过期的想法不会发送。<button class="button ghost" :disabled="lifeControlBusy" @click="lifeControl('dismiss_idea',{idea_id:lifeInspection.pending_thought.id})">不再向本会话分享这条</button></p>
+              <p class="hint">自适应模式开启后，普通主动按目标间隔和每日硬上限执行；旧的随机基础预算、连续未回应停发和随机可打扰概率由自适应规则接管。明确暂停、名单、睡眠和免打扰始终优先。发送结果 unknown 表示平台确认不明，程序不会自动重发。</p>
+            </div>
+            <div class="glass-card" v-show="lifePanel==='status' && !lifeInspection.contact_control"><h2>先选择一个会话</h2><p>上方选择会话后，会自动读取当前人格的实际联系状态、话题和发送记录。此处显示状态，修改全局规则请切换到对应板块。</p></div>
+            <div class="glass-card" v-show="lifePanel==='reminders'">
+              <h2>明确约定的提醒与时间承诺</h2><p class="hint">这里的任务有明确时间并预留额度；与下方择机跟进的话题分别管理。</p>
+              <div class="two-col" id="life-task-editor"><div class="field"><label>{{ lifeTaskDraft.id ? '修改提醒内容' : '提醒内容' }}</label><input type="text" v-model="lifeTaskDraft.note" aria-label="提醒内容" maxlength="2000" placeholder="例如：起来喝水"></div><div class="field"><label>提醒时间（浏览器本地时区）</label><input v-model="lifeTaskDraft.runAt" aria-label="提醒时间" type="datetime-local" step="1"></div></div><button class="button secondary" :disabled="lifeControlBusy || !lifeUmo" @click="createLifeTask">{{ lifeTaskDraft.id ? '保存修改' : '创建明确提醒' }}</button><button class="button ghost" v-if="lifeTaskDraft.id" @click="lifeTaskDraft={id:'',note:'',runAt:'',originalRunAt:'',originalLocalAt:''}">取消编辑</button>
+              <div class="life-record" v-for="task in lifeInspection.future_contacts || []" :key="task.id"><strong>{{ task.note }}</strong><p>{{ task.run_at }} · {{ task.status }} · {{ task.progress }}</p><p v-if="task.blocked_reason || task.error" class="hint">{{ task.blocked_reason || task.error }}</p><div class="life-actions" v-if="['pending','preparing','ready','suspended','awaiting_delivery'].includes(task.status)"><button class="button ghost" :disabled="lifeControlBusy" @click="editLifeTask(task)">修改</button><button class="button ghost" :disabled="lifeControlBusy" @click="lifeControl('cancel_task',{task_id:task.id})">取消</button></div></div>
+              <h3>可自然跟进的话题</h3><p class="hint">例如面试结果、尚未聊完的事。到达适合跟进的时间后才进入普通主动候选；已经问过或已经有结果的事项不会重复追问。</p>
+              <div class="life-record" v-for="topic in lifeInspection.topics || []" :key="topic.id"><strong>{{ topic.title }}</strong><p>{{ topic.note }} · {{ topic.status==='open'?'等待合适时机':topic.status==='asked'?'已问过，等待结果':'已结束' }}</p><small>来源：{{ topic.quote }}</small><button class="button ghost" v-if="topic.status!=='resolved'" :disabled="lifeControlBusy" @click="lifeControl('resolve_topic',{topic_id:topic.id})">标记结束</button></div>
+            </div>
+            <div class="glass-card" v-show="lifePanel==='status' && lifeInspection.contact_control">
+              <h2>实际发送与生活进展</h2><p class="hint" v-if="lifeInspection.semantic_usage">今日语义分析 {{ lifeInspection.semantic_usage.used }} / {{ lifeInspection.semantic_usage.limit }} 次；失败也计入预算。</p><div v-if="lifeInspection.life_state?.activity"><strong>{{ lifeInspection.life_state.activity }} · {{ lifeInspection.life_state.phase }}</strong><p class="hint">计划进度 {{ Math.round(lifeInspection.life_state.progress*100) }}% · {{ lifeInspection.life_state.tone }}。依据保存的虚拟日程推演，外部任务完成另行确认。</p></div>
+              <div class="life-record" v-for="(row,index) in lifeInspection.recent_messages || []" :key="index"><small>{{ new Date(row.at*1000).toLocaleString() }} · {{ row.kind }}</small><p>{{ row.text }}</p><p class="hint" v-if="row.ideas?.length || row.topics?.length">分享确认：{{ row.match_status==='checked' ? ((row.matches || []).length+' 项有实际发送证据') : '待确认，尚未记为已分享' }}</p></div>
+              <h3>最近主动判断</h3><div class="life-record" v-for="(row,index) in (lifeStatus.audit || []).filter(r=>r.umo===lifeUmo).slice(-8).reverse()" :key="index"><small>{{ row.time }} · {{ row.sent?'已发送':'未发送' }}</small><p>{{ row.reason }}</p></div>
+            </div>
+            <div class="life-config-grid"><details v-for="(group,key) in lifeConfigGroups" :key="key" class="glass-card life-config-section" :class="{'life-wide':key==='media_settings' && lifePanel==='media'}" ><summary><span>{{ lifeGroupTitle(key) }}</span><small>{{ lifePanel === 'advanced' ? Object.keys(lifePanelSchema(key)).length + ' 项精细设置' : lifeGroupSummary(key) }}</small></summary><template v-if="key === 'media_settings' && lifeConfig[key]"><template v-if="lifePanel==='media'"><life-settings :schema="mediaGeneralSchema" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><div class="life-media-kinds" v-if="lifeConfig.media_settings.enable"><section v-for="kind in ['photo','video','audio']" :key="kind" class="life-media-kind"><h3>{{ {photo:'照片',video:'视频',audio:'音频'}[kind] }}</h3><life-settings :schema="mediaKindSchema(kind)" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings></section></div></template><life-settings v-else :schema="mediaSettingsSchema" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><div class="billing-picker-row" v-if="lifePanel === 'media'"><div class="field"><label>固定账户平台名 <span>来自 AstrBot 已配置的平台</span></label><select aria-label="固定账户平台名" v-model="lifeConfig.media_settings.proactive_billing_platform"><option value="">沿用当前平台</option><option v-for="row in billingPlatforms" :key="row.id" :value="row.id">{{ row.name }}</option><option v-if="lifeConfig.media_settings.proactive_billing_platform && !billingPlatforms.some(p => p.id === lifeConfig.media_settings.proactive_billing_platform)" :value="lifeConfig.media_settings.proactive_billing_platform">{{ lifeConfig.media_settings.proactive_billing_platform }}（已保存）</option></select></div><div class="field"><label>固定账户用户 ID <span>来自 aigen 记账账户，可搜索</span></label><div class="life-picker"><input type="text" :value="billingUserLabel" placeholder="搜索平台或用户 ID" autocomplete="off" aria-label="固定账户用户 ID" @focus="showBillingUserList = true" @input="onBillingUserInput($event.target.value)" @keydown.esc="showBillingUserList = false" @blur="hidePicker('billingUser')"><div v-if="showBillingUserList" class="life-picker-list"><button v-for="row in filteredBillingAccounts" :key="row.label" type="button" :class="{active: row.user_id === lifeConfig.media_settings.proactive_billing_user_id}" @mousedown.prevent="pickBillingAccount(row)"><strong>{{ row.user_id }}</strong><small>{{ row.platform }} · 余额 {{ row.amount }}</small></button><div v-if="!filteredBillingAccounts.length" class="life-picker-empty">没有匹配的记账账户；也可直接输入用户 ID。</div></div></div><p class="hint">列出的是 aigen 账本中已有余额行的账户；主动发起会消耗这里选中的账户。</p></div></div></template><life-settings v-else-if="lifeConfig[key]" :schema="lifePanelSchema(key)" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><p v-if="key === 'media_settings'" class="hint">三项概率独立掷骰，判定为“生成多媒体”后只会从已启用的种类里挑一种发送，数量由模型在配置区间内决定。</p></details></div>
+                        <details class="glass-card life-config-section" v-show="lifePanel === 'life'" id="network-detail" @toggle="onNetworkDetailToggle"><summary><span>人际网络详情</span><small>{{ networkDetailLoaded ? '关系图与人物卡片' : '默认收起 · 点击展开' }}</small></summary><div class="collapsible-body">
+<p class="hint">完整的人际网络管理已并入本页：关系图、人物卡片、批量生成、头像与导入导出都在下方，修改即时保存，无需跳转其它页面。</p>
+<div v-if="networkDetailError" class="hint">{{ networkDetailError }}</div>
+<div id="network-shell" class="network-shell" v-show="networkDetailLoaded">
+      <header class="topbar">
+        <div class="brand-block">
+          <div class="brand-mark">人</div>
+          <div>
+            <h1>人际网络</h1>
+            <p id="network-summary">0 个人物 · 0 条关系</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <label class="persona-picker">
+            <span>人格</span>
+            <select id="persona-select"></select>
+          </label>
+          <label class="switch-control">
+            <input id="network-enabled" type="checkbox" />
+            <span class="switch-track" aria-hidden="true"></span>
+            <span>启用</span>
+          </label>
+          <button id="refresh-button" class="icon-button" type="button" title="刷新" aria-label="刷新">↻</button>
+          <button id="export-button" class="icon-button" type="button" title="导出" aria-label="导出">↓</button>
+          <button id="import-button" class="icon-button" type="button" title="导入" aria-label="导入">↑</button>
+          <input id="import-file" type="file" accept="application/json,.json" hidden />
+        </div>
+      </header>
+
+      <nav class="tabs" aria-label="视图">
+        <button class="tab active" type="button" data-view="graph">关系网络</button>
+        <button class="tab" type="button" data-view="people">人物卡片</button>
+      </nav>
+
+      <main>
+        <section id="graph-view" class="view active">
+          <div class="graph-toolbar">
+            <div class="search-field">
+              <span aria-hidden="true">⌕</span>
+              <input id="graph-search" type="search" placeholder="搜索人物或关系" />
+            </div>
+            <select id="status-filter" aria-label="关系状态">
+              <option value="">全部状态</option>
+              <option value="active">进行中</option>
+              <option value="uncertain">不确定</option>
+              <option value="ended">已结束</option>
+            </select>
+            <button id="fit-button" class="tool-button" type="button"><span aria-hidden="true">◎</span><span>适应画布</span></button>
+            <button id="add-life-event-button" class="tool-button" type="button"><span aria-hidden="true">＋</span><span>添加经历</span></button>
+            <button id="add-relation-button" class="tool-button" type="button"><span aria-hidden="true">＋</span><span>添加关系</span></button>
+          </div>
+          <div class="graph-workspace">
+            <div id="graph-canvas" class="graph-canvas">
+              <div id="network-graph" role="img" aria-label="人物关系网络"></div>
+              <svg id="connection-overlay" class="connection-overlay" aria-hidden="true">
+                <line id="connection-line" x1="0" y1="0" x2="0" y2="0"></line>
+              </svg>
+              <button id="connection-handle" class="connection-handle hidden" type="button" title="拖到另一人物以添加关系" aria-label="拖拽添加关系">＋</button>
+            </div>
+            <aside id="inspector" class="inspector empty">
+              <div class="empty-state">
+                <div class="empty-glyph">⌁</div>
+                <h2>未选择项目</h2>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="people-view" class="view">
+          <div class="people-toolbar">
+            <div class="search-field">
+              <span aria-hidden="true">⌕</span>
+              <input id="people-search" type="search" placeholder="搜索人物" />
+            </div>
+            <div class="people-actions">
+              <button id="merge-button" class="secondary-button" type="button">合并人物</button>
+              <button id="generate-network-button" class="secondary-button" type="button">应用人格生成</button>
+              <button id="add-person-button" class="primary-button" type="button"><span aria-hidden="true">＋</span><span>添加人物</span></button>
+            </div>
+          </div>
+          <div id="people-grid" class="people-grid"></div>
+        </section>
+      </main>
+
+<div id="toast-region" class="toast-region" aria-live="polite"></div>
+
+    <dialog id="character-dialog">
+      <form id="character-form" method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">人物信息</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <input id="character-id" type="hidden" />
+        <div class="form-grid">
+          <label><span>姓名</span><input id="character-name" maxlength="100" required /></label>
+          <div class="full alias-field">
+            <div class="field-heading">
+              <span>人物别名</span>
+              <button id="add-alias-button" class="secondary-button compact-button" type="button">添加别名</button>
+            </div>
+            <div id="character-aliases" class="alias-editor"></div>
+          </div>
+          <label class="full"><span>身份简介</span><textarea id="character-bio" maxlength="4000"></textarea></label>
+          <label class="full"><span>性格</span><textarea id="character-personality" maxlength="4000"></textarea></label>
+          <label><span>偏好</span><textarea id="character-preferences" maxlength="4000"></textarea></label>
+          <label><span>重要事实</span><textarea id="character-facts" maxlength="4000"></textarea></label>
+          <label class="full"><span>管理员备注</span><textarea id="character-notes" maxlength="4000"></textarea></label>
+        </div>
+        <div class="dialog-actions">
+          <button id="delete-character-button" class="danger-button hidden" type="button">删除人物</button>
+          <span class="dialog-spacer"></span>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="relationship-dialog">
+      <form id="relationship-form" method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">关系信息</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <input id="relationship-id" type="hidden" />
+        <div class="form-grid">
+          <label><span>关系主体（谁的）</span><select id="relationship-source" required></select></label>
+          <label><span>关联人物（是谁）</span><select id="relationship-target" required></select></label>
+          <label><span>关联人物的身份</span><input id="relationship-type" maxlength="100" required /></label>
+          <label><span>状态</span><select id="relationship-status"><option value="active">进行中</option><option value="uncertain">不确定</option><option value="ended">已结束</option></select></label>
+          <label class="full"><span>关系亲密度</span><div class="range-row"><input id="relationship-strength" type="range" min="0" max="100" value="0" /><output id="strength-output">0</output></div></label>
+          <label class="full"><span>关系描述</span><textarea id="relationship-description" maxlength="2000"></textarea></label>
+        </div>
+        <div class="dialog-actions">
+          <button id="delete-relationship-button" class="danger-button hidden" type="button">删除</button>
+          <span class="dialog-spacer"></span>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="life-event-dialog">
+      <form id="life-event-form" method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">人生经历</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <input id="life-event-id" type="hidden" />
+        <div class="form-grid">
+          <label><span>发生时间</span><input id="life-event-time" type="datetime-local" required /></label>
+          <label><span>类型</span><input id="life-event-type" maxlength="100" required placeholder="见面、通话、聚餐、争执" /></label>
+          <label class="full"><span>参与人物</span><select id="life-event-participants" multiple required></select></label>
+          <label><span>重要度</span><div class="range-row"><input id="life-event-importance" type="range" min="0" max="100" value="50" /><output id="life-event-importance-output">50</output></div></label>
+          <label><span>情绪基调</span><input id="life-event-tone" maxlength="100" placeholder="温暖、紧张、平静" /></label>
+          <label class="full"><span>经历摘要</span><textarea id="life-event-summary" maxlength="2000" required></textarea></label>
+        </div>
+        <div class="dialog-actions">
+          <button id="delete-life-event-button" class="danger-button hidden" type="button">删除经历</button>
+          <span class="dialog-spacer"></span>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="merge-dialog">
+      <form id="merge-form" method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">合并人物</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="form-grid">
+          <label><span>保留人物</span><select id="merge-target" required></select></label>
+          <label><span>重复人物</span><select id="merge-duplicate" required></select></label>
+        </div>
+        <div class="dialog-actions">
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button class="primary-button" type="submit">合并人物</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="generation-dialog" class="generation-dialog">
+      <form method="dialog">
+        <div class="dialog-title-row">
+          <div>
+            <h2 class="dialog-title">应用人格生成关系网</h2>
+            <p class="dialog-subtitle" id="generation-persona-name"></p>
+          </div>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <section class="generation-settings">
+          <label><span>生成人数</span><input id="generation-count" type="number" min="1" max="32" value="6" required /></label>
+          <label><span>关系密度</span><select id="generation-density"><option value="sparse">稀疏</option><option value="balanced" selected>均衡</option><option value="rich">丰富</option></select></label>
+          <label class="checkbox-field"><input id="generation-fill-existing" type="checkbox" /><span>补全现有人物的空白资料</span></label>
+          <button id="generation-submit" class="primary-button" type="button">生成草稿</button>
+          <label class="generation-hint"><span>额外生成要求（可选）</span><textarea id="generation-hint" maxlength="2000"></textarea></label>
+        </section>
+        <section id="generation-result" class="generation-result hidden">
+          <div id="generation-errors" class="generation-errors hidden"></div>
+          <details id="generation-raw-panel" class="generation-raw-panel">
+            <summary>模型返回与 JSON 修正</summary>
+            <textarea id="generation-raw" spellcheck="false" aria-label="模型返回 JSON"></textarea>
+            <div class="generation-raw-actions">
+              <button id="generation-validate" class="secondary-button" type="button">校验修改</button>
+            </div>
+            <details class="generation-expected">
+              <summary>预期结果</summary>
+              <pre id="generation-expected"></pre>
+            </details>
+          </details>
+          <div id="generation-preview" class="generation-preview hidden">
+            <section>
+              <div class="section-heading"><h3>人物草稿</h3><span id="generation-character-count"></span></div>
+              <div id="generation-characters" class="generation-items"></div>
+            </section>
+            <section>
+              <div class="section-heading"><h3>关系草稿</h3><span id="generation-relationship-count"></span></div>
+              <div id="generation-relationships" class="generation-items"></div>
+            </section>
+          </div>
+        </section>
+        <div class="dialog-actions">
+          <span id="generation-status" class="dialog-status"></span>
+          <span class="dialog-spacer"></span>
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button id="generation-apply" class="primary-button" type="button" disabled>确认应用</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="confirm-dialog" class="confirm-dialog">
+      <form method="dialog">
+        <div class="dialog-title-row">
+          <h2 class="dialog-title">确认操作</h2>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <p id="confirm-message" class="confirm-message"></p>
+        <div class="dialog-actions">
+          <button class="secondary-button close-dialog" type="button">取消</button>
+          <button id="confirm-submit" class="danger-button" type="button">确认</button>
+        </div>
+      </form>
+    </dialog>
+</div>
+</div></details>
+                        <div class="glass-card"><div class="card-heading"><div><div class="section-kicker">Runtime</div><p>{{ lifeMessage || '配置保存在 AstrBot 数据目录；后台主动发送默认关闭。' }}</p></div><button class="button ghost" @click="refreshLife">刷新状态</button></div><div v-for="(task,id) in lifeTasks" :key="id" class="life-task" :class="{ fresh: id === lifeFreshTask }"><strong>{{ actionLabel(task.action) }} · {{ refreshStatus(task.state) }}</strong><p v-if="task.error">{{ task.error }}</p><template v-if="Array.isArray(task.result)"><template v-for="(part,idx) in task.result" :key="idx"><img v-if="part.type === 'image' && part.src" class="life-result-image" :src="part.src" alt="生活查询图片"><pre v-else-if="part.text" class="life-json">{{ part.text }}</pre></template></template><pre v-else-if="task.result" class="life-json">{{ typeof task.result === 'object' ? JSON.stringify(task.result,null,2) : task.result }}</pre><p v-if="task.image_count" class="hint">本次返回 {{ task.image_count }} 张图片（已发送，此处不再重复传输）。</p></div><details><summary>查看计划任务与最近 Jev 决策</summary><pre class="life-json">{{ JSON.stringify(lifeStatus,null,2) }}</pre></details></div>
+          </div>
+        </section>
+
+        <section v-show="activeTab === 'flow'" class="dialogue-flow-page">
+        <div class="life-subnav" role="tablist" aria-label="对话流增强模式"><button type="button" :class="{selected: flowTab === 'input'}" @click="flowTab = 'input'">输入增强<span>对话流分析与多模态理解</span></button><button type="button" :class="{selected: flowTab === 'output'}" @click="flowTab = 'output'">输出增强<span>OutputPro 输出管道与阶梯</span></button></div>
+          <div class="section-grid">
+            <div v-show="flowTab === 'input'" class="glass-card">
+              <div class="card-heading"><div><div class="section-kicker">Input Enhancement</div><h2>对话流分析</h2><p>输入增强总开关在 AstrBot 原生配置页；这里配置对话流分析这一项子功能。</p></div></div>
+              <div class="switch-row"><div class="switch-copy"><strong>对话流分析</strong><small>根据 @、引用回复、机器人最近回复和发送者 ID 推断对话对象。</small></div><label class="switch"><input v-model="form.dialogue_enhancement.conversation_flow_analysis_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="field"><label>对话流窗口 <span>参与“谁在和谁说话”推断的最近消息条数</span></label><input v-model.number="form.dialogue_enhancement.conversation_flow_window" type="number" min="2" max="30" step="1"></div>
+              <div class="scope-mode"><div><strong>{{ form.dialogue_enhancement.conversation_flow_scope_blacklist ? '输入增强黑名单' : '输入增强白名单' }}</strong><small>{{ form.dialogue_enhancement.conversation_flow_scope_blacklist ? '名单内不进行对话流增强；名单为空时全部应用。' : '只对名单内会话进行对话流增强；名单为空时全部不应用。' }}</small></div><button class="scope-toggle" type="button" @click="form.dialogue_enhancement.conversation_flow_scope_blacklist = !form.dialogue_enhancement.conversation_flow_scope_blacklist">{{ form.dialogue_enhancement.conversation_flow_scope_blacklist ? '黑名单' : '白名单' }}</button></div>
+              <div class="field"><label>{{ form.dialogue_enhancement.conversation_flow_scope_blacklist ? '不应用输入增强的会话' : '应用输入增强的会话' }} <span>每行一个群聊 ID、私聊用户 ID 或 unified_msg_origin</span></label><textarea v-model="form.dialogue_enhancement.conversation_flow_scope" class="list-editor" placeholder="群聊 ID\n私聊用户 ID"></textarea></div>
+            </div>
+            <div v-show="flowTab === 'input'" class="glass-card">
+              <div class="card-heading"><div><div class="section-kicker">Multimodal Understanding</div><h2>多模态理解</h2><p>理解图片、视频、音频和文件。自动理解不会唤醒机器人，也不会触发回复；它与“非文字消息进入判断”是两套独立开关。</p></div></div>
+              <div class="switch-row"><div class="switch-copy"><strong>启用多模态理解</strong><small>总开关。关闭时自动理解与工具都不生效，也不会产生任何模型调用。</small></div><label class="switch"><input v-model="mm.multimodal.mm_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="scope-mode"><div><strong>{{ mm.multimodal.mm_auto_scope_blacklist ? '自动理解黑名单' : '自动理解白名单' }}</strong><small>{{ mm.multimodal.mm_auto_scope_blacklist ? '名单内不自动理解；名单为空时全部会话自动理解。' : '只对名单内会话自动理解；名单为空时不对任何会话自动理解。' }}</small></div><button class="scope-toggle" type="button" @click="mm.multimodal.mm_auto_scope_blacklist = !mm.multimodal.mm_auto_scope_blacklist">{{ mm.multimodal.mm_auto_scope_blacklist ? '黑名单' : '白名单' }}</button></div>
+              <div class="field"><label>{{ mm.multimodal.mm_auto_scope_blacklist ? '不自动理解的会话' : '自动理解的会话' }} <span>每行一个群聊 ID、私聊用户 ID 或 unified_msg_origin</span></label><textarea v-model="mm.multimodal.mm_auto_scope" class="list-editor" placeholder="aiocqhttp:GroupMessage:123456"></textarea></div>
+              <div class="two-col">
+                <div class="field"><label>自动理解图片</label><label class="switch"><input v-model="mm.multimodal.mm_auto_image" type="checkbox"><span class="switch-track"></span></label></div>
+                <div class="field"><label>自动理解视频</label><label class="switch"><input v-model="mm.multimodal.mm_auto_video" type="checkbox"><span class="switch-track"></span></label></div>
+                <div class="field"><label>自动理解音频</label><label class="switch"><input v-model="mm.multimodal.mm_auto_audio" type="checkbox"><span class="switch-track"></span></label></div>
+                <div class="field"><label>自动理解文件</label><label class="switch"><input v-model="mm.multimodal.mm_auto_file" type="checkbox"><span class="switch-track"></span></label></div>
+              </div>
+              <div class="switch-row"><div class="switch-copy"><strong>主动调用工具理解</strong><small>注册 understand_image / understand_video / understand_audio / understand_file 四个工具，由模型自行决定何时分析。</small></div><label class="switch"><input v-model="mm.multimodal.mm_tools_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="switch-row"><div class="switch-copy"><strong>启用流式理解</strong><small>默认开启，OpenAI / Gemini 通用理解接口流式接收完整结果；关闭则使用非流式。不影响主对话或原生后台任务。</small></div><label class="switch"><input v-model="mm.multimodal.mm_stream_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="switch-row"><div class="switch-copy"><strong>Gemini 网关流式保活兼容</strong><small>适用于 New API 等同时提供 OpenAI 接口的网关：流式理解改用 OpenAI 格式，完整短片仍传原始视频，沿用所选模型和 Key；不影响 Google 官方地址或非流式请求。网关仍需开启 SSE 心跳。</small></div><label class="switch"><input v-model="mm.multimodal.mm_gateway_openai_stream" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="two-col">
+                <div class="field"><label>图片工具</label><label class="switch"><input v-model="mm.multimodal.mm_tool_image" type="checkbox"><span class="switch-track"></span></label></div>
+                <div class="field"><label>视频工具</label><label class="switch"><input v-model="mm.multimodal.mm_tool_video" type="checkbox"><span class="switch-track"></span></label></div>
+                <div class="field"><label>音频工具</label><label class="switch"><input v-model="mm.multimodal.mm_tool_audio" type="checkbox"><span class="switch-track"></span></label></div>
+                <div class="field"><label>文件工具</label><label class="switch"><input v-model="mm.multimodal.mm_tool_file" type="checkbox"><span class="switch-track"></span></label></div>
+              </div>
+              <div class="two-col">
+                <div class="field"><label>视频处理策略 <span>自动兼容 OpenAI / Gemini 反代</span></label><select v-model="mm.multimodal.mm_video_strategy"><option value="auto">自动选择（默认）</option><option value="native">优先原生</option><option value="frames">强制通用处理</option></select></div>
+                <div class="field"><label>OCR 策略</label><select v-model="mm.multimodal.mm_ocr_strategy"><option value="auto">自动（默认）</option><option value="local_first">本地 OCR 优先</option><option value="vision_first">视觉模型优先</option><option value="local_only">仅本地 OCR</option></select></div>
+                <div class="field"><label>本地 OCR 引擎</label><select v-model="mm.multimodal.mm_ocr_engine"><option value="auto">自动（默认）</option><option value="tesseract">Tesseract</option><option value="paddleocr">PaddleOCR</option></select></div>
+                <div class="field"><label>OCR 语言 <span>Tesseract 语言包</span></label><input v-model="mm.multimodal.mm_ocr_lang" type="text" placeholder="chi_sim+eng"></div>
+                <div class="field"><label>OCR 超时 <span>秒</span></label><input v-model.number="mm.multimodal.mm_ocr_timeout_seconds" type="number" min="10" max="600" step="10"></div>
+                <div class="field"><label>Office 整页视觉渲染</label><select v-model="mm.multimodal.mm_office_render"><option value="auto">自动：PPTX 整页，DOCX 按需</option><option value="always">始终渲染 DOCX/PPTX 整页</option><option value="never">关闭整页渲染</option></select></div>
+                <div class="field"><label>Office 渲染页数上限</label><input v-model.number="mm.multimodal.mm_office_render_max_pages" type="number" min="1" max="30" step="1"></div>
+              </div>
+              <p class="hint">{{ mmOcrHint }}</p>
+              <div class="field"><label>默认理解模型 <span>来自 AstrBot 已配置的模型</span></label><select v-model="mm.multimodal.mm_default_model"><option value="">（未选择）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }} · {{ row.modalities_label }}</option></select></div>
+              <div class="two-col">
+                <div class="field"><label>图片理解模型 <span>留空沿用默认</span></label><select v-model="mm.multimodal.mm_model_image"><option value="">（沿用默认）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }}</option></select></div>
+                <div class="field"><label>视频理解模型 <span>需要图像能力</span></label><select v-model="mm.multimodal.mm_model_video"><option value="">（沿用默认）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }}</option></select><small>{{ mmVideoRouteLabel }}</small></div>
+                <div class="field"><label>音频理解模型 <span>需要音频能力</span></label><select v-model="mm.multimodal.mm_model_audio"><option value="">（沿用默认）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }}</option></select></div>
+                <div class="field"><label>文件理解模型 <span>留空沿用默认</span></label><select v-model="mm.multimodal.mm_model_file"><option value="">（沿用默认）</option><option v-for="row in mmModels" :key="row.id" :value="row.id">{{ row.label }}</option></select></div>
+              </div>
+              <p class="hint">模型列表来自 AstrBot 当前的 Provider 配置；需要新增或删除模型请到 AstrBot 的模型提供方页面。<button class="button ghost" type="button" @click="reloadModels">重新加载模型列表</button></p>
+              <div class="two-col">
+                <div class="field"><label>媒体体积上限 <span>MB</span></label><input v-model.number="mm.multimodal.mm_max_file_mb" type="number" min="1" max="500" step="1"></div>
+                <div class="field"><label>单条消息最多自动理解 <span>个</span></label><input v-model.number="mm.multimodal.mm_max_auto_per_message" type="number" min="1" max="16" step="1"></div>
+                <div class="field"><label>每分钟自动理解上限 <span>按会话</span></label><input v-model.number="mm.multimodal.mm_max_auto_per_minute" type="number" min="0" max="600" step="1"></div>
+                <div class="field"><label>注入长度上限 <span>字符</span></label><input v-model.number="mm.multimodal.mm_inject_max_chars" type="number" min="120" max="8000" step="20"></div>
+                <div class="field"><label>动图最大帧数</label><input v-model.number="mm.multimodal.mm_gif_max_frames" type="number" min="2" max="64" step="1"></div>
+                <div class="field"><label>图片最长边 <span>像素</span></label><input v-model.number="mm.multimodal.mm_image_max_edge" type="number" min="256" max="4096" step="64"></div>
+                <div class="field"><label>短视频阈值 <span>秒</span></label><input v-model.number="mm.multimodal.mm_video_short_seconds" type="number" min="5" max="600" step="5"></div>
+                <div class="field"><label>视频时长上限 <span>秒</span></label><input v-model.number="mm.multimodal.mm_video_max_seconds" type="number" min="10" max="3600" step="10"></div>
+                <div class="field"><label>视频最大帧数</label><input v-model.number="mm.multimodal.mm_video_max_frames" type="number" min="2" max="96" step="1"></div>
+                <div class="field"><label>长视频精读轮次</label><input v-model.number="mm.multimodal.mm_video_agentic_rounds" type="number" min="1" max="5" step="1"></div>
+                <div class="field"><label>音频时长上限 <span>秒</span></label><input v-model.number="mm.multimodal.mm_audio_max_seconds" type="number" min="10" max="3600" step="10"></div>
+                <div class="field"><label>音频分段长度 <span>秒</span></label><input v-model.number="mm.multimodal.mm_audio_segment_seconds" type="number" min="20" max="600" step="10"></div>
+                <div class="field"><label>文件文本上限 <span>字符</span></label><input v-model.number="mm.multimodal.mm_file_max_chars" type="number" min="500" max="200000" step="500"></div>
+                <div class="field"><label>理解超时 <span>秒</span></label><input v-model.number="mm.multimodal.mm_timeout_seconds" type="number" min="10" max="900" step="10"></div>
+                <div class="field"><label>并发任务数</label><input v-model.number="mm.multimodal.mm_concurrency" type="number" min="1" max="8" step="1"></div>
+                <div class="field"><label>提交模型前的失败重试次数</label><input v-model.number="mm.multimodal.mm_retries" type="number" min="0" max="3" step="1"><small>已经提交模型的请求，超时或断流后不会自动重新提交，避免重复计费。</small></div>
+                <div class="field"><label>缓存有效期 <span>小时</span></label><input v-model.number="mm.multimodal.mm_cache_ttl_hours" type="number" min="0" max="720" step="1"></div>
+                <div class="field"><label>缓存条目上限</label><input v-model.number="mm.multimodal.mm_cache_max_entries" type="number" min="10" max="10000" step="10"></div>
+                <div class="field"><label>等待理解完成 <span>秒，0 表示不等待</span></label><input v-model.number="mm.multimodal.mm_auto_wait_seconds" type="number" min="0" max="30" step="1"></div>
+              </div>
+              <p class="hint">新功能默认全部关闭：在没有选择模型并打开开关之前，不会产生任何理解调用或费用。</p>
+            </div>
+            <div v-show="flowTab === 'output'" class="glass-card">
+              <div class="card-heading"><div><div class="section-kicker">Output Enhancement</div><h2>输出增强</h2><p>输出增强总开关在 AstrBot 原生配置页；这里配置发送前处理和适用范围。</p></div></div>
+              <div class="switch-row"><div class="switch-copy"><strong>启用输出增强</strong><small>使用内置兼容管道；出错时自动保留原消息，不阻断 AstrBot。</small></div><label class="switch"><input v-model="form.dialogue_enhancement.output_enhancement_enabled" type="checkbox"><span class="switch-track"></span></label></div>
+              <div class="scope-mode"><div><strong>{{ form.dialogue_enhancement.output_scope_blacklist ? '输出增强黑名单' : '输出增强白名单' }}</strong><small>{{ form.dialogue_enhancement.output_scope_blacklist ? '名单内不处理输出；名单为空时全部应用。' : '只处理名单内会话；名单为空时全部不处理。' }}</small></div><button class="scope-toggle" type="button" @click="form.dialogue_enhancement.output_scope_blacklist = !form.dialogue_enhancement.output_scope_blacklist">{{ form.dialogue_enhancement.output_scope_blacklist ? '黑名单' : '白名单' }}</button></div>
+              <div class="field"><label>{{ form.dialogue_enhancement.output_scope_blacklist ? '不应用输出增强的会话' : '应用输出增强的会话' }} <span>每行一个群聊 ID、私聊用户 ID 或 unified_msg_origin</span></label><textarea v-model="form.dialogue_enhancement.output_scope" class="list-editor" placeholder="群聊 ID\n私聊用户 ID"></textarea></div>
+            </div>
+          </div>
+          <div v-show="flowTab === 'output'" class="glass-card output-config-card">
+            <div class="card-heading"><div><div class="section-kicker">Output Pipeline</div><h2>输出阶梯</h2><p>始终按内置顺序执行；关闭某一步即可跳过。只有勾选“仅 LLM”对应步骤时才限制到模型回复。</p></div></div>
+            <div class="output-step-grid"><div v-for="step in outputStepOptions" :key="step.key" class="output-step"><label class="output-step-main"><input type="checkbox" :checked="outputStepEnabled(step.key)" @change="toggleOutputStep(step.key)"><span><strong>{{ step.label }}</strong><small>{{ step.hint }}</small></span></label><label class="output-llm-only"><input type="checkbox" :checked="outputLlmStepEnabled(step.key)" @change="toggleOutputLlmStep(step.key)">仅 LLM</label></div></div>
+            <div class="output-config-groups">
+              <section class="output-config-group"><h3>图片外显与报错</h3><div class="two-col">
+                <div class="field"><label>外显金句 <span>每行一句</span></label><textarea :value="outputList('summary','quotes')" @input="setOutputList('summary','quotes',$event.target.value)" class="list-editor"></textarea></div>
+                <div class="field"><label>金句文件 <span>每行一个路径</span></label><textarea :value="outputList('summary','quotes_files')" @input="setOutputList('summary','quotes_files',$event.target.value)" class="list-editor"></textarea></div>
+                <div class="field"><label>报错关键词 <span>命中后转发或替换</span></label><textarea :value="outputList('error','keywords')" @input="setOutputList('error','keywords',$event.target.value)" class="list-editor"></textarea></div>
+                <div class="field"><label>报错自定义消息</label><input v-model="outputConfig.error.custom_msg" type="text" placeholder="留空保留原消息"></div>
+                <div class="field"><label>报错转发目标</label><input v-model="outputConfig.error.forward_umo" type="text" placeholder="admin"></div>
+              </div></section>
+              <section class="output-config-group"><h3>消息拦截</h3><div class="two-col">
+                <div class="field"><label>拦截超时（秒）</label><input v-model.number="outputConfig.block.timeout" type="number" min="0"></div>
+                <label class="mini-check output-check"><input type="checkbox" v-model="outputConfig.block.block_reread">拦截复读</label>
+                <div class="field full-span"><label>拦截关键词 <span>每行一个</span></label><textarea :value="outputList('block','block_words')" @input="setOutputList('block','block_words',$event.target.value)" class="list-editor"></textarea></div>
+              </div></section>
+              <section class="output-config-group"><h3>艾特处理</h3><div class="two-col">
+                <label class="mini-check output-check"><input type="checkbox" v-model="outputConfig.at.at_str">解析文本中的 @</label>
+                <div class="field"><label>假 @ 保留概率 <span>0～1</span></label><input v-model.number="outputConfig.at.at_prob" type="number" min="0" max="1" step="0.01"></div>
+              </div></section>
+              <section class="output-config-group"><h3>文本清洗</h3><div class="two-col">
+                <div class="field"><label>清洗长度阈值</label><input v-model.number="outputConfig.clean.text_threshold" type="number" min="0"></div>
+                <div class="field"><label>清洗标点正则</label><input v-model="outputConfig.clean.punctuation" type="text" placeholder="[#%~]"></div>
+                <label class="mini-check output-check"><input type="checkbox" v-model="outputConfig.clean.bracket">清理中括号</label>
+                <label class="mini-check output-check"><input type="checkbox" v-model="outputConfig.clean.parenthesis">清理小括号</label>
+                <label class="mini-check output-check"><input type="checkbox" v-model="outputConfig.clean.emotion_tag">清理情绪标签</label>
+                <label class="mini-check output-check"><input type="checkbox" v-model="outputConfig.clean.emoji">清理 Emoji</label>
+                <div class="field"><label>去头字符 <span>逗号分隔</span></label><input :value="outputList('clean','lead')" @input="setOutputList('clean','lead',$event.target.value)" type="text" placeholder="print, :"></div>
+                <div class="field"><label>去尾字符 <span>逗号分隔</span></label><input :value="outputList('clean','tail')" @input="setOutputList('clean','tail',$event.target.value)" type="text" placeholder="。,. "></div>
+              </div></section>
+              <section class="output-config-group"><h3>文本替换</h3><div class="two-col">
+                <div class="field"><label>替换规则 <span>每行“旧词 新词”</span></label><textarea :value="outputList('replace','words')" @input="setOutputList('replace','words',$event.target.value)" class="list-editor" placeholder="旧词 新词"></textarea></div>
+                <div class="field"><label>默认替换词</label><input v-model="outputConfig.replace.default_new_word" type="text" placeholder="*"></div>
+              </div></section>
+              <section class="output-config-group"><h3>错字模拟</h3><div class="output-settings-grid">
+                <div class="field"><label>错字概率</label><input v-model.number="outputConfig.typo.error_rate" type="number" min="0" max="1" step="0.01"></div>
+                <div class="field"><label>声调错误率</label><input v-model.number="outputConfig.typo.tone_error_rate" type="number" min="0" max="1" step="0.01"></div>
+                <div class="field"><label>词语替换率</label><input v-model.number="outputConfig.typo.word_replace_rate" type="number" min="0" max="1" step="0.01"></div>
+                <div class="field"><label>纠正追加概率</label><input v-model.number="outputConfig.typo.correction_append_prob" type="number" min="0" max="1" step="0.01"></div>
+              </div></section>
+              <section class="output-config-group"><h3>文转语音</h3><div class="two-col">
+                <div class="field"><label>群聊 ID</label><input v-model="outputConfig.tts.group_id" type="text"></div>
+                <div class="field"><label>角色 ID</label><input v-model="outputConfig.tts.character_id" type="text" placeholder="lucy-voice-f36"></div>
+                <div class="field"><label>TTS Provider ID</label><input v-model="outputConfig.tts.tts_provider_id" type="text" placeholder="留空使用默认 Provider"></div>
+                <div class="field"><label>文本长度阈值</label><input v-model.number="outputConfig.tts.threshold" type="number" min="0"></div>
+                <div class="field"><label>触发概率 <span>0～1</span></label><input v-model.number="outputConfig.tts.prob" type="number" min="0" max="1" step="0.01"></div>
+              </div></section>
+              <section class="output-config-group"><h3>文转图片</h3><div class="two-col">
+                <div class="field"><label>转图长度阈值</label><input v-model.number="outputConfig.t2i.threshold" type="number" min="0"></div>
+                <div class="field"><label>样式目录</label><input v-model="outputConfig.t2i.pillowmd_style_dir" type="text"></div>
+                <label class="mini-check output-check"><input type="checkbox" v-model="outputConfig.t2i.auto_page">自动分页</label>
+                <label class="mini-check output-check"><input type="checkbox" v-model="outputConfig.t2i.clean_cache">清理图片缓存</label>
+              </div></section>
+              <section class="output-config-group"><h3>智能引用与合并转发</h3><div class="two-col">
+                <div class="field"><label>智能引用阈值</label><input v-model.number="outputConfig.reply.threshold" type="number" min="0"></div>
+                <label class="mini-check output-check"><input type="checkbox" v-model="outputConfig.reply.include_at">引用时 @ 原发送者</label>
+                <div class="field"><label>合并转发阈值</label><input v-model.number="outputConfig.forward.threshold" type="number" min="0"></div>
+                <div class="field"><label>转发节点名称</label><input v-model="outputConfig.forward.node_name" type="text" placeholder="AstrBot"></div>
+              </div></section>
+              <section class="output-config-group"><h3>自动撤回</h3><div class="two-col">
+                <div class="field"><label>撤回延迟（秒）</label><input v-model.number="outputConfig.recall.delay" type="number" min="0"></div>
+                <div class="field full-span"><label>撤回关键词 <span>每行一个</span></label><textarea :value="outputList('recall','keywords')" @input="setOutputList('recall','keywords',$event.target.value)" class="list-editor"></textarea></div>
+              </div></section>
+              <section class="output-config-group"><h3>分段回复</h3><div class="output-settings-grid">
+                <div class="field"><label>单段最大长度</label><input v-model.number="outputConfig.split.max_length" type="number" min="0"></div>
+                <div class="field"><label>最多分段数</label><input v-model.number="outputConfig.split.max_count" type="number" min="0"></div>
+                <div class="field"><label>每字延迟（秒）</label><input v-model.number="outputConfig.split.per_char_delay" type="number" min="0" step="0.01"></div>
+                <div class="field"><label>延迟范围</label><input v-model="outputConfig.split.delay_scope_str" type="text" placeholder="1~16"></div>
+                <div class="field full-span"><label>分段字符 <span>每行或逗号分隔</span></label><textarea :value="outputList('split','char_list')" @input="setOutputList('split','char_list',$event.target.value)" class="list-editor" placeholder="。？\n，"></textarea></div>
+                <div class="field full-span"><label>段尾标点 <span>每行或逗号分隔</span></label><textarea :value="outputList('split','tail_punc')" @input="setOutputList('split','tail_punc',$event.target.value)" class="list-editor" placeholder=". , ， 。"></textarea></div>
+                <label class="mini-check output-check"><input type="checkbox" v-model="outputConfig.split.show_typing">分段时显示输入状态</label>
+              </div></section>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <p class="footer-note">全局服务参数仍由 AstrBot 原生配置页管理；本页保存的详细策略写入 AstrBot 数据目录。修改后请点击“保存全部设置”。</p>
+      <div class="save-bar"><span class="save-status" :class="saveState">{{ statusText }}</span><button class="button primary" :disabled="loading || saving || !loaded" @click="save">{{ saving ? '保存中…' : '保存全部设置' }}</button></div>
+    </div>
+    <script src="./app.js?v=0.4.6"></script>
+  </body>
+</html>

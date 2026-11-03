@@ -6,14 +6,15 @@ import re
 from pathlib import Path
 
 import pytest
+from tests.dashboard_source import dashboard_source
 
 ROOT = Path(__file__).resolve().parents[1]
-DASH = ROOT / "pages" / "dashboard"
+DASH = ROOT / "views" / "dashboard"
 
 
 @pytest.fixture(scope="module")
 def page():
-    return (DASH / "index.html").read_text(encoding="utf-8")
+    return dashboard_source()
 
 
 def test_network_view_is_embedded_in_the_card(page):
@@ -37,7 +38,7 @@ def test_all_network_dialogs_are_present(page):
 
 
 def test_network_view_loads_lazily(page):
-    assert "import('./network-app.js')" in page
+    assert "import(`./network-app.js?v=${ASSET_VERSION}`)" in page
     assert "cytoscape.min.js" in page
     # The panel starts hidden and is revealed only once the view is loaded.
     assert 'v-show="networkDetailLoaded"' in page

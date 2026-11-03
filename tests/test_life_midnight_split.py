@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from decision.virtual_life.core.models import DailyPlan, TimelineItem  # noqa: E402
+from tests.dashboard_source import DASHBOARD, dashboard_markup
 
 
 def sleep_item(**over):
@@ -133,10 +134,9 @@ def test_cooldown_hint_explains_it_is_independent():
 
 
 def test_page_explains_silence_vs_cooldown():
-    page = (Path(__file__).resolve().parents[1] / "pages/dashboard/index.html").read_text(
-        encoding="utf-8"
-    )
-    assert page.count("life-rule-note") == 3, "note markup plus its CSS rule"
+    page = dashboard_markup()
+    assert page.count("life-rule-note") == 2, "one note in each of the private and group cards"
+    assert ".life-rule-note" in (DASHBOARD / "style.css").read_text(encoding="utf-8")
     assert "两个独立条件" in page
 
 

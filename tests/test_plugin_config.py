@@ -1391,3 +1391,25 @@ async def test_network_tool_visibility_follows_its_switches(
     assert ("query_personal_network" in visible) is expect_query
     # The media tools are never touched by the network gate.
     assert {"take_photo", "take_video", "send_voice"} <= visible
+
+
+@pytest.mark.asyncio
+async def test_ui_settings_save_only_the_display_preference(host):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    host.config["decision_provider_id"] = "native-provider"
+    assert await plugin.page_ui_settings() == {"liquid_glass": False}
+
+    host.body.update(liquid_glass=True)
+    assert await plugin.page_save_ui_settings() == {"saved": True, "liquid_glass": True}
+    persisted = json.loads(host.path.read_text(encoding="utf-8"))
+    assert persisted["ui_liquid_glass"] is True
+    # The native provider choice must not be copied into the detail file, or
+    # clearing it on the native page would later fall back to this copy.
+    assert "decision_provider_id" not in persisted
+    assert await plugin.page_ui_settings() == {"liquid_glass": True}
+    assert (await plugin.page_settings())["ui_liquid_glass"] is True
+
+    host.body.clear()
+    host.body.update(liquid_glass="yes")
+    assert (await plugin.page_save_ui_settings())["status_code"] == 400
+    assert plugin._bool("ui_liquid_glass", False) is True

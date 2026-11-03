@@ -2,7 +2,7 @@
  * 人际网络管理页（由原独立人际网络插件逐行移植而来）。
  *
  * 路由前缀约定：
- *   AstrBot 的插件页桥（window.AstrBotPluginPage）会自动把当前插件名拼到请求路径前面，
+ *   AstrBot 的插件视图桥（window.AstrBotPluginView，旧别名 AstrBotPluginPage）会自动把当前插件名拼到请求路径前面，
  *   即 bridge.apiGet("network/personas") 实际请求
  *   `/astrbot_plugin_decision/network/personas`。
  *   本插件的后端把人际网络的全部 WebAPI 注册在 `/astrbot_plugin_decision/network/<route>`
@@ -10,7 +10,7 @@
  *   以 `network/` 开头（含 apiGet / apiPost / upload / download 四类调用），且只能写一次，
  *   不得重复加前缀。
  */
-const bridge = window.AstrBotPluginPage;
+const bridge = window.AstrBotPluginView || window.AstrBotPluginPage;
 
 const uiText = {
   nothingSelected: "未选择项目", statusActive: "进行中", statusUncertain: "不确定", statusEnded: "已结束",
@@ -241,7 +241,8 @@ function bindConnectionHandle() {
 }
 
 function renderGraph() {
-  const styles = getComputedStyle(document.documentElement);
+  // The palette variables live on #network-shell, not on <html>.
+  const styles = getComputedStyle($("#network-shell") || document.documentElement);
   if (state.cy) state.cy.destroy();
   state.cy = window.cytoscape({
     container: $("#network-graph"),
@@ -940,5 +941,7 @@ async function start() {
 // The view now lives inside a collapsible card, so the host page needs a way to
 // ask cytoscape to re-measure after the card is shown again.
 window.__decisionNetworkResize = () => state.cy?.resize();
+// The dashboard swaps themes at runtime; cytoscape copies colours at render time.
+window.__decisionNetworkRestyle = () => { if (state.cy) renderGraph(); };
 
 start();

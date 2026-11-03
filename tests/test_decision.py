@@ -38,6 +38,7 @@ from decision.routing import (
 )
 from decision.skills import filter_skills_prompt
 from decision.tokens import estimate_request_tokens, estimate_tokens, fit_request_state
+from tests.dashboard_source import dashboard_source
 
 
 class FakeResponse:
@@ -934,9 +935,7 @@ def test_public_schema_contains_only_global_settings_and_master_switches():
 
 
 def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
-    page = (Path(__file__).resolve().parents[1] / "pages" / "dashboard" / "index.html").read_text(
-        encoding="utf-8"
-    )
+    page = dashboard_source()
     assert "<title>jev决策综合插件设置</title>" in page
     assert "<h1>jev决策综合插件设置</h1>" in page
     assert "始终推荐给主 LLM" in page
@@ -1003,9 +1002,7 @@ def test_proactive_details_are_page_only_and_excluded_from_public_schema():
     schema = json.loads(
         (Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(encoding="utf-8")
     )
-    page = (Path(__file__).resolve().parents[1] / "pages" / "dashboard" / "index.html").read_text(
-        encoding="utf-8"
-    )
+    page = dashboard_source()
     for field in (
         "proactive_whitelist",
         "direct_reply_prefixes",

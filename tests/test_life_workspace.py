@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from decision.life_config import life_schema
+from tests.dashboard_source import dashboard_source
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -18,7 +19,7 @@ def run_js(script):
     node = shutil.which("node")
     if not node:
         pytest.skip("Node.js unavailable for the frontend mapping test")
-    module = ROOT / "pages/dashboard/life-workspace.js"
+    module = ROOT / "views/dashboard/life-workspace.js"
     result = subprocess.run(
         [
             node,
@@ -75,7 +76,7 @@ console.log(JSON.stringify({unit:common.max_interval_minutes.durationUnit,label:
 
 
 def test_workspace_has_clear_scope_and_two_distinct_contact_flows():
-    page = (ROOT / "pages/dashboard/index.html").read_text("utf-8")
+    page = dashboard_source()
     assert 'aria-label="主动发起功能板块"' in page
     assert "下方设置是全局规则" in page
     assert "话题跟进只作为普通主动候选" in page

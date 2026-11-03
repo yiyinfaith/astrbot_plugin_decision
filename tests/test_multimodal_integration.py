@@ -17,6 +17,7 @@ install()
 
 from decision.multimodal import media  # noqa: E402
 from decision.multimodal.runtime import MultimodalRuntime  # noqa: E402
+from tests.dashboard_source import dashboard_source
 
 
 class FakeProvider:
@@ -429,9 +430,7 @@ def test_tool_boot_is_independent_of_proactive_reply():
 
 
 def test_webui_exposes_the_non_text_switch():
-    page = (Path(__file__).resolve().parents[1] / "pages/dashboard/index.html").read_text(
-        encoding="utf-8"
-    )
+    page = dashboard_source()
     assert "非文字消息是否进入判断" in page
     assert "form.proactive.non_text_proactive_enabled" in page
 

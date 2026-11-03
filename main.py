@@ -166,6 +166,8 @@ DETAIL_DEFAULTS: dict[str, Any] = {
     "tool_noul_threshold": DEFAULT_TOOL_NOUL_THRESHOLD,
     "jev_pre_prompt": DEFAULT_POLICY,
     "main_llm_post_prompt": DEFAULT_MAIN_LLM_POST_PROMPT,
+    # Display preference for the plugin view: the optional liquid-glass theme.
+    "ui_liquid_glass": False,
     **OUTPUT_PAGE_DEFAULTS,
     **PROACTIVE_PAGE_DEFAULTS,
 }
@@ -535,6 +537,18 @@ class DecisionPlugin(Star):
                 f"/{PLUGIN_NAME}/{endpoint}", handler, methods, "Virtual Life WebUI"
             )
 
+        self.context.register_web_api(
+            f"/{PLUGIN_NAME}/ui-settings",
+            self.page_ui_settings,
+            ["GET"],
+            "Read the plugin view display preference",
+        )
+        self.context.register_web_api(
+            f"/{PLUGIN_NAME}/ui-settings/save",
+            self.page_save_ui_settings,
+            ["POST"],
+            "Save the plugin view display preference",
+        )
         self.context.register_web_api(
             f"/{PLUGIN_NAME}/multimodal/models",
             self.page_multimodal_models,
@@ -3106,6 +3120,28 @@ class DecisionPlugin(Star):
             payload[ident] = entry
         return payload
 
+    async def page_ui_settings(self):
+        """Read the view's display preference (the optional liquid-glass theme)."""
+
+        from astrbot.api.web import json_response
+
+        return json_response({"liquid_glass": self._bool("ui_liquid_glass", False)})
+
+    async def page_save_ui_settings(self):
+        """Save only the display preference; every other stored value is kept as is."""
+
+        from astrbot.api.web import error_response, json_response, request
+
+        payload = await request.json(default={})
+        value = payload.get("liquid_glass") if isinstance(payload, Mapping) else None
+        if not isinstance(value, bool):
+            return error_response("liquid_glass 必须是布尔值", status_code=400)
+        try:
+            self._save_detail_settings({**self._detail_settings, "ui_liquid_glass": value})
+        except OSError as exc:
+            return error_response(f"保存失败：{_safe_error(exc)}", status_code=500)
+        return json_response({"saved": True, "liquid_glass": value})
+
     async def page_multimodal_models(self):
         """List the providers the multi-modal understanding can use."""
 
@@ -3623,6 +3659,7 @@ class DecisionPlugin(Star):
                 ),
                 "proactive_reply_enabled": self._bool("proactive_reply_enabled", False),
                 "conversation_flow_enabled": self._bool("conversation_flow_enabled", True),
+                "ui_liquid_glass": self._bool("ui_liquid_glass", False),
                 "proactive": proactive,
                 "dialogue_enhancement": self._output_page_settings(),
             }
