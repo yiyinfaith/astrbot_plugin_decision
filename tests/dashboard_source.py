@@ -12,6 +12,11 @@ def dashboard_markup() -> str:
 
 
 def dashboard_source() -> str:
-    """Template plus the Vue application script it is driven by."""
+    """Template, the Vue application script and both themes (default and liquid glass)."""
 
-    return dashboard_markup() + "\n" + (DASHBOARD / "app.js").read_text(encoding="utf-8")
+    parts = [dashboard_markup()]
+    parts += [
+        (DASHBOARD / name).read_text(encoding="utf-8")
+        for name in ("app.js", "style.css", "liquid.css")
+    ]
+    return "\n".join(parts)
