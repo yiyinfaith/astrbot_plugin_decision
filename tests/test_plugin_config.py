@@ -245,7 +245,8 @@ def test_native_schema_contains_only_globals_and_module_switches(host):
         "proactive_reply_enabled",
         "conversation_flow_enabled",
     }
-    assert (host.schema.keys() & host.module.DETAIL_DEFAULTS.keys()) == {"decision_provider_id"}
+    # The JEV Provider lives only in the native config, so nothing overlaps.
+    assert (host.schema.keys() & host.module.DETAIL_DEFAULTS.keys()) == set()
 
 
 @pytest.mark.asyncio
@@ -868,7 +869,7 @@ async def test_dynamic_subagent_is_listed_saved_and_restored_without_global_regi
     settings = await reloaded.page_settings()
     assert settings["always_keep_subagents"] == [agent.name]
     assert settings["always_keep_recommend_subagents"] == [agent.name]
-    assert set(host.module.DETAIL_DEFAULTS).intersection(host.config) == {"decision_provider_id"}
+    assert set(host.module.DETAIL_DEFAULTS).intersection(host.config) == set()
 
 
 @pytest.mark.asyncio
