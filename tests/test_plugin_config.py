@@ -769,8 +769,12 @@ async def test_proactive_request_is_yielded_after_the_session_lock_is_released(h
 
     assert yielded == ["provider-request"]
     assert lock_held == [False]
-    # No on_llm_response arrived (e.g. a provider error): the slot is released.
+    # No on_llm_response arrived (e.g. a provider error): nothing was sent, so
+    # the slot is given back instead of consuming the cooldown.
     assert not plugin.proactive.has_pending_reply(session)
+    assert plugin.proactive.allow_reply(
+        session, cooldown_seconds=60, window_seconds=600, max_replies=1
+    )
 
 
 def test_path_fallback_uses_astrbot_data_directory(host, monkeypatch, tmp_path):
@@ -1574,7 +1578,57 @@ async def test_only_the_proactive_request_settles_its_reply_slot(host):
     # A user-addressed native reply in the same session must not settle it.
     await plugin.remember_bot_response(event({}), response)
     assert plugin.proactive.has_pending_reply(session)
+    token = plugin.proactive.pending_reply_token(session)
     await plugin.remember_bot_response(
-        event({host.module.PROACTIVE_REPLY_EXTRA: True}), response
+        event({host.module.PROACTIVE_REPLY_EXTRA: token}), response
     )
     assert not plugin.proactive.has_pending_reply(session)
+
+
+@pytest.mark.asyncio
+async def test_finished_proactive_request_never_settles_a_newer_reservation(host, monkeypatch):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    host.config["proactive_reply_enabled"] = True
+    plugin._detail_settings["proactive_scope_blacklist"] = True
+    plugin._detail_settings["cooldown_seconds"] = 0.0
+    plugin.provider = object()
+    plugin._ready = True
+    host.context.conversation_manager = SimpleNamespace(
+        get_curr_conversation_id=AsyncMock(return_value="conversation-1"),
+        get_conversation=AsyncMock(return_value=SimpleNamespace()),
+    )
+    full = {"noul": 1.0}
+    keys = ("is_addressing_bot", "should_interject", "conversation_relevance", "timing", "continuity")
+    monkeypatch.setattr(
+        plugin, "_evaluate", AsyncMock(return_value=SimpleNamespace(answers=dict.fromkeys(keys, full)))
+    )
+    session = "qq:GroupMessage:group-1"
+    extras: dict = {}
+    event = SimpleNamespace(
+        unified_msg_origin=session,
+        is_at_or_wake_command=False,
+        get_message_type=lambda: 1,
+        get_group_id=lambda: "group-1",
+        get_message_str=lambda: "普通消息",
+        get_sender_id=lambda: "user-1",
+        get_sender_name=lambda: "用户",
+        get_self_id=lambda: "bot-1",
+        get_messages=lambda: [],
+        get_extra=lambda key, default=None: extras.get(key, default),
+        set_extra=lambda key, value: extras.__setitem__(key, value),
+        get_message_outline=lambda: "普通消息",
+        request_llm=lambda **kwargs: "provider-request",
+        should_call_llm=lambda value: None,
+    )
+
+    handler = plugin.proactive_reply(event)
+    assert await handler.__anext__() == "provider-request"
+    # A's reply is delivered, then B reserves before A's handler resumes.
+    await plugin.remember_bot_response(event, SimpleNamespace(completion_text="好"))
+    assert plugin.proactive.allow_reply(
+        session, cooldown_seconds=0, window_seconds=600, max_replies=5
+    )
+    newer = plugin.proactive.pending_reply_token(session)
+    with pytest.raises(StopAsyncIteration):
+        await handler.__anext__()
+    assert plugin.proactive.pending_reply_token(session) == newer

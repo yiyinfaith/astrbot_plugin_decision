@@ -1234,14 +1234,12 @@ class PersonalNetworkService:
         """Read or replace a normalized character avatar."""
         if request.method == "GET":
             persona_id = str(request.query.get("persona_id", "")).strip()
-            data = await asyncio.to_thread(self.storage.get_network, persona_id)
-            character = next(
-                (item for item in data["characters"] if item["id"] == character_id),
-                None,
+            filename = await asyncio.to_thread(
+                self.storage.avatar_filename, character_id, persona_id
             )
-            if not character or not character.get("avatar_filename"):
+            if not filename or Path(filename).name != filename:
                 return error_response("avatar not found", status_code=404)
-            path = self.avatar_dir / character["avatar_filename"]
+            path = self.avatar_dir / filename
             if not path.is_file():
                 return error_response("avatar file not found", status_code=404)
             return file_response(path, content_type="image/webp")
@@ -1270,7 +1268,9 @@ class PersonalNetworkService:
                 previous = await asyncio.to_thread(
                     self.storage.set_avatar, persona_id, character_id, filename
                 )
-            except BaseException:
+            except Exception:
+                # Not on cancellation: the worker thread may still commit the
+                # new filename, which must then keep pointing at a real file.
                 target.unlink(missing_ok=True)
                 raise
             await asyncio.to_thread(self._unlink_avatar, previous)

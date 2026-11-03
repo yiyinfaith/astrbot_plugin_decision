@@ -1179,8 +1179,11 @@ def test_proactive_reply_in_flight_blocks_a_second_reservation():
     state = ProactiveState()
     assert state.allow_reply("g", cooldown_seconds=0, window_seconds=600, max_replies=5)
     assert not state.allow_reply("g", cooldown_seconds=0, window_seconds=600, max_replies=5)
+    first = state.pending_reply_token("g")
     state.mark_reply_finished("g")
+    assert state.pending_reply_token("g") is None
     assert state.allow_reply("g", cooldown_seconds=0, window_seconds=600, max_replies=5)
+    assert state.pending_reply_token("g") != first
 
 
 def test_proactive_analysis_cooldown_does_not_drop_new_history():

@@ -182,6 +182,9 @@ class ProactiveSession:
     next_analysis: float = 0.0
     consecutive_failures: int = 0
     pending_reply: bool = False
+    # Identifies the current reservation, so a finished request can never
+    # settle a newer one reserved after it.
+    reply_token: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -468,6 +471,7 @@ class ProactiveState:
         current.reply_times.append(now)
         current.last_reply = now
         current.pending_reply = True
+        current.reply_token += 1
         self.last_reply[str(session)] = now
         return True
 
@@ -476,6 +480,12 @@ class ProactiveState:
         current.pending_reply = False
         current.consecutive_failures = 0
         self.set_status(session, ProactiveStatus.SUMMONED)
+
+    def pending_reply_token(self, session: str) -> int | None:
+        """Token of the reservation still waiting for its reply, if any."""
+
+        current = self.sessions.get(str(session))
+        return current.reply_token if current and current.pending_reply else None
 
     def has_pending_reply(self, session: str) -> bool:
         current = self.sessions.get(str(session))

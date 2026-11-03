@@ -127,12 +127,11 @@ DEFAULT_POLICY = (
     "请严格根据当前场景、用户请求和候选能力逐项判断。\n"
     "不要生成最终回答，不要执行工具，不要发明候选名称。"
 )
+# The JEV Provider (decision_provider_id) is deliberately not a detail key: it
+# lives only in AstrBot's native plugin config.  The dashboard edits it there
+# with a dropdown populated from AstrBot's live Decision Providers.
+LEGACY_PROVIDER_KEY = "decision_provider_id"
 DETAIL_DEFAULTS: dict[str, Any] = {
-    # AstrBot's config renderer currently only exposes a chat-completion
-    # ProviderSelector.  Keep the native Decision Provider choice in this
-    # plugin's dashboard, where it is populated from AstrBot's live decision
-    # Provider instances and can therefore never select a chat model by mistake.
-    "decision_provider_id": "",
     "message_interjection_enabled": True,
     # Multi-modal understanding lives under 对话流增强 → 输入增强. It is a
     # first-class detail section so load, save and reload all see it.
@@ -189,17 +188,19 @@ class DecisionPlugin(Star):
         self.context = context
         self.config = config
         self._settings_path = self._get_settings_path(config)
+        # A Provider saved by older dashboards in the detail file; kept (and
+        # rewritten by _save_detail_settings) only until it reaches the native
+        # config, so a failed migration is retried on the next start.
+        self._pending_legacy_provider: str | None = None
         self._detail_settings = self._load_detail_settings()
-        legacy_provider_id = self._detail_settings.get("decision_provider_id")
+        legacy_provider_id = self._read_legacy_provider_id()
+        self._pending_legacy_provider = legacy_provider_id
         # AstrBot also renders live config keys. Never merge WebUI settings
         # into this framework-owned object, even only in memory.
-        # decision_provider_id is also exposed in AstrBot's native plugin
-        # schema. Preserve a legacy dashboard selection until it has been
-        # migrated into that native field.
         legacy = {
             key: config[key]
             for key in DETAIL_DEFAULTS
-            if key != "decision_provider_id" and key in config
+            if key in config
         }
         if legacy:
             try:
@@ -216,38 +217,8 @@ class DecisionPlugin(Star):
             else:
                 for key in legacy:
                     config.pop(key, None)
-        native_provider_id = str(config.get("decision_provider_id", "") or "").strip()
-        native_provider_persisted = bool(native_provider_id)
-        legacy_provider_id = str(legacy_provider_id or "").strip()
-        if not native_provider_id and legacy_provider_id:
-            # One-time migration for a provider selected by older WebUI builds.
-            # Once copied into AstrBot's native config, clearing that config
-            # value later remains an explicit request to use AstrBot's default.
-            config["decision_provider_id"] = legacy_provider_id
-            save_config = getattr(config, "save_config", None)
-            if callable(save_config):
-                try:
-                    save_config()
-                except Exception as exc:
-                    logger.warning(
-                        "Decision Engine could not persist the migrated JEV Provider selection: %s",
-                        _safe_error(exc),
-                    )
-                else:
-                    migrated_settings = dict(self._detail_settings)
-                    migrated_settings.pop("decision_provider_id", None)
-                    try:
-                        self._save_detail_settings(migrated_settings)
-                    except OSError as exc:
-                        logger.warning(
-                            "Decision Engine kept the migrated JEV Provider selection but could not clean the legacy copy: %s",
-                            _safe_error(exc),
-                        )
-        if native_provider_persisted:
-            # A non-empty native value is authoritative. A dashboard copy left by
-            # earlier versions would otherwise take over (and be migrated back)
-            # once the user clears the native field to use AstrBot's default.
-            self._drop_detail_provider_copy()
+        if legacy_provider_id is not None:
+            self._migrate_legacy_provider(config, legacy_provider_id)
         self._refresh_native_provider_schema()
         # The host owns the JEV transport, credentials and model.  This
         # adapter only translates the plugin's questions to AstrBot's native
@@ -628,6 +599,10 @@ class DecisionPlugin(Star):
 
     def _save_detail_settings(self, values: Mapping[str, Any]) -> None:
         payload = {key: values[key] for key in DETAIL_DEFAULTS if key in values}
+        stored = dict(payload)
+        if self._pending_legacy_provider is not None:
+            # Not migrated into the native config yet: keep it for the retry.
+            stored[LEGACY_PROVIDER_KEY] = self._pending_legacy_provider
         if "multimodal" in payload:
             from .decision.multimodal import normalize_settings
 
@@ -641,7 +616,7 @@ class DecisionPlugin(Star):
         committed = False
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as file:
-                json.dump(payload, file, ensure_ascii=False, indent=2)
+                json.dump(stored, file, ensure_ascii=False, indent=2)
                 file.flush()
                 os.fsync(file.fileno())
             os.replace(temporary, self._settings_path)
@@ -654,31 +629,50 @@ class DecisionPlugin(Star):
                     pass
         self._detail_settings = payload
 
-    def _drop_detail_provider_copy(self) -> None:
-        """Remove the dashboard copy of the Provider once the native field owns it."""
+    def _read_legacy_provider_id(self) -> str | None:
+        """Return a Provider stored in the detail file by older dashboards."""
 
-        if "decision_provider_id" not in self._detail_settings:
-            return
-        remaining = {
-            key: value
-            for key, value in self._detail_settings.items()
-            if key != "decision_provider_id"
-        }
         try:
-            self._save_detail_settings(remaining)
-        except OSError as exc:
+            with self._settings_path.open(encoding="utf-8-sig") as file:
+                value = json.load(file)
+        except (OSError, TypeError, ValueError):
+            return None
+        if not isinstance(value, Mapping) or LEGACY_PROVIDER_KEY not in value:
+            return None
+        return str(value.get(LEGACY_PROVIDER_KEY) or "").strip()
+
+    def _migrate_legacy_provider(self, config: AstrBotConfig, legacy_provider_id: str) -> None:
+        """Move an old dashboard Provider into AstrBot's native config, once."""
+
+        native_provider_id = str(config.get(LEGACY_PROVIDER_KEY, "") or "").strip()
+        if not native_provider_id and legacy_provider_id:
+            # Copy it for this run even if it cannot be persisted yet.  Once it
+            # is in the native config, clearing that field later remains an
+            # explicit request to use AstrBot's default.
+            config[LEGACY_PROVIDER_KEY] = legacy_provider_id
+            save_config = getattr(config, "save_config", None)
+            try:
+                if not callable(save_config):
+                    raise OSError("the native config cannot be saved")
+                save_config()
+            except Exception as exc:
+                self._pending_legacy_provider = legacy_provider_id
+                logger.warning(
+                    "Decision Engine could not persist the migrated JEV Provider selection: %s",
+                    _safe_error(exc),
+                )
+                return
+        # The native field owns the value now (or already did): drop the copy.
+        self._pending_legacy_provider = None
+        try:
+            self._save_detail_settings(self._detail_settings)
+        except (OSError, TypeError, ValueError) as exc:
             logger.warning(
                 "Decision Engine could not remove the dashboard copy of the JEV Provider: %s",
                 _safe_error(exc),
             )
 
     def _setting(self, key: str, default: Any = None) -> Any:
-        if key == "decision_provider_id":
-            # AstrBot's native config is the only source.  A selection saved
-            # by older dashboards is read solely by the startup migration,
-            # which copies it into the native field (also in memory when the
-            # native write fails, so it is retried on the next start).
-            return self.config.get(key, default)
         if key in DETAIL_DEFAULTS:
             return self._detail_settings.get(key, default)
         return self.config.get(key, default)
@@ -2159,6 +2153,10 @@ class DecisionPlugin(Star):
             # while the analysis cooldown suppresses only the Jev request.
             if not self.proactive.can_analyze(session):
                 return
+            # A proactive reply is already in flight: allow_reply would reject
+            # any result, so do not spend a Jev request on it.
+            if self.proactive.has_pending_reply(session):
+                return
             status = self.proactive.observe_message(
                 session,
                 text=text,
@@ -2277,6 +2275,7 @@ class DecisionPlugin(Star):
             ):
                 logger.warning("Decision Engine 因为主动回复冷却或窗口次数限制，所以不主动对话。")
                 return
+            reply_token = self.proactive.pending_reply_token(session)
 
             try:
                 cid = await self.context.conversation_manager.get_curr_conversation_id(session)
@@ -2302,8 +2301,8 @@ class DecisionPlugin(Star):
             event.is_at_or_wake_command = True
             set_extra = getattr(event, "set_extra", None)
             if callable(set_extra):
-                # Lets remember_bot_response credit only this request's reply.
-                set_extra(PROACTIVE_REPLY_EXTRA, True)
+                # Lets remember_bot_response settle only this reservation.
+                set_extra(PROACTIVE_REPLY_EXTRA, reply_token)
             # This request is already being sent through the handler's
             # ProviderRequest path.  Mark it as consumed so AstrBot's
             # ProcessStage does not issue a second native LLM request
@@ -2323,12 +2322,13 @@ class DecisionPlugin(Star):
                 self.proactive.cancel_reply(session)
             logger.debug("Decision Engine proactive request failed: %s", _safe_error(exc))
         finally:
-            # A successful reply already cleared the slot in
-            # remember_bot_response.  After a provider error, a disabled hook
-            # or a closed generator, release it here so the session is not
-            # pinned (never pruned).  The reply stays counted for the window.
-            if queued and self.proactive.has_pending_reply(session):
-                self.proactive.mark_reply_finished(session)
+            # A delivered reply already settled this reservation in
+            # remember_bot_response.  If it is still pending (provider error
+            # or a closed generator), nothing was sent: give the slot back so
+            # it does not consume the cooldown or the window limit.  The token
+            # check leaves a newer reservation untouched.
+            if queued and self.proactive.pending_reply_token(session) == reply_token:
+                self.proactive.cancel_reply(session)
 
     @filter.event_message_type(
         EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE,
@@ -2382,6 +2382,16 @@ class DecisionPlugin(Star):
     async def remember_bot_response(self, event: AstrMessageEvent, response: Any) -> None:
         if event.get_extra("decision_life_proactive", False):
             return
+        session = str(event.unified_msg_origin)
+        # Settle our own proactive reservation first, independent of the
+        # switches below: only the reply to that request may do it, never an
+        # ordinary user-addressed reply in the same session.
+        reply_token = event.get_extra(PROACTIVE_REPLY_EXTRA, None)
+        if (
+            reply_token is not None
+            and self.proactive.pending_reply_token(session) == reply_token
+        ):
+            self.proactive.mark_reply_success(session)
         if not self._bool("proactive_reply_enabled", False):
             return
         if event.get_message_type() not in {
@@ -2392,13 +2402,6 @@ class DecisionPlugin(Star):
         if not self._proactive_whitelist_allows(event):
             return
         text = str(getattr(response, "completion_text", "") or "").strip()
-        session = str(event.unified_msg_origin)
-        # The response hook also sees ordinary user-addressed Agent replies;
-        # only the reply to our own proactive request may settle its slot.
-        if self.proactive.has_pending_reply(session) and event.get_extra(
-            PROACTIVE_REPLY_EXTRA, False
-        ):
-            self.proactive.mark_reply_success(session)
         if text:
             replied_to_id = str(event.get_sender_id() or "")
             replied_to_name = str(event.get_sender_name() or replied_to_id or "用户")
@@ -2674,11 +2677,12 @@ class DecisionPlugin(Star):
     async def _configure_life_runtime(self):
         if self._life_runtime:
             async with self._life_lock:
-                # Forget the old runtime first: if terminate() fails, a later
-                # save must still start a fresh one instead of keeping a
-                # closed runtime that every hook then treats as disabled.
+                # Re-check under the lock: a concurrent caller may already have
+                # taken it.  Forget the old runtime before terminate(), so that
+                # a failure there still lets a later save start a fresh one.
                 runtime, self._life_runtime = self._life_runtime, None
-                await runtime.terminate()
+                if runtime is not None:
+                    await runtime.terminate()
         # 主动发起 is enabled by its own per-kind switches (私聊主动 / 群聊主动),
         # so there is no separate master switch to consult here.
         await self._get_life_runtime()
@@ -4032,7 +4036,7 @@ class DecisionPlugin(Star):
                         "所选模型提供商不是 AstrBot 当前可用的 JEV Provider",
                         status_code=400,
                     )
-            detail_values["decision_provider_id"] = selected_provider
+            provider_to_write = selected_provider
         if main_llm_post_prompt is not None:
             detail_values["main_llm_post_prompt"] = main_llm_post_prompt[:50000]
         if tool_noul_threshold is not None:
@@ -4073,16 +4077,9 @@ class DecisionPlugin(Star):
         # or prune proactive history while reporting a failed save to the UI.
         previous_detail_settings = copy.deepcopy(self._detail_settings)
         settings_file_existed = self._settings_path.exists()
-        # The Provider lives only in AstrBot's native config (written below).
-        # A legacy copy whose startup migration has not succeeded yet is kept
-        # untouched so the migration can retry it.
-        provider_to_write = str(detail_values.pop("decision_provider_id", "") or "")
-        legacy_provider_copy = self._detail_settings.get("decision_provider_id")
-        if legacy_provider_copy is not None and decision_provider_id is None:
-            detail_values["decision_provider_id"] = legacy_provider_copy
         try:
             self._save_detail_settings(detail_values)
-        except OSError as exc:
+        except (OSError, TypeError, ValueError) as exc:
             logger.error("Decision Engine WebUI settings save failed: %s", _safe_error(exc))
             return error_response("配置写入失败，原设置保持不变", status_code=500)
         if decision_provider_id is not None:
@@ -4128,6 +4125,16 @@ class DecisionPlugin(Star):
                         _safe_error(exc),
                     )
                     return error_response("Jev 模型提供商写入失败，原设置保持不变", status_code=500)
+                if self._pending_legacy_provider is not None:
+                    # An explicit native value supersedes the unmigrated copy.
+                    self._pending_legacy_provider = None
+                    try:
+                        self._save_detail_settings(self._detail_settings)
+                    except (OSError, TypeError, ValueError) as exc:
+                        logger.warning(
+                            "Decision Engine could not remove the dashboard copy of the JEV Provider: %s",
+                            _safe_error(exc),
+                        )
         self.proactive.reconfigure(
             self._int("proactive_history_max_messages", 12),
             self._int("proactive_max_sessions", 500),
