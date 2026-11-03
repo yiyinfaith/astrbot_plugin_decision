@@ -110,9 +110,12 @@ def test_model_dropdowns_are_populated_from_the_provider_catalog():
 def test_non_text_switch_defaults_to_off_and_gates_the_judgement():
     main = MAIN.read_text(encoding="utf-8")
     assert '"non_text_proactive_enabled": False' in main
-    # Inside the pure-media branch the switch is still the gate.
-    block = main[main.index("        if not text:") : main.index("        if not text:") + 700]
-    assert 'self._bool("non_text_proactive_enabled", False)' in block
+    # The switch gates media extraction itself, so with it off a pure-media
+    # message has no media and never reaches the judgement.
+    gate = 'non_text = self._bool("non_text_proactive_enabled", False)'
+    assert gate in main
+    block = main[main.index(gate) : main.index(gate) + 700]
+    assert "await self._media_refs_for(event) if non_text else []" in block
     assert "_media_placeholder" in block
 
 
