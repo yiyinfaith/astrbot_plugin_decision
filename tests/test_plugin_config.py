@@ -1397,19 +1397,58 @@ async def test_network_tool_visibility_follows_its_switches(
 async def test_ui_settings_save_only_the_display_preference(host):
     plugin = host.module.DecisionPlugin(host.context, host.config)
     host.config["decision_provider_id"] = "native-provider"
-    assert await plugin.page_ui_settings() == {"liquid_glass": False}
+    assert (await plugin.page_settings())["ui_liquid_glass"] is False
 
-    host.body.update(liquid_glass=True)
-    assert await plugin.page_save_ui_settings() == {"saved": True, "liquid_glass": True}
+    host.body.update(ui_liquid_glass=True)
+    assert await plugin.page_save_ui_settings() == {"saved": True, "ui_liquid_glass": True}
     persisted = json.loads(host.path.read_text(encoding="utf-8"))
     assert persisted["ui_liquid_glass"] is True
     # The native provider choice must not be copied into the detail file, or
     # clearing it on the native page would later fall back to this copy.
     assert "decision_provider_id" not in persisted
-    assert await plugin.page_ui_settings() == {"liquid_glass": True}
     assert (await plugin.page_settings())["ui_liquid_glass"] is True
 
     host.body.clear()
-    host.body.update(liquid_glass="yes")
+    host.body.update(ui_liquid_glass="yes")
     assert (await plugin.page_save_ui_settings())["status_code"] == 400
-    assert plugin._bool("ui_liquid_glass", False) is True
+    assert (await plugin.page_settings())["ui_liquid_glass"] is True
+
+
+def test_ui_preference_reads_only_a_real_true(host):
+    host.path.parent.mkdir(parents=True, exist_ok=True)
+    host.path.write_text(json.dumps({"ui_liquid_glass": "false"}), encoding="utf-8")
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    assert plugin._setting("ui_liquid_glass", False) is not True
+
+
+@pytest.mark.asyncio
+async def test_clearing_native_provider_is_not_undone_by_a_dashboard_copy(host):
+    host.config["decision_provider_id"] = "provider-x"
+    host.config.save_config = Mock()
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    host.body.update(always_keep_tools=[], decision_provider_id="provider-x")
+    assert (await plugin.page_save_settings())["saved"] is True
+    persisted = json.loads(host.path.read_text(encoding="utf-8"))
+    assert "decision_provider_id" not in persisted
+
+    # The user clears the field on AstrBot's native config page.
+    host.config["decision_provider_id"] = ""
+    assert plugin._setting("decision_provider_id", "") == ""
+    reloaded = host.module.DecisionPlugin(host.context, host.config)
+    assert reloaded._setting("decision_provider_id", "") == ""
+    assert host.config["decision_provider_id"] == ""
+
+
+def test_startup_drops_dashboard_provider_copy_when_native_is_set(host):
+    host.path.parent.mkdir(parents=True, exist_ok=True)
+    host.path.write_text(
+        json.dumps({"decision_provider_id": "provider-x", "jev_pre_prompt": "keep"}),
+        encoding="utf-8",
+    )
+    host.config["decision_provider_id"] = "provider-x"
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    persisted = json.loads(host.path.read_text(encoding="utf-8"))
+    assert "decision_provider_id" not in persisted
+    assert persisted["jev_pre_prompt"] == "keep"
+    host.config["decision_provider_id"] = ""
+    assert plugin._setting("decision_provider_id", "") == ""

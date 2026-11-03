@@ -244,6 +244,11 @@ class DecisionPlugin(Star):
                             "Decision Engine kept the migrated JEV Provider selection but could not clean the legacy copy: %s",
                             _safe_error(exc),
                         )
+        if str(config.get("decision_provider_id", "") or "").strip():
+            # A non-empty native value is authoritative. A dashboard copy left by
+            # earlier versions would otherwise take over (and be migrated back)
+            # once the user clears the native field to use AstrBot's default.
+            self._drop_detail_provider_copy()
         self._refresh_native_provider_schema()
         # The host owns the JEV transport, credentials and model.  This
         # adapter only translates the plugin's questions to AstrBot's native
@@ -538,12 +543,6 @@ class DecisionPlugin(Star):
             )
 
         self.context.register_web_api(
-            f"/{PLUGIN_NAME}/ui-settings",
-            self.page_ui_settings,
-            ["GET"],
-            "Read the plugin view display preference",
-        )
-        self.context.register_web_api(
             f"/{PLUGIN_NAME}/ui-settings/save",
             self.page_save_ui_settings,
             ["POST"],
@@ -655,6 +654,24 @@ class DecisionPlugin(Star):
                 except FileNotFoundError:
                     pass
         self._detail_settings = payload
+
+    def _drop_detail_provider_copy(self) -> None:
+        """Remove the dashboard copy of the Provider once the native field owns it."""
+
+        if "decision_provider_id" not in self._detail_settings:
+            return
+        remaining = {
+            key: value
+            for key, value in self._detail_settings.items()
+            if key != "decision_provider_id"
+        }
+        try:
+            self._save_detail_settings(remaining)
+        except OSError as exc:
+            logger.warning(
+                "Decision Engine could not remove the dashboard copy of the JEV Provider: %s",
+                _safe_error(exc),
+            )
 
     def _setting(self, key: str, default: Any = None) -> Any:
         if key == "decision_provider_id":
@@ -3120,27 +3137,21 @@ class DecisionPlugin(Star):
             payload[ident] = entry
         return payload
 
-    async def page_ui_settings(self):
-        """Read the view's display preference (the optional liquid-glass theme)."""
-
-        from astrbot.api.web import json_response
-
-        return json_response({"liquid_glass": self._bool("ui_liquid_glass", False)})
-
     async def page_save_ui_settings(self):
         """Save only the display preference; every other stored value is kept as is."""
 
         from astrbot.api.web import error_response, json_response, request
 
         payload = await request.json(default={})
-        value = payload.get("liquid_glass") if isinstance(payload, Mapping) else None
+        value = payload.get("ui_liquid_glass") if isinstance(payload, Mapping) else None
         if not isinstance(value, bool):
-            return error_response("liquid_glass 必须是布尔值", status_code=400)
+            return error_response("ui_liquid_glass 必须是布尔值", status_code=400)
         try:
             self._save_detail_settings({**self._detail_settings, "ui_liquid_glass": value})
-        except OSError as exc:
+        except (OSError, TypeError, ValueError) as exc:
+            logger.error("Decision Engine could not save the view preference: %s", _safe_error(exc))
             return error_response(f"保存失败：{_safe_error(exc)}", status_code=500)
-        return json_response({"saved": True, "liquid_glass": value})
+        return json_response({"saved": True, "ui_liquid_glass": value})
 
     async def page_multimodal_models(self):
         """List the providers the multi-modal understanding can use."""
@@ -3659,7 +3670,7 @@ class DecisionPlugin(Star):
                 ),
                 "proactive_reply_enabled": self._bool("proactive_reply_enabled", False),
                 "conversation_flow_enabled": self._bool("conversation_flow_enabled", True),
-                "ui_liquid_glass": self._bool("ui_liquid_glass", False),
+                "ui_liquid_glass": self._setting("ui_liquid_glass", False) is True,
                 "proactive": proactive,
                 "dialogue_enhancement": self._output_page_settings(),
             }
@@ -4083,6 +4094,9 @@ class DecisionPlugin(Star):
                         _safe_error(exc),
                     )
                     return error_response("Jev 模型提供商写入失败，原设置保持不变", status_code=500)
+                else:
+                    # AstrBot's native config now holds the selection durably.
+                    self._drop_detail_provider_copy()
         self.proactive.reconfigure(
             self._int("proactive_history_max_messages", 12),
             self._int("proactive_max_sessions", 500),

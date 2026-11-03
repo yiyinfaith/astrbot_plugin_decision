@@ -753,7 +753,7 @@ const app = createApp({
         try {
           await this.setLiquidGlass(value);
           const bridge = await waitForBridge();
-          const result = payloadOf(await bridge.apiPost('ui-settings/save', { liquid_glass: value }));
+          const result = payloadOf(await bridge.apiPost('ui-settings/save', { ui_liquid_glass: value }));
           if (result.saved !== true) throw new Error('服务器未确认保存');
           this.statusText = value ? '已开启液态玻璃效果' : '已切换为简洁样式';
           this.saveState = 'ok';
