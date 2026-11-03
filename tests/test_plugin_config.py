@@ -770,10 +770,10 @@ async def test_proactive_request_is_yielded_after_the_session_lock_is_released(h
 
     assert yielded == ["provider-request"]
     assert lock_held == [False]
-    # No on_llm_response arrived (e.g. a provider error): nothing was sent, so
-    # the slot is given back instead of consuming the cooldown.
+    # No on_llm_response arrived (e.g. a provider error): the slot is released
+    # so the session is not pinned, but the attempt stays counted.
     assert not plugin.proactive.has_pending_reply(session)
-    assert plugin.proactive.allow_reply(
+    assert not plugin.proactive.allow_reply(
         session, cooldown_seconds=60, window_seconds=600, max_replies=1
     )
 
@@ -1539,7 +1539,7 @@ async def test_saving_unchanged_life_settings_keeps_the_running_life_runtime(hos
     plugin = host.module.DecisionPlugin(host.context, host.config)
     current = normalize_life(life_defaults())
     plugin._detail_settings["life"] = copy.deepcopy(current)
-    plugin._life_runtime = object()
+    plugin._life_runtime = SimpleNamespace(config=copy.deepcopy(current))
     restart = AsyncMock()
     monkeypatch.setattr(plugin, "_configure_life_runtime", restart)
 

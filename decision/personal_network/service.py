@@ -1234,8 +1234,11 @@ class PersonalNetworkService:
         """Read or replace a normalized character avatar."""
         if request.method == "GET":
             persona_id = str(request.query.get("persona_id", "")).strip()
-            filename = await asyncio.to_thread(
-                self.storage.avatar_filename, character_id, persona_id
+            # Reading stays scoped to one persona's network.
+            filename = (
+                await asyncio.to_thread(self.storage.avatar_filename, character_id, persona_id)
+                if persona_id
+                else None
             )
             if not filename or Path(filename).name != filename:
                 return error_response("avatar not found", status_code=404)
@@ -1271,9 +1274,13 @@ class PersonalNetworkService:
             except Exception:
                 # Not on cancellation: the worker thread may still commit the
                 # new filename, which must then keep pointing at a real file.
-                target.unlink(missing_ok=True)
+                await asyncio.to_thread(target.unlink, missing_ok=True)
                 raise
-            await asyncio.to_thread(self._unlink_avatar, previous)
+            try:
+                await asyncio.to_thread(self._unlink_avatar, previous)
+            except OSError as exc:
+                # The new avatar is saved; a locked old file only stays behind.
+                logger.warning("人际网络旧头像删除失败：%s", exc)
             avatar_data = "data:image/webp;base64," + base64.b64encode(encoded).decode()
             return json_response({"saved": True, "avatar_data": avatar_data})
         except (ValueError, UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:

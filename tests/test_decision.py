@@ -1186,6 +1186,16 @@ def test_proactive_reply_in_flight_blocks_a_second_reservation():
     assert state.pending_reply_token("g") != first
 
 
+def test_hung_proactive_request_stops_blocking_after_the_timeout():
+    from decision import proactive as proactive_module
+
+    state = ProactiveState()
+    assert state.allow_reply("g", cooldown_seconds=0, window_seconds=600, max_replies=5)
+    state.sessions["g"].pending_since -= proactive_module.PENDING_REPLY_TIMEOUT_SECONDS + 1
+    assert not state.has_pending_reply("g")
+    assert state.allow_reply("g", cooldown_seconds=0, window_seconds=600, max_replies=5)
+
+
 def test_proactive_analysis_cooldown_does_not_drop_new_history():
     state = ProactiveState(max_messages=4)
     state.add("g", ProactiveRecord("Alice", "1", "first"))

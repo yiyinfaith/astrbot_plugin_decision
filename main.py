@@ -192,8 +192,9 @@ class DecisionPlugin(Star):
         # rewritten by _save_detail_settings) only until it reaches the native
         # config, so a failed migration is retried on the next start.
         self._pending_legacy_provider: str | None = None
+        self._loaded_legacy_provider: str | None = None
         self._detail_settings = self._load_detail_settings()
-        legacy_provider_id = self._read_legacy_provider_id()
+        legacy_provider_id = self._loaded_legacy_provider
         self._pending_legacy_provider = legacy_provider_id
         # AstrBot also renders live config keys. Never merge WebUI settings
         # into this framework-owned object, even only in memory.
@@ -585,6 +586,9 @@ class DecisionPlugin(Star):
                 if isinstance(value, Mapping)
                 else {}
             )
+            if isinstance(value, Mapping) and LEGACY_PROVIDER_KEY in value:
+                # Read only by the startup migration into the native config.
+                self._loaded_legacy_provider = str(value.get(LEGACY_PROVIDER_KEY) or "").strip()
             if "multimodal" in payload:
                 from .decision.multimodal import normalize_settings
 
@@ -599,14 +603,14 @@ class DecisionPlugin(Star):
 
     def _save_detail_settings(self, values: Mapping[str, Any]) -> None:
         payload = {key: values[key] for key in DETAIL_DEFAULTS if key in values}
-        stored = dict(payload)
-        if self._pending_legacy_provider is not None:
-            # Not migrated into the native config yet: keep it for the retry.
-            stored[LEGACY_PROVIDER_KEY] = self._pending_legacy_provider
         if "multimodal" in payload:
             from .decision.multimodal import normalize_settings
 
             payload["multimodal"] = normalize_settings(payload["multimodal"])
+        stored = dict(payload)
+        if self._pending_legacy_provider is not None:
+            # Not migrated into the native config yet: keep it for the retry.
+            stored[LEGACY_PROVIDER_KEY] = self._pending_legacy_provider
         self._settings_path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(
             dir=str(self._settings_path.parent),
@@ -629,18 +633,6 @@ class DecisionPlugin(Star):
                     pass
         self._detail_settings = payload
 
-    def _read_legacy_provider_id(self) -> str | None:
-        """Return a Provider stored in the detail file by older dashboards."""
-
-        try:
-            with self._settings_path.open(encoding="utf-8-sig") as file:
-                value = json.load(file)
-        except (OSError, TypeError, ValueError):
-            return None
-        if not isinstance(value, Mapping) or LEGACY_PROVIDER_KEY not in value:
-            return None
-        return str(value.get(LEGACY_PROVIDER_KEY) or "").strip()
-
     def _migrate_legacy_provider(self, config: AstrBotConfig, legacy_provider_id: str) -> None:
         """Move an old dashboard Provider into AstrBot's native config, once."""
 
@@ -656,7 +648,7 @@ class DecisionPlugin(Star):
                     raise OSError("the native config cannot be saved")
                 save_config()
             except Exception as exc:
-                self._pending_legacy_provider = legacy_provider_id
+                # _pending_legacy_provider stays set, so the copy is kept.
                 logger.warning(
                     "Decision Engine could not persist the migrated JEV Provider selection: %s",
                     _safe_error(exc),
@@ -2153,10 +2145,6 @@ class DecisionPlugin(Star):
             # while the analysis cooldown suppresses only the Jev request.
             if not self.proactive.can_analyze(session):
                 return
-            # A proactive reply is already in flight: allow_reply would reject
-            # any result, so do not spend a Jev request on it.
-            if self.proactive.has_pending_reply(session):
-                return
             status = self.proactive.observe_message(
                 session,
                 text=text,
@@ -2169,6 +2157,10 @@ class DecisionPlugin(Star):
                 min_participants=self._int("min_participant_count", 2),
                 observation_timeout=self._float("observation_timeout_seconds", 600.0),
             )
+            # A proactive reply is already in flight: allow_reply would reject
+            # any result, so do not spend a Jev request on this message.
+            if self.proactive.has_pending_reply(session):
+                return
             if explicit_summon and self._bool("force_reply_when_summoned", True):
                 should_reply = True
                 scores: dict[str, float] = {}
@@ -2323,12 +2315,13 @@ class DecisionPlugin(Star):
             logger.debug("Decision Engine proactive request failed: %s", _safe_error(exc))
         finally:
             # A delivered reply already settled this reservation in
-            # remember_bot_response.  If it is still pending (provider error
-            # or a closed generator), nothing was sent: give the slot back so
-            # it does not consume the cooldown or the window limit.  The token
-            # check leaves a newer reservation untouched.
+            # remember_bot_response.  Otherwise (provider error, a hook stopped
+            # by another plugin, a closed generator) release it here.  It stays
+            # counted: the reply may still have reached the chat, and counting
+            # errs towards interjecting less.  The token check leaves a newer
+            # reservation untouched.
             if queued and self.proactive.pending_reply_token(session) == reply_token:
-                self.proactive.cancel_reply(session)
+                self.proactive.mark_reply_finished(session)
 
     @filter.event_message_type(
         EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE,
@@ -4152,7 +4145,8 @@ class DecisionPlugin(Star):
         # Restarting the life runtime cancels running WebUI jobs and drops
         # queued delayed replies, so only do it when its settings changed.
         if life_values is not None and (
-            life_values != previous_detail_settings.get("life") or self._life_runtime is None
+            self._life_runtime is None
+            or life_values != getattr(self._life_runtime, "config", None)
         ):
             try:
                 await self._configure_life_runtime()

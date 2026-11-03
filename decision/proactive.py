@@ -13,7 +13,11 @@ from collections import Counter, defaultdict, deque
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
+# A proactive request that has not come back after this long (a hung agent or
+# tool) no longer blocks the session's next proactive reply.
+PENDING_REPLY_TIMEOUT_SECONDS = 900.0
 GROUP_TARGET_ID = "group"
 GROUP_TARGET_NAME = "群聊"
 BOT_TARGET_ID = "bot"
@@ -185,6 +189,7 @@ class ProactiveSession:
     # Identifies the current reservation, so a finished request can never
     # settle a newer one reserved after it.
     reply_token: int = 0
+    pending_since: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,6 +299,8 @@ class ProactiveState:
                 break
             session = self.sessions.get(key)
             lock = self._locks.get(key)
+            if session:
+                self._expire_pending(session)
             if session and (session.pending_reply or (lock is not None and lock.locked())):
                 continue
             self.sessions.pop(key, None)
@@ -460,6 +467,7 @@ class ProactiveState:
             return False
         # One proactive reply at a time per session: the request runs outside
         # the session lock, so a concurrent message must not reserve another.
+        self._expire_pending(current, now)
         if current.pending_reply:
             return False
         if now - current.last_reply < max(0.0, cooldown_seconds):
@@ -471,6 +479,7 @@ class ProactiveState:
         current.reply_times.append(now)
         current.last_reply = now
         current.pending_reply = True
+        current.pending_since = now
         current.reply_token += 1
         self.last_reply[str(session)] = now
         return True
@@ -481,15 +490,27 @@ class ProactiveState:
         current.consecutive_failures = 0
         self.set_status(session, ProactiveStatus.SUMMONED)
 
+    @staticmethod
+    def _expire_pending(current: Any, now: float | None = None) -> None:
+        """Forget a reservation whose request never came back (a hung agent)."""
+
+        if current.pending_reply and (
+            (time.monotonic() if now is None else now) - current.pending_since
+            > PENDING_REPLY_TIMEOUT_SECONDS
+        ):
+            current.pending_reply = False
+
     def pending_reply_token(self, session: str) -> int | None:
         """Token of the reservation still waiting for its reply, if any."""
 
         current = self.sessions.get(str(session))
-        return current.reply_token if current and current.pending_reply else None
+        if current is None:
+            return None
+        self._expire_pending(current)
+        return current.reply_token if current.pending_reply else None
 
     def has_pending_reply(self, session: str) -> bool:
-        current = self.sessions.get(str(session))
-        return bool(current and current.pending_reply)
+        return self.pending_reply_token(session) is not None
 
     def mark_reply_finished(self, session: str) -> None:
         self._session(session).pending_reply = False

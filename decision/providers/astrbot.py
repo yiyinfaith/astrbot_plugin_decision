@@ -110,7 +110,8 @@ class AstrBotDecisionProvider:
 
     @property
     def configured(self) -> bool:
-        return getattr(self.context, "decision", None) is not None
+        # evaluate() calls DecisionService.ask(); without it, stay fail-open.
+        return callable(getattr(getattr(self.context, "decision", None), "ask", None))
 
     async def start(self) -> None:
         """Retained as a lifecycle hook; AstrBot owns provider startup."""

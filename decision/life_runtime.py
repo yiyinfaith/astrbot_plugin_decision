@@ -233,8 +233,14 @@ class LifeRuntime(VirtualLifeBase):
 
     async def terminate(self):
         self.closed = True
-        await self.conversation.close()
-        await self.temporal.close()
+        # A failing store close must not skip stopping the scheduler and the
+        # tasks below, or the old runtime would keep running beside a new one.
+        errors: list[Exception] = []
+        for close in (self.conversation.close, self.temporal.close):
+            try:
+                await close()
+            except Exception as exc:
+                errors.append(exc)
         self.runtime.stop()
         self.reply_delay_coordinator.clear()
         for task in tuple(self.tasks):
@@ -265,6 +271,8 @@ class LifeRuntime(VirtualLifeBase):
         self.audit.clear()
         if self._loaded:
             await super().terminate()
+        if errors:
+            raise errors[0]
 
     async def _control_loop(self):
         """Cheap recovery ticks; date timers provide precise scheduled delivery."""

@@ -84,6 +84,10 @@ def choose_tools(
     always_keep_mcp_recommend = always_keep_mcp_recommend or set()
     always_keep_skills = always_keep_skills or set()
     always_keep_skills_recommend = always_keep_skills_recommend or set()
+    # Invert once: each handoff looks up its own question ids directly.
+    handoff_questions: dict[str, list[str]] = {}
+    for qid, handoff_name in (question_to_handoff or {}).items():
+        handoff_questions.setdefault(handoff_name, []).append(qid)
     seen: set[str] = set()
     for tool in original_tools:
         name = str(getattr(tool, "name", ""))
@@ -108,11 +112,7 @@ def choose_tools(
         if is_handoff_tool(tool):
             handoffs.append(tool)
             keep = name in always_keep_handoffs
-            matching_ids = [
-                qid
-                for qid, handoff_name in (question_to_handoff or {}).items()
-                if handoff_name == name
-            ]
+            matching_ids = handoff_questions.get(name, ())
             selected_by_jev = any(
                 isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
                 and not isinstance(noul_answers.get(qid, {}).get("noul"), bool)
