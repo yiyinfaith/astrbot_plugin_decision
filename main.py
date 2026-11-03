@@ -67,6 +67,8 @@ PLUGIN_NAME = "astrbot_plugin_decision"
 PLUGIN_DISPLAY_NAME = "jev决策综合插件"
 _ON_DECORATING_RESULT = getattr(filter, "on_decorating_result", None)
 DEFAULT_TOOL_NOUL_THRESHOLD = 0.65
+# Event extra marking the request issued by the proactive (message interjection) path.
+PROACTIVE_REPLY_EXTRA = "decision_proactive_reply"
 # Life actions that mutate the plan, after which the WebUI wants a fresh read.
 INSPECT_AFTER_ACTIONS = frozenset(
     {
@@ -672,17 +674,11 @@ class DecisionPlugin(Star):
 
     def _setting(self, key: str, default: Any = None) -> Any:
         if key == "decision_provider_id":
-            # A non-empty native value is authoritative.  An empty schema
-            # default can coexist with a Provider ID saved by an older
-            # dashboard, so retain that legacy value until the dashboard
-            # writes an explicit clear to both stores.
-            native_value = self.config.get(key, default)
-            if isinstance(native_value, str) and native_value.strip():
-                return native_value
-            detail_value = self._detail_settings.get(key, default)
-            if isinstance(detail_value, str) and detail_value.strip():
-                return detail_value
-            return native_value if key in self.config else detail_value
+            # AstrBot's native config is the only source.  A selection saved
+            # by older dashboards is read solely by the startup migration,
+            # which copies it into the native field (also in memory when the
+            # native write fails, so it is retried on the next start).
+            return self.config.get(key, default)
         if key in DETAIL_DEFAULTS:
             return self._detail_settings.get(key, default)
         return self.config.get(key, default)
@@ -2134,14 +2130,15 @@ class DecisionPlugin(Star):
 
         session = str(event.unified_msg_origin)
         text = str(event.get_message_str() or "").strip()
-        media_refs = await self._media_refs_for(event)
+        # Media only matters when the operator lets non-text messages into the
+        # decision; understanding itself is controlled separately.
+        non_text = self._bool("non_text_proactive_enabled", False)
+        media_refs = await self._media_refs_for(event) if non_text else []
         if not text:
-            # Pure media messages only become candidates when the operator turns
-            # this on; understanding itself is controlled separately.
-            if not self._bool("non_text_proactive_enabled", False) or not media_refs:
+            if not media_refs:
                 return
             text = await self._media_placeholder(media_refs, session, event)
-        elif media_refs and self._bool("non_text_proactive_enabled", False):
+        elif media_refs:
             attachment_context = await self._media_placeholder(media_refs, session, event)
             text = f"{text}\n{attachment_context}"
         sender_id = str(event.get_sender_id() or "")
@@ -2298,32 +2295,40 @@ class DecisionPlugin(Star):
         # Leave the per-session lock first: AstrBot runs the yielded request
         # (the whole agent loop) before resuming this handler, and other
         # messages in the session, including an explicit @bot, must not wait
-        # for that reply.  The reply slot is already reserved above.
+        # for that reply.  The reply slot reserved above keeps a second
+        # proactive reply out while this one is in flight.
+        queued = False
         try:
             event.is_at_or_wake_command = True
+            set_extra = getattr(event, "set_extra", None)
+            if callable(set_extra):
+                # Lets remember_bot_response credit only this request's reply.
+                set_extra(PROACTIVE_REPLY_EXTRA, True)
             # This request is already being sent through the handler's
             # ProviderRequest path.  Mark it as consumed so AstrBot's
             # ProcessStage does not issue a second native LLM request
             # merely because the event is also marked as awakened.
             event.should_call_llm(True)
-            yield event.request_llm(
+            request = event.request_llm(
                 prompt=text,
                 # Continue AstrBot's native conversation so persona and
                 # other plugin system prompts remain intact.
                 session_id=cid,
                 conversation=conversation,
             )
+            queued = True
+            yield request
         except Exception as exc:
-            self.proactive.cancel_reply(session)
-            logger.debug("Decision Engine proactive request was not queued: %s", _safe_error(exc))
-            return
-        # The pipeline resumes this handler after the request has run. A
-        # successful reply already cleared the slot in remember_bot_response;
-        # after a provider error or a disabled hook, release it here so the
-        # session is not pinned (never pruned) and a later user-addressed reply
-        # is not mistaken for this proactive one.  The reply stays counted.
-        if self.proactive.has_pending_reply(session):
-            self.proactive.mark_reply_finished(session)
+            if not queued:
+                self.proactive.cancel_reply(session)
+            logger.debug("Decision Engine proactive request failed: %s", _safe_error(exc))
+        finally:
+            # A successful reply already cleared the slot in
+            # remember_bot_response.  After a provider error, a disabled hook
+            # or a closed generator, release it here so the session is not
+            # pinned (never pruned).  The reply stays counted for the window.
+            if queued and self.proactive.has_pending_reply(session):
+                self.proactive.mark_reply_finished(session)
 
     @filter.event_message_type(
         EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE,
@@ -2389,8 +2394,10 @@ class DecisionPlugin(Star):
         text = str(getattr(response, "completion_text", "") or "").strip()
         session = str(event.unified_msg_origin)
         # The response hook also sees ordinary user-addressed Agent replies;
-        # only a slot reserved by our proactive path may update its state.
-        if self.proactive.has_pending_reply(session):
+        # only the reply to our own proactive request may settle its slot.
+        if self.proactive.has_pending_reply(session) and event.get_extra(
+            PROACTIVE_REPLY_EXTRA, False
+        ):
             self.proactive.mark_reply_success(session)
         if text:
             replied_to_id = str(event.get_sender_id() or "")
@@ -2667,8 +2674,11 @@ class DecisionPlugin(Star):
     async def _configure_life_runtime(self):
         if self._life_runtime:
             async with self._life_lock:
-                await self._life_runtime.terminate()
-                self._life_runtime = None
+                # Forget the old runtime first: if terminate() fails, a later
+                # save must still start a fresh one instead of keeping a
+                # closed runtime that every hook then treats as disabled.
+                runtime, self._life_runtime = self._life_runtime, None
+                await runtime.terminate()
         # 主动发起 is enabled by its own per-kind switches (私聊主动 / 群聊主动),
         # so there is no separate master switch to consult here.
         await self._get_life_runtime()
@@ -2900,14 +2910,15 @@ class DecisionPlugin(Star):
         for kind in MEDIA_KINDS:
             name = f"understand_{kind}"
             try:
-                if name in allowed:
-                    activate = getattr(self.context, "activate_llm_tool_async", None)
-                    if callable(activate):
-                        await activate(name)
+                verb = "activate" if name in allowed else "deactivate"
+                toggle = getattr(self.context, f"{verb}_llm_tool_async", None)
+                if callable(toggle):
+                    await toggle(name)
                 else:
-                    deactivate = getattr(self.context, "deactivate_llm_tool_async", None)
-                    if callable(deactivate):
-                        await deactivate(name)
+                    # Older hosts only offer the synchronous API.
+                    toggle = getattr(self.context, f"{verb}_llm_tool", None)
+                    if callable(toggle):
+                        toggle(name)
             except Exception as exc:  # pragma: no cover - host API differences
                 logger.debug("Decision Engine 切换多模态工具 %s 失败：%s", name, _safe_error(exc))
 
@@ -4062,12 +4073,13 @@ class DecisionPlugin(Star):
         # or prune proactive history while reporting a failed save to the UI.
         previous_detail_settings = copy.deepcopy(self._detail_settings)
         settings_file_existed = self._settings_path.exists()
-        provider_to_write = str(detail_values.get("decision_provider_id", "") or "")
-        if callable(getattr(self.config, "save_config", None)):
-            # AstrBot's native config is the only durable store for the
-            # Provider; a copy in this file would resurface after the native
-            # field is cleared.  The native value is written below.
-            detail_values.pop("decision_provider_id", None)
+        # The Provider lives only in AstrBot's native config (written below).
+        # A legacy copy whose startup migration has not succeeded yet is kept
+        # untouched so the migration can retry it.
+        provider_to_write = str(detail_values.pop("decision_provider_id", "") or "")
+        legacy_provider_copy = self._detail_settings.get("decision_provider_id")
+        if legacy_provider_copy is not None and decision_provider_id is None:
+            detail_values["decision_provider_id"] = legacy_provider_copy
         try:
             self._save_detail_settings(detail_values)
         except OSError as exc:
@@ -4093,14 +4105,13 @@ class DecisionPlugin(Star):
                         self.config["decision_provider_id"] = previous_native_value
                     else:
                         self.config.pop("decision_provider_id", None)
-                    if callable(save_config):
-                        try:
-                            save_config()
-                        except Exception as rollback_exc:
-                            logger.error(
-                                "Decision Engine could not roll back AstrBot's JEV Provider config: %s",
-                                _safe_error(rollback_exc),
-                            )
+                    try:
+                        save_config()
+                    except Exception as rollback_exc:
+                        logger.error(
+                            "Decision Engine could not roll back AstrBot's JEV Provider config: %s",
+                            _safe_error(rollback_exc),
+                        )
                     try:
                         if settings_file_existed:
                             self._save_detail_settings(previous_detail_settings)

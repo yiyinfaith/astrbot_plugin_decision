@@ -48,6 +48,9 @@ DB_FILENAME = "personal_network.sqlite3"
 LEGACY_PLUGIN_DIR = "astrbot_plugin_personal_network"
 MIGRATION_MARKER = "migrated_from_standalone.json"
 MAX_AVATAR_BYTES = 2 * 1024 * 1024
+# A small compressed file can still describe a huge bitmap; refuse it before
+# thumbnail() decodes it (Pillow only raises above twice its own default limit).
+MAX_AVATAR_PIXELS = 25_000_000
 MAX_IMPORT_BYTES = 25 * 1024 * 1024
 MAX_GENERATION_RAW_CHARS = 500_000
 GENERATION_JOB_TTL_SECONDS = 15 * 60
@@ -1262,7 +1265,7 @@ class PersonalNetworkService:
             encoded = await asyncio.to_thread(self._encode_avatar, raw)
             filename = f"{uuid.uuid4().hex}.webp"
             target = self.avatar_dir / filename
-            target.write_bytes(encoded)
+            await asyncio.to_thread(target.write_bytes, encoded)
             try:
                 previous = await asyncio.to_thread(
                     self.storage.set_avatar, persona_id, character_id, filename
@@ -1270,8 +1273,9 @@ class PersonalNetworkService:
             except BaseException:
                 target.unlink(missing_ok=True)
                 raise
-            self._unlink_avatar(previous)
-            return json_response({"saved": True, "avatar_data": self._avatar_data(filename)})
+            await asyncio.to_thread(self._unlink_avatar, previous)
+            avatar_data = "data:image/webp;base64," + base64.b64encode(encoded).decode()
+            return json_response({"saved": True, "avatar_data": avatar_data})
         except (ValueError, UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
             return error_response(str(exc))
 
@@ -1282,6 +1286,8 @@ class PersonalNetworkService:
         image = Image.open(io.BytesIO(raw))
         if image.format not in {"JPEG", "PNG", "WEBP"}:
             raise ValueError("avatar must be JPEG, PNG, or WebP")
+        if image.width * image.height > MAX_AVATAR_PIXELS:
+            raise ValueError("avatar resolution is too large")
         image.thumbnail((512, 512))
         if image.mode not in {"RGB", "RGBA"}:
             image = image.convert("RGBA")
@@ -1301,11 +1307,10 @@ class PersonalNetworkService:
         Raises:
             ValueError: If no network owns the character.
         """
-        for item in self.storage.list_networks():
-            data = self.storage.get_network(item["persona_id"])
-            if any(character["id"] == character_id for character in data["characters"]):
-                return str(item["persona_id"])
-        raise ValueError("character not found")
+        persona_id = self.storage.persona_for_character(character_id)
+        if persona_id is None:
+            raise ValueError("character not found")
+        return persona_id
 
     def _avatar_data(self, filename: str | None) -> str | None:
         """Read a safe avatar filename as a WebP data URL.

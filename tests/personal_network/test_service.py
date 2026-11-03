@@ -1088,3 +1088,37 @@ async def test_avatar_upload_for_unknown_character_leaves_no_file(services, data
 
     assert response["error"] == "character not found"
     assert list(service.avatar_dir.glob("*.webp")) == []
+
+
+async def test_avatar_upload_rejects_huge_resolution_before_decoding(services, data_dir: Path):
+    import io as _io
+
+    from PIL import Image as PILImage
+
+    service = services(FakeOwner(network_settings(enable=True)), data_dir)
+    await service.upsert_batch_for_plugin("alice", characters=[{"ref": "c", "name": "Lin"}])
+    character_id = next(
+        item["id"]
+        for item in service.storage.get_network("alice")["characters"]
+        if item["name"] == "Lin"
+    )
+    buffer = _io.BytesIO()
+    PILImage.new("1", (5001, 5001)).save(buffer, format="PNG")
+    payload = buffer.getvalue()
+    assert len(payload) < 2 * 1024 * 1024
+
+    class Upload:
+        content_length = len(payload)
+
+        async def read(self, size=-1):
+            return payload
+
+    stub = reset_request()
+    stub.method = "POST"
+    stub.query = {"persona_id": "alice"}
+    stub.files_map = {"file": Upload()}
+
+    response = await service.api_avatar(character_id)
+
+    assert response["error"] == "avatar resolution is too large"
+    assert list(service.avatar_dir.glob("*.webp")) == []

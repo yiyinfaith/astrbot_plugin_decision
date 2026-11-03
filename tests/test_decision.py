@@ -1172,6 +1172,17 @@ def test_proactive_cancel_reply_releases_unqueued_slot():
     assert state.allow_reply("g", cooldown_seconds=60, window_seconds=600, max_replies=1)
 
 
+def test_proactive_reply_in_flight_blocks_a_second_reservation():
+    """The proactive request runs outside the session lock, so a concurrent
+    message must not reserve a second slot while the first reply is pending."""
+
+    state = ProactiveState()
+    assert state.allow_reply("g", cooldown_seconds=0, window_seconds=600, max_replies=5)
+    assert not state.allow_reply("g", cooldown_seconds=0, window_seconds=600, max_replies=5)
+    state.mark_reply_finished("g")
+    assert state.allow_reply("g", cooldown_seconds=0, window_seconds=600, max_replies=5)
+
+
 def test_proactive_analysis_cooldown_does_not_drop_new_history():
     state = ProactiveState(max_messages=4)
     state.add("g", ProactiveRecord("Alice", "1", "first"))

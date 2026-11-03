@@ -1419,6 +1419,14 @@ class NetworkStorage:
             return duplicate["avatar_filename"]
         return None
 
+    def persona_for_character(self, character_id: str) -> str | None:
+        """Return the persona that owns a character, or ``None``."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT persona_id FROM characters WHERE id = ?", (character_id,)
+            ).fetchone()
+        return str(row["persona_id"]) if row else None
+
     def set_avatar(self, persona_id: str, character_id: str, filename: str | None) -> str | None:
         """Set an avatar filename and return the previous filename."""
         with self._lock, self._conn:

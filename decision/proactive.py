@@ -455,6 +455,10 @@ class ProactiveState:
         # because of a defensive ``max(1, ...)`` clamp.
         if int(max_replies) <= 0:
             return False
+        # One proactive reply at a time per session: the request runs outside
+        # the session lock, so a concurrent message must not reserve another.
+        if current.pending_reply:
+            return False
         if now - current.last_reply < max(0.0, cooldown_seconds):
             return False
         while current.reply_times and now - current.reply_times[0] > max(1.0, window_seconds):

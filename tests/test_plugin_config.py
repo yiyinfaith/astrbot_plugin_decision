@@ -280,7 +280,8 @@ async def test_save_reload_keeps_native_config_clean_and_webui_settings_intact(h
     assert host.path.parent == Path(host.config.config_path).parent
     assert not host.path.is_relative_to(ROOT)
     persisted = json.loads(host.path.read_text(encoding="utf-8"))
-    assert (persisted.keys() & host.schema.keys()) == {"decision_provider_id"}
+    # The Provider is stored only in AstrBot's native config.
+    assert (persisted.keys() & host.schema.keys()) == set()
     reloaded = host.module.DecisionPlugin(host.context, host.config)
     settings = await reloaded.page_settings()
     assert settings["jev_pre_prompt"] == "custom policy"
@@ -1546,3 +1547,34 @@ async def test_saving_unchanged_life_settings_keeps_the_running_life_runtime(hos
     host.body.update(life=changed)
     assert (await plugin.page_save_settings())["saved"] is True
     restart.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_only_the_proactive_request_settles_its_reply_slot(host):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    host.config["proactive_reply_enabled"] = True
+    plugin._detail_settings["proactive_scope_blacklist"] = True
+    session = "qq:GroupMessage:group-1"
+    assert plugin.proactive.allow_reply(
+        session, cooldown_seconds=0, window_seconds=600, max_replies=5
+    )
+
+    def event(extras):
+        return SimpleNamespace(
+            unified_msg_origin=session,
+            get_message_type=lambda: 1,
+            get_group_id=lambda: "group-1",
+            get_sender_id=lambda: "user-1",
+            get_sender_name=lambda: "用户",
+            get_self_id=lambda: "bot-1",
+            get_extra=lambda key, default=None: extras.get(key, default),
+        )
+
+    response = SimpleNamespace(completion_text="好的")
+    # A user-addressed native reply in the same session must not settle it.
+    await plugin.remember_bot_response(event({}), response)
+    assert plugin.proactive.has_pending_reply(session)
+    await plugin.remember_bot_response(
+        event({host.module.PROACTIVE_REPLY_EXTRA: True}), response
+    )
+    assert not plugin.proactive.has_pending_reply(session)
