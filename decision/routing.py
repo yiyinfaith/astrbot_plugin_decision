@@ -84,10 +84,25 @@ def choose_tools(
     always_keep_mcp_recommend = always_keep_mcp_recommend or set()
     always_keep_skills = always_keep_skills or set()
     always_keep_skills_recommend = always_keep_skills_recommend or set()
-    # Invert once: each handoff looks up its own question ids directly.
-    handoff_questions: dict[str, list[str]] = {}
-    for qid, handoff_name in (question_to_handoff or {}).items():
-        handoff_questions.setdefault(handoff_name, []).append(qid)
+    # Invert each question map once, so every candidate looks up its own
+    # question ids directly instead of scanning the whole map.
+    def questions_by_name(mapping: Mapping[str, str] | None) -> dict[str, list[str]]:
+        inverted: dict[str, list[str]] = {}
+        for qid, candidate in (mapping or {}).items():
+            inverted.setdefault(candidate, []).append(qid)
+        return inverted
+
+    def selected(question_ids: Sequence[str]) -> bool:
+        for qid in question_ids:
+            score = noul_answers.get(qid, {}).get("noul")
+            if isinstance(score, (int, float)) and not isinstance(score, bool) and score >= threshold:
+                return True
+        return False
+
+    tool_questions = questions_by_name(question_to_tool)
+    mcp_questions = questions_by_name(question_to_mcp)
+    skill_questions = questions_by_name(question_to_skill)
+    handoff_questions = questions_by_name(question_to_handoff)
     seen: set[str] = set()
     for tool in original_tools:
         name = str(getattr(tool, "name", ""))
@@ -112,13 +127,7 @@ def choose_tools(
         if is_handoff_tool(tool):
             handoffs.append(tool)
             keep = name in always_keep_handoffs
-            matching_ids = handoff_questions.get(name, ())
-            selected_by_jev = any(
-                isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
-                and not isinstance(noul_answers.get(qid, {}).get("noul"), bool)
-                and noul_answers[qid]["noul"] >= threshold
-                for qid in matching_ids
-            )
+            selected_by_jev = selected(handoff_questions.get(name, ()))
             if not keep and filter_handoffs:
                 keep = selected_by_jev
             elif not keep:
@@ -132,15 +141,7 @@ def choose_tools(
             continue
         if is_mcp_tool(tool):
             keep = name in always_keep_mcp
-            matching_ids = [
-                qid for qid, mcp_name in (question_to_mcp or {}).items() if mcp_name == name
-            ]
-            selected_by_jev = any(
-                isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
-                and not isinstance(noul_answers.get(qid, {}).get("noul"), bool)
-                and noul_answers[qid]["noul"] >= threshold
-                for qid in matching_ids
-            )
+            selected_by_jev = selected(mcp_questions.get(name, ()))
             if not keep and filter_mcp:
                 keep = selected_by_jev
             elif not keep:
@@ -151,13 +152,7 @@ def choose_tools(
                 recommended_mcp.append(name)
             continue
         keep = name in always_keep
-        matching_ids = [qid for qid, tool_name in question_to_tool.items() if tool_name == name]
-        selected_by_jev = any(
-            isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
-            and not isinstance(noul_answers.get(qid, {}).get("noul"), bool)
-            and noul_answers[qid]["noul"] >= threshold
-            for qid in matching_ids
-        )
+        selected_by_jev = selected(tool_questions.get(name, ()))
         if not keep and filter_ordinary:
             keep = selected_by_jev
         elif not keep:
@@ -176,15 +171,7 @@ def choose_tools(
         if not name or not tool_is_active(skill):
             continue
         keep = name in always_keep_skills
-        matching_ids = [
-            qid for qid, skill_name in (question_to_skill or {}).items() if skill_name == name
-        ]
-        selected_by_jev = any(
-            isinstance(noul_answers.get(qid, {}).get("noul"), (int, float))
-            and not isinstance(noul_answers[qid]["noul"], bool)
-            and noul_answers[qid]["noul"] >= threshold
-            for qid in matching_ids
-        )
+        selected_by_jev = selected(skill_questions.get(name, ()))
         if not keep and filter_skills:
             keep = selected_by_jev
         elif not keep:
