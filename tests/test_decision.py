@@ -946,7 +946,9 @@ def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     assert "origin_display" in page
     assert "Vue.createApp" not in page
     assert "createApp" in page
-    assert "https://glass.goose.cc.cd/liquid-glass.js" in page
+    # The optional glass library is bundled and loaded on demand, never from a CDN.
+    assert "./vendor/liquid-glass.js" in page
+    assert "glass.goose" not in page and "unpkg.com" not in page
     assert "setTabs" in page
     assert "background: linear-gradient" in page
     assert "只负责结构化判断的 Decision Model" in page
