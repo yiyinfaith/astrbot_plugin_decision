@@ -711,6 +711,67 @@ async def test_proactive_provider_request_marks_event_as_consumed(host, monkeypa
     assert event.call_llm is True
 
 
+@pytest.mark.asyncio
+async def test_proactive_request_is_yielded_after_the_session_lock_is_released(host, monkeypatch):
+    """AstrBot runs a yielded request before resuming the handler, so holding the
+    session lock there would make every other message in the session wait for
+    the whole proactive reply."""
+
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    host.config["proactive_reply_enabled"] = True
+    plugin._detail_settings["proactive_scope_blacklist"] = True
+    plugin.provider = object()
+    plugin._ready = True
+    host.context.conversation_manager = SimpleNamespace(
+        get_curr_conversation_id=AsyncMock(return_value="conversation-1"),
+        get_conversation=AsyncMock(return_value=SimpleNamespace()),
+    )
+    full = {"noul": 1.0}
+    monkeypatch.setattr(
+        plugin,
+        "_evaluate",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                answers=dict.fromkeys(
+                    (
+                        "is_addressing_bot",
+                        "should_interject",
+                        "conversation_relevance",
+                        "timing",
+                        "continuity",
+                    ),
+                    full,
+                )
+            )
+        ),
+    )
+    session = "qq:GroupMessage:group-1"
+    lock_held = []
+    event = SimpleNamespace(
+        unified_msg_origin=session,
+        is_at_or_wake_command=False,
+        call_llm=False,
+        get_message_type=lambda: 1,
+        get_message_str=lambda: "普通消息",
+        get_sender_id=lambda: "user-1",
+        get_sender_name=lambda: "用户",
+        get_self_id=lambda: "bot-1",
+        get_messages=lambda: [],
+        get_extra=lambda key, default=None: default,
+        get_message_outline=lambda: "普通消息",
+        request_llm=lambda **kwargs: lock_held.append(plugin.proactive.lock_for(session).locked())
+        or "provider-request",
+        should_call_llm=lambda value: setattr(event, "call_llm", value),
+    )
+
+    yielded = [item async for item in plugin.proactive_reply(event)]
+
+    assert yielded == ["provider-request"]
+    assert lock_held == [False]
+    # No on_llm_response arrived (e.g. a provider error): the slot is released.
+    assert not plugin.proactive.has_pending_reply(session)
+
+
 def test_path_fallback_uses_astrbot_data_directory(host, monkeypatch, tmp_path):
     plugin_directory = tmp_path / "plugin_installation"
     plugin_directory.mkdir()
@@ -1452,3 +1513,36 @@ def test_startup_drops_dashboard_provider_copy_when_native_is_set(host):
     assert persisted["jev_pre_prompt"] == "keep"
     host.config["decision_provider_id"] = ""
     assert plugin._setting("decision_provider_id", "") == ""
+
+
+def test_failed_provider_migration_keeps_the_legacy_copy_for_a_retry(host):
+    host.path.parent.mkdir(parents=True, exist_ok=True)
+    host.path.write_text(json.dumps({"decision_provider_id": "provider-x"}), encoding="utf-8")
+    host.config["decision_provider_id"] = ""
+    host.config.save_config = Mock(side_effect=OSError("simulated native write failure"))
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    assert plugin._setting("decision_provider_id", "") == "provider-x"
+    persisted = json.loads(host.path.read_text(encoding="utf-8"))
+    assert persisted["decision_provider_id"] == "provider-x"
+
+
+@pytest.mark.asyncio
+async def test_saving_unchanged_life_settings_keeps_the_running_life_runtime(host, monkeypatch):
+    from decision.life_config import life_defaults, normalize_life
+
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    current = normalize_life(life_defaults())
+    plugin._detail_settings["life"] = copy.deepcopy(current)
+    plugin._life_runtime = object()
+    restart = AsyncMock()
+    monkeypatch.setattr(plugin, "_configure_life_runtime", restart)
+
+    host.body.update(always_keep_tools=["jev_decide"], life=copy.deepcopy(current))
+    assert (await plugin.page_save_settings())["saved"] is True
+    restart.assert_not_awaited()
+
+    changed = copy.deepcopy(current)
+    changed["integration_settings"]["quiet_start"] = "22:00"
+    host.body.update(life=changed)
+    assert (await plugin.page_save_settings())["saved"] is True
+    restart.assert_awaited_once()

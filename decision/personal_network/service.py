@@ -1252,27 +1252,42 @@ class PersonalNetworkService:
             raw = await upload.read(MAX_AVATAR_BYTES + 1)
             if len(raw) > MAX_AVATAR_BYTES:
                 raise ValueError("avatar exceeds 2 MiB")
-            image = Image.open(io.BytesIO(raw))
-            if image.format not in {"JPEG", "PNG", "WEBP"}:
-                raise ValueError("avatar must be JPEG, PNG, or WebP")
-            image.thumbnail((512, 512))
-            if image.mode not in {"RGB", "RGBA"}:
-                image = image.convert("RGBA")
-            filename = f"{uuid.uuid4().hex}.webp"
-            output = io.BytesIO()
-            image.save(output, format="WEBP", quality=85, method=6)
-            (self.avatar_dir / filename).write_bytes(output.getvalue())
             persona_id = str(request.query.get("persona_id", "")).strip()
             if not persona_id:
                 # upload() cannot send query fields; resolve ownership by UUID.
-                persona_id = self._find_character_persona(character_id)
-            previous = await asyncio.to_thread(
-                self.storage.set_avatar, persona_id, character_id, filename
-            )
+                # Resolve it before anything is written, so an unknown
+                # character never leaves an orphan file behind.
+                persona_id = await asyncio.to_thread(self._find_character_persona, character_id)
+            # Decoding and WebP encoding are CPU-bound; keep them off the loop.
+            encoded = await asyncio.to_thread(self._encode_avatar, raw)
+            filename = f"{uuid.uuid4().hex}.webp"
+            target = self.avatar_dir / filename
+            target.write_bytes(encoded)
+            try:
+                previous = await asyncio.to_thread(
+                    self.storage.set_avatar, persona_id, character_id, filename
+                )
+            except BaseException:
+                target.unlink(missing_ok=True)
+                raise
             self._unlink_avatar(previous)
             return json_response({"saved": True, "avatar_data": self._avatar_data(filename)})
-        except (ValueError, UnidentifiedImageError, OSError) as exc:
+        except (ValueError, UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
             return error_response(str(exc))
+
+    @staticmethod
+    def _encode_avatar(raw: bytes) -> bytes:
+        """Validate an uploaded avatar and re-encode it as a 512px WebP."""
+
+        image = Image.open(io.BytesIO(raw))
+        if image.format not in {"JPEG", "PNG", "WEBP"}:
+            raise ValueError("avatar must be JPEG, PNG, or WebP")
+        image.thumbnail((512, 512))
+        if image.mode not in {"RGB", "RGBA"}:
+            image = image.convert("RGBA")
+        output = io.BytesIO()
+        image.save(output, format="WEBP", quality=85, method=6)
+        return output.getvalue()
 
     def _find_character_persona(self, character_id: str) -> str:
         """Find the owning persona for an avatar upload.

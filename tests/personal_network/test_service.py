@@ -1062,3 +1062,29 @@ def test_migration_without_legacy_directory_is_a_noop(services, data_dir: Path):
     services(FakeOwner(network_settings(enable=True)), data_dir)
 
     assert not (data_dir / "migrated_from_standalone.json").exists()
+
+
+async def test_avatar_upload_for_unknown_character_leaves_no_file(services, data_dir: Path):
+    import io as _io
+
+    from PIL import Image as PILImage
+
+    service = services(FakeOwner(network_settings(enable=True)), data_dir)
+    buffer = _io.BytesIO()
+    PILImage.new("RGB", (32, 32), "red").save(buffer, format="PNG")
+    payload = buffer.getvalue()
+
+    class Upload:
+        content_length = len(payload)
+
+        async def read(self, size=-1):
+            return payload
+
+    stub = reset_request()
+    stub.method = "POST"
+    stub.files_map = {"file": Upload()}
+
+    response = await service.api_avatar("unknown-character")
+
+    assert response["error"] == "character not found"
+    assert list(service.avatar_dir.glob("*.webp")) == []

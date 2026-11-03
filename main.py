@@ -14,7 +14,7 @@ from typing import Any
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.provider import ProviderRequest
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star
 from astrbot.core import AstrBotConfig
 from astrbot.core.agent.handoff import HandoffTool
 from astrbot.core.agent.tool import FunctionTool, ToolSet
@@ -177,12 +177,8 @@ class DecisionFunctionTool(FunctionTool):
     """Keep framework ownership, disable and reload tracking on this plugin."""
 
 
-@register(
-    PLUGIN_NAME,
-    "yiyinfaith",
-    "jev决策综合插件：用 Jev 判断 Tool、MCP、Skill、SubAgent 和主动对话，并保留 AstrBot 主 LLM 的最终控制权。",
-    "0.4.3",
-)
+# Plugin metadata (name, author, version) comes from metadata.yaml; the
+# register_star decorator is deprecated in AstrBot.
 class DecisionPlugin(Star):
     """AstrBot integration layer for a provider-neutral decision engine."""
 
@@ -219,6 +215,7 @@ class DecisionPlugin(Star):
                 for key in legacy:
                     config.pop(key, None)
         native_provider_id = str(config.get("decision_provider_id", "") or "").strip()
+        native_provider_persisted = bool(native_provider_id)
         legacy_provider_id = str(legacy_provider_id or "").strip()
         if not native_provider_id and legacy_provider_id:
             # One-time migration for a provider selected by older WebUI builds.
@@ -244,7 +241,7 @@ class DecisionPlugin(Star):
                             "Decision Engine kept the migrated JEV Provider selection but could not clean the legacy copy: %s",
                             _safe_error(exc),
                         )
-        if str(config.get("decision_provider_id", "") or "").strip():
+        if native_provider_persisted:
             # A non-empty native value is authoritative. A dashboard copy left by
             # earlier versions would otherwise take over (and be migrated back)
             # once the user clears the native field to use AstrBot's default.
@@ -754,7 +751,12 @@ class DecisionPlugin(Star):
             await self._ensure_multimodal()
         except Exception as exc:
             logger.warning("Decision Engine 多模态初始化失败：%s", _safe_error(exc))
-        await self._configure_life_runtime()
+        # 主动发起 is optional: a failing life store must not take down the
+        # fail-open Tool/MCP/Skill routing.  A later settings save retries it.
+        try:
+            await self._configure_life_runtime()
+        except Exception as exc:
+            logger.error("Decision Engine 主动发起后台启动失败：%s", _safe_error(exc))
         # Provider credentials are intentionally never inspected here. They
         # belong exclusively to AstrBot's native provider manager.
 
@@ -2284,27 +2286,44 @@ class DecisionPlugin(Star):
                 conversation = await self.context.conversation_manager.get_conversation(
                     session, cid
                 )
-                if not conversation:
-                    self.proactive.cancel_reply(session)
-                    return
-                event.is_at_or_wake_command = True
-                # This request is already being sent through the handler's
-                # ProviderRequest path.  Mark it as consumed so AstrBot's
-                # ProcessStage does not issue a second native LLM request
-                # merely because the event is also marked as awakened.
-                event.should_call_llm(True)
-                yield event.request_llm(
-                    prompt=text,
-                    # Continue AstrBot's native conversation so persona and
-                    # other plugin system prompts remain intact.
-                    session_id=cid,
-                    conversation=conversation,
-                )
             except Exception as exc:
                 self.proactive.cancel_reply(session)
                 logger.debug(
                     "Decision Engine proactive request was not queued: %s", _safe_error(exc)
                 )
+                return
+            if not conversation:
+                self.proactive.cancel_reply(session)
+                return
+        # Leave the per-session lock first: AstrBot runs the yielded request
+        # (the whole agent loop) before resuming this handler, and other
+        # messages in the session, including an explicit @bot, must not wait
+        # for that reply.  The reply slot is already reserved above.
+        try:
+            event.is_at_or_wake_command = True
+            # This request is already being sent through the handler's
+            # ProviderRequest path.  Mark it as consumed so AstrBot's
+            # ProcessStage does not issue a second native LLM request
+            # merely because the event is also marked as awakened.
+            event.should_call_llm(True)
+            yield event.request_llm(
+                prompt=text,
+                # Continue AstrBot's native conversation so persona and
+                # other plugin system prompts remain intact.
+                session_id=cid,
+                conversation=conversation,
+            )
+        except Exception as exc:
+            self.proactive.cancel_reply(session)
+            logger.debug("Decision Engine proactive request was not queued: %s", _safe_error(exc))
+            return
+        # The pipeline resumes this handler after the request has run. A
+        # successful reply already cleared the slot in remember_bot_response;
+        # after a provider error or a disabled hook, release it here so the
+        # session is not pinned (never pruned) and a later user-addressed reply
+        # is not mistaken for this proactive one.  The reply stays counted.
+        if self.proactive.has_pending_reply(session):
+            self.proactive.mark_reply_finished(session)
 
     @filter.event_message_type(
         EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE,
@@ -4043,6 +4062,12 @@ class DecisionPlugin(Star):
         # or prune proactive history while reporting a failed save to the UI.
         previous_detail_settings = copy.deepcopy(self._detail_settings)
         settings_file_existed = self._settings_path.exists()
+        provider_to_write = str(detail_values.get("decision_provider_id", "") or "")
+        if callable(getattr(self.config, "save_config", None)):
+            # AstrBot's native config is the only durable store for the
+            # Provider; a copy in this file would resurface after the native
+            # field is cleared.  The native value is written below.
+            detail_values.pop("decision_provider_id", None)
         try:
             self._save_detail_settings(detail_values)
         except OSError as exc:
@@ -4054,9 +4079,7 @@ class DecisionPlugin(Star):
             # dashboard selection synchronized without touching credentials.
             previous_native_present = "decision_provider_id" in self.config
             previous_native_value = self.config.get("decision_provider_id")
-            self.config["decision_provider_id"] = str(
-                detail_values.get("decision_provider_id", "") or ""
-            )
+            self.config["decision_provider_id"] = provider_to_write
             save_config = getattr(self.config, "save_config", None)
             if callable(save_config):
                 try:
@@ -4094,9 +4117,6 @@ class DecisionPlugin(Star):
                         _safe_error(exc),
                     )
                     return error_response("Jev 模型提供商写入失败，原设置保持不变", status_code=500)
-                else:
-                    # AstrBot's native config now holds the selection durably.
-                    self._drop_detail_provider_copy()
         self.proactive.reconfigure(
             self._int("proactive_history_max_messages", 12),
             self._int("proactive_max_sessions", 500),
@@ -4111,7 +4131,11 @@ class DecisionPlugin(Star):
             except Exception as exc:  # pragma: no cover - host API differences
                 logger.warning("Decision Engine 多模态工具状态刷新失败：%s", _safe_error(exc))
         await self._configure_output_runtime()
-        if life_values is not None:
+        # Restarting the life runtime cancels running WebUI jobs and drops
+        # queued delayed replies, so only do it when its settings changed.
+        if life_values is not None and (
+            life_values != previous_detail_settings.get("life") or self._life_runtime is None
+        ):
             try:
                 await self._configure_life_runtime()
             except Exception as exc:
