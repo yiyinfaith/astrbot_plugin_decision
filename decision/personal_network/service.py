@@ -1240,9 +1240,9 @@ class PersonalNetworkService:
                 if persona_id
                 else None
             )
-            if not filename or Path(filename).name != filename:
+            path = self._avatar_path(filename)
+            if path is None:
                 return error_response("avatar not found", status_code=404)
-            path = self.avatar_dir / filename
             if not path.is_file():
                 return error_response("avatar file not found", status_code=404)
             return file_response(path, content_type="image/webp")
@@ -1281,8 +1281,7 @@ class PersonalNetworkService:
             except OSError as exc:
                 # The new avatar is saved; a locked old file only stays behind.
                 logger.warning("人际网络旧头像删除失败：%s", exc)
-            avatar_data = "data:image/webp;base64," + base64.b64encode(encoded).decode()
-            return json_response({"saved": True, "avatar_data": avatar_data})
+            return json_response({"saved": True, "avatar_data": self._webp_data_url(encoded)})
         except (ValueError, UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
             return error_response(str(exc))
 
@@ -1328,12 +1327,20 @@ class PersonalNetworkService:
         Returns:
             WebP data URL, or ``None`` when the file is unavailable.
         """
+        path = self._avatar_path(filename)
+        if path is None or not path.is_file():
+            return None
+        return self._webp_data_url(path.read_bytes())
+
+    def _avatar_path(self, filename: str | None) -> Path | None:
+        """Resolve a stored avatar basename inside the avatar directory."""
         if not filename or Path(filename).name != filename:
             return None
-        path = self.avatar_dir / filename
-        if not path.is_file():
-            return None
-        return "data:image/webp;base64," + base64.b64encode(path.read_bytes()).decode()
+        return self.avatar_dir / filename
+
+    @staticmethod
+    def _webp_data_url(data: bytes) -> str:
+        return "data:image/webp;base64," + base64.b64encode(data).decode()
 
     def _unlink_avatar(self, filename: str | None) -> None:
         """Remove a safely scoped avatar file when present.
@@ -1341,8 +1348,9 @@ class PersonalNetworkService:
         Args:
             filename: Stored avatar basename.
         """
-        if filename and Path(filename).name == filename:
-            (self.avatar_dir / filename).unlink(missing_ok=True)
+        path = self._avatar_path(filename)
+        if path is not None:
+            path.unlink(missing_ok=True)
 
     async def api_export(self) -> Any:
         """Download a complete version-four JSON export for one persona."""

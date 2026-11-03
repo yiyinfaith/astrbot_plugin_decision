@@ -1427,15 +1427,13 @@ class NetworkStorage:
             ).fetchone()
         return str(row["persona_id"]) if row else None
 
-    def avatar_filename(self, character_id: str, persona_id: str = "") -> str | None:
-        """Return a character's avatar filename, scoped to a persona when given."""
-        query = "SELECT avatar_filename FROM characters WHERE id = ?"
-        params: tuple[str, ...] = (character_id,)
-        if persona_id:
-            query += " AND persona_id = ?"
-            params = (character_id, persona_id)
+    def avatar_filename(self, character_id: str, persona_id: str) -> str | None:
+        """Return the avatar filename of a character in one persona's network."""
         with self._lock:
-            row = self._conn.execute(query, params).fetchone()
+            row = self._conn.execute(
+                "SELECT avatar_filename FROM characters WHERE id = ? AND persona_id = ?",
+                (character_id, persona_id),
+            ).fetchone()
         return row["avatar_filename"] if row else None
 
     def set_avatar(self, persona_id: str, character_id: str, filename: str | None) -> str | None:

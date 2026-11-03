@@ -8,6 +8,7 @@ rebuilds or replaces AstrBot's native context.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import time
 from collections import Counter, defaultdict, deque
 from collections.abc import Iterable, Mapping
@@ -266,6 +267,9 @@ class ProactiveState:
     """Bounded per-session history, state machine, cooldowns and async locks."""
 
     def __init__(self, max_messages: int = 12, max_sessions: int = 500) -> None:
+        # Unique across sessions, so a request from a pruned and recreated
+        # session can never match a newer reservation.
+        self._reply_tokens = itertools.count(1)
         self.max_messages = max(2, int(max_messages))
         self.max_sessions = max(1, int(max_sessions))
         # history remains public for compatibility with the previous class.
@@ -480,7 +484,7 @@ class ProactiveState:
         current.last_reply = now
         current.pending_reply = True
         current.pending_since = now
-        current.reply_token += 1
+        current.reply_token = next(self._reply_tokens)
         self.last_reply[str(session)] = now
         return True
 
@@ -515,12 +519,17 @@ class ProactiveState:
     def mark_reply_finished(self, session: str) -> None:
         self._session(session).pending_reply = False
 
-    def cancel_reply(self, session: str) -> None:
-        """Release a reply slot when the request was never queued."""
+    def cancel_reply(self, session: str, token: int | None = None) -> None:
+        """Release a reply slot when the request was never queued.
+
+        With ``token``, only that reservation is released, never a newer one.
+        """
 
         key = str(session)
         current = self._session(key)
         if not current.pending_reply:
+            return
+        if token is not None and current.reply_token != token:
             return
         current.pending_reply = False
         # ``allow_reply`` appends the reservation as the newest timestamp. It

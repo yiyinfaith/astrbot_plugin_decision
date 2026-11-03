@@ -1196,6 +1196,26 @@ def test_hung_proactive_request_stops_blocking_after_the_timeout():
     assert state.allow_reply("g", cooldown_seconds=0, window_seconds=600, max_replies=5)
 
 
+def test_reply_tokens_stay_unique_when_a_session_is_recreated():
+    state = ProactiveState()
+    assert state.allow_reply("g", cooldown_seconds=0, window_seconds=600, max_replies=5)
+    old = state.pending_reply_token("g")
+    state.sessions.pop("g")
+    assert state.allow_reply("g", cooldown_seconds=0, window_seconds=600, max_replies=5)
+    assert state.pending_reply_token("g") != old
+
+
+def test_cancel_reply_with_a_stale_token_keeps_the_newer_reservation():
+    state = ProactiveState()
+    assert state.allow_reply("g", cooldown_seconds=0, window_seconds=600, max_replies=5)
+    old = state.pending_reply_token("g")
+    state.mark_reply_finished("g")
+    assert state.allow_reply("g", cooldown_seconds=0, window_seconds=600, max_replies=5)
+    newer = state.pending_reply_token("g")
+    state.cancel_reply("g", old)
+    assert state.pending_reply_token("g") == newer
+
+
 def test_proactive_analysis_cooldown_does_not_drop_new_history():
     state = ProactiveState(max_messages=4)
     state.add("g", ProactiveRecord("Alice", "1", "first"))

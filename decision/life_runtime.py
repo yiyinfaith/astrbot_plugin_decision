@@ -200,7 +200,9 @@ class LifeRuntime(VirtualLifeBase):
                 self.contacts.seed_legacy(parsed[0], state.persona_id, state, self._now())
         self._loaded = True
         await self.image_renderer.cleanup()
-        if self.enabled:
+        # Snapshot: the scheduler is only started here.
+        self.started_enabled = self.enabled
+        if self.started_enabled:
             self.runtime.start(
                 self.config["schedule_settings"]["generate_time"], self._daily_refresh
             )
@@ -270,7 +272,12 @@ class LifeRuntime(VirtualLifeBase):
         self._delivery_persona_ids.clear()
         self.audit.clear()
         if self._loaded:
-            await super().terminate()
+            try:
+                await super().terminate()
+            except Exception as exc:
+                errors.append(exc)
+        for extra in errors[1:]:
+            logger.warning("主动发起后台关闭时的其他错误：%s", extra)
         if errors:
             raise errors[0]
 

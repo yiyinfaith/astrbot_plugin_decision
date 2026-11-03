@@ -206,7 +206,7 @@ class DecisionPlugin(Star):
         if legacy:
             try:
                 self._save_detail_settings({**legacy, **self._detail_settings})
-            except OSError as exc:
+            except (OSError, TypeError, ValueError) as exc:
                 # Do not remove framework-owned values until the durable
                 # migration succeeds.  Keeping them in memory preserves the
                 # user's policy for this run and allows a later retry.
@@ -2158,8 +2158,12 @@ class DecisionPlugin(Star):
                 observation_timeout=self._float("observation_timeout_seconds", 600.0),
             )
             # A proactive reply is already in flight: allow_reply would reject
-            # any result, so do not spend a Jev request on this message.
+            # any result, so do not spend a Jev request on this message.  An
+            # explicit summon is still answered, by AstrBot's native Agent.
             if self.proactive.has_pending_reply(session):
+                if explicit_summon and self._bool("force_reply_when_summoned", True):
+                    event.is_at_or_wake_command = True
+                    self.proactive.set_status(session, ProactiveStatus.SUMMONED)
                 return
             if explicit_summon and self._bool("force_reply_when_summoned", True):
                 should_reply = True
@@ -2311,7 +2315,7 @@ class DecisionPlugin(Star):
             yield request
         except Exception as exc:
             if not queued:
-                self.proactive.cancel_reply(session)
+                self.proactive.cancel_reply(session, reply_token)
             logger.debug("Decision Engine proactive request failed: %s", _safe_error(exc))
         finally:
             # A delivered reply already settled this reservation in
@@ -2662,7 +2666,14 @@ class DecisionPlugin(Star):
                 try:
                     await runtime.initialize()
                 except BaseException:
-                    await runtime.terminate()
+                    # Clean up, but never let a close error replace the real
+                    # failure (or a CancelledError).
+                    try:
+                        await runtime.terminate()
+                    except Exception as exc:
+                        logger.warning(
+                            "Decision Engine 主动发起后台清理失败：%s", _safe_error(exc)
+                        )
                     raise
                 self._life_runtime = runtime
             return self._life_runtime
@@ -2675,7 +2686,14 @@ class DecisionPlugin(Star):
                 # a failure there still lets a later save start a fresh one.
                 runtime, self._life_runtime = self._life_runtime, None
                 if runtime is not None:
-                    await runtime.terminate()
+                    try:
+                        await runtime.terminate()
+                    except Exception as exc:
+                        # terminate() always stops the scheduler and tasks
+                        # first, so starting the new runtime is still safe.
+                        logger.warning(
+                            "Decision Engine 旧主动发起后台关闭时出错：%s", _safe_error(exc)
+                        )
         # 主动发起 is enabled by its own per-kind switches (私聊主动 / 群聊主动),
         # so there is no separate master switch to consult here.
         await self._get_life_runtime()
@@ -4083,6 +4101,11 @@ class DecisionPlugin(Star):
             previous_native_value = self.config.get("decision_provider_id")
             self.config["decision_provider_id"] = provider_to_write
             save_config = getattr(self.config, "save_config", None)
+            if not callable(save_config):
+                logger.warning(
+                    "Decision Engine: this config cannot be saved, so the JEV Provider "
+                    "selection only lasts until the plugin reloads."
+                )
             if callable(save_config):
                 try:
                     save_config()
@@ -4108,7 +4131,7 @@ class DecisionPlugin(Star):
                         else:
                             self._detail_settings = previous_detail_settings
                             self._settings_path.unlink(missing_ok=True)
-                    except OSError as rollback_exc:
+                    except (OSError, TypeError, ValueError) as rollback_exc:
                         logger.error(
                             "Decision Engine could not roll back JEV Provider settings: %s",
                             _safe_error(rollback_exc),
@@ -4147,6 +4170,10 @@ class DecisionPlugin(Star):
         if life_values is not None and (
             self._life_runtime is None
             or life_values != getattr(self._life_runtime, "config", None)
+            # started while 主动发起 was off (or on): the scheduler only starts in
+            # initialize(), so a switch change needs a fresh runtime
+            or getattr(self._life_runtime, "started_enabled", None)
+            != getattr(self._life_runtime, "enabled", None)
         ):
             try:
                 await self._configure_life_runtime()
