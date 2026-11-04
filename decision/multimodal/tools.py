@@ -1,4 +1,4 @@
-"""The four LLM tools that let the model ask for media understanding on demand.
+"""The LLM tools that let the model ask for media understanding on demand.
 
 They are registered through the plugin's normal tool path, so the existing JEV
 tool filtering, scope lists and enable/disable switches all apply unchanged.
@@ -31,6 +31,11 @@ TARGET_ARG = {
     ),
 }
 
+VIDEO_TARGET_ARG = {
+    "type": "string",
+    "description": "只精读一段时间（秒）：如 30-45，或 30-45@2 表示每秒 2 帧",
+}
+
 INSTRUCTION_ARG = {
     "type": "string",
     "description": "可选的自定义分析指令，例如“分析这段视频第 20 秒发生了什么”",
@@ -38,7 +43,10 @@ INSTRUCTION_ARG = {
 
 DETAIL_ARG = {
     "type": "boolean",
-    "description": "是否返回更详细的分析结果（会消耗更多 token）",
+    "description": (
+        "细致分析：视频会抽更多、更高清的画面并多给一轮精读，"
+        "回答更细（会消耗更多 token）"
+    ),
 }
 
 FORCE_ARG = {
@@ -47,11 +55,29 @@ FORCE_ARG = {
 }
 
 
+# Every tool name a media kind owns; the plugin registers, toggles and lists
+# understanding tools only through this table.
+TOOL_NAMES = {
+    "image": ("understand_image",),
+    "video": ("understand_video", "understand_video_segment"),
+    "audio": ("understand_audio",),
+    "file": ("understand_file",),
+}
+
+
+def tool_names(kinds: tuple[str, ...] | list[str] | set[str]) -> set[str]:
+    return {name for kind in kinds for name in TOOL_NAMES.get(kind, ())}
+
+
+def all_tool_names() -> set[str]:
+    return tool_names(tuple(TOOL_NAMES))
+
+
 def _schema(kind: str) -> dict[str, Any]:
     properties = {
         "selector": SELECTOR_ARG,
         "instruction": INSTRUCTION_ARG,
-        "target": TARGET_ARG,
+        "target": VIDEO_TARGET_ARG if kind == "video" else TARGET_ARG,
         "detail": DETAIL_ARG,
         "force": FORCE_ARG,
     }
@@ -84,6 +110,11 @@ def _result(item: Any, error: str, *, detail: bool) -> str:
     meta = item.meta or {}
     if meta.get("frames"):
         lines.append(f"（共 {meta['frames']} 帧，模式 {meta.get('mode', 'frames')}）")
+    if meta.get("mode") == "agentic":
+        lines.append(
+            f"（精读 {meta.get('rounds_used', 0)} 轮、{meta.get('windows', 0)} 段，"
+            "需要时可用 understand_video_segment 精读指定时间段）"
+        )
     if meta.get("segments"):
         lines.append(f"（音频分 {meta['segments']} 段处理）")
     return "\n".join(lines)
@@ -108,6 +139,12 @@ def build_tools(runtime: Any, kinds: tuple[str, ...]) -> list[Any]:
         ("understand_audio", "audio", "理解当前会话中的音频，包括语音转录、环境声音与音乐。"),
         ("understand_file", "file", "理解当前会话中发送的文件（PDF/DOCX/PPTX/XLSX/文本等）。"),
     )
+    segment = (
+        "understand_video_segment",
+        "video",
+        "精读视频中的一段时间：按指定起止秒数和每秒帧数重新抽帧分析，"
+        "适合确认快速动作或某个时刻的细节。",
+    )
     tools: list[Any] = []
     for name, kind, description in specs:
         if kind not in kinds:
@@ -120,7 +157,65 @@ def build_tools(runtime: Any, kinds: tuple[str, ...]) -> list[Any]:
                 handler=_handler(runtime, kind),
             )
         )
+    if "video" in kinds:
+        name, kind, description = segment
+        tools.append(
+            FunctionTool(
+                name=name,
+                description=description,
+                parameters=SEGMENT_SCHEMA,
+                handler=_segment_handler(runtime),
+            )
+        )
     return tools
+
+
+SEGMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "selector": SELECTOR_ARG,
+        "start": {"type": "number", "description": "开始时间（秒）"},
+        "end": {"type": "number", "description": "结束时间（秒）"},
+        "fps": {
+            "type": "number",
+            "description": "每秒抽几帧；快速动作用更高的值，留空按时长自动决定",
+        },
+        "instruction": INSTRUCTION_ARG,
+        "detail": DETAIL_ARG,
+        "force": FORCE_ARG,
+    },
+    "required": ["start", "end"],
+    "additionalProperties": False,
+}
+
+
+def _segment_handler(runtime: Any):
+    async def handle(event: Any, **kwargs: Any) -> str:
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        if not umo:
+            return "无法确定当前会话，已拒绝访问媒体。"
+        try:
+            start = float(kwargs.get("start"))
+            end = float(kwargs.get("end"))
+            fps = float(kwargs.get("fps") or 0)
+        except (TypeError, ValueError):
+            return "start、end、fps 必须是数字（秒 / 每秒帧数）。"
+        if start < 0 or end <= start or fps < 0:
+            return "时间范围无效：需要 0 ≤ start < end，fps 不能为负。"
+        target = f"{start:g}-{end:g}" + (f"@{fps:g}" if fps else "")
+        detail = bool(kwargs.get("detail"))
+        item, error = await runtime.understand_by_selector(
+            umo,
+            kind="video",
+            selector=str(kwargs.get("selector") or "latest"),
+            instruction=str(kwargs.get("instruction") or ""),
+            detail=detail,
+            force=bool(kwargs.get("force")),
+            target=target,
+        )
+        return _result(item, error, detail=detail)
+
+    return handle
 
 
 def _handler(runtime: Any, kind: str):

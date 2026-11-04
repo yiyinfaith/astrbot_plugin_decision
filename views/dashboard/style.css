@@ -314,3 +314,15 @@ html #network-shell { --bg: var(--theme-bg); --surface: var(--theme-surface); --
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* Multimodal understanding, grouped by media kind */
+.mm-group { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+.mm-group > h3 { margin-bottom: 4px; color: var(--primary); font-size: 15px; }
+.mm-group h4 { margin: 18px 0 0; color: var(--muted); font-size: 13px; font-weight: 600; }
+
+/* 主动发起 workspace */
+.life-howto { margin-top: 12px; }
+.life-howto > summary { color: var(--muted); font-size: 12px; }
+.life-actions-label { align-self: center; min-width: 56px; color: var(--muted); font-size: 12px; }
+.life-section-title { display: flex; align-items: baseline; gap: 10px; margin: 8px 2px 0; font-size: 15px; }
+.life-section-title small { color: var(--muted); font-size: 12px; font-weight: 400; }

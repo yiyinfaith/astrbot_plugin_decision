@@ -656,6 +656,75 @@ def pdf_page_images(
     return rendered
 
 
+MIN_EMBEDDED_WIDTH = 80
+MIN_EMBEDDED_HEIGHT = 40
+
+
+def _pypdf_page_images(page: Any) -> list[Any]:
+    """Embedded images of one page that are big enough to matter (pypdf)."""
+
+    found = []
+    try:
+        images = list(page.images)
+    except Exception:
+        return found
+    for image in images:
+        try:
+            width, height = image.image.size
+        except Exception:
+            continue
+        if width >= MIN_EMBEDDED_WIDTH and height >= MIN_EMBEDDED_HEIGHT:
+            found.append(image)
+    return found
+
+
+def pdf_pages_needing_vision(path: Path) -> list[int]:
+    """pypdf fallback for PyMuPDF: pages with little text or real embedded images."""
+
+    from pypdf import PdfReader
+
+    pages = []
+    for number, page in enumerate(PdfReader(str(path)).pages):
+        try:
+            text = (page.extract_text() or "").strip()
+        except Exception:
+            text = ""
+        if len(text) < 40 or _pypdf_page_images(page):
+            pages.append(number)
+    return pages
+
+
+def pdf_embedded_images(
+    path: Path, workdir: Path, pages: list[int] | None = None, *, limit: int = 12
+) -> list[str]:
+    """Save embedded images as PNG when pages cannot be rendered (no PyMuPDF).
+
+    Charts, photos and diagrams inside an otherwise text-heavy PDF still reach
+    the vision model this way.  Names keep ``page-NN`` for page attribution.
+    """
+
+    from pypdf import PdfReader
+
+    saved: list[str] = []
+    edge = DEFAULT_EDGE
+    reader = PdfReader(str(path))
+    for number, page in enumerate(reader.pages):
+        if pages is not None and number not in pages:
+            continue
+        for order, image in enumerate(_pypdf_page_images(page)[:8], 1):
+            if len(saved) >= limit:
+                return saved
+            try:
+                picture = _flatten_alpha(image.image)
+                picture = _resize_to_edge(picture, edge)
+                target = workdir / f"page-{number + 1:02d}-image-{order}.png"
+                picture.save(target, format="PNG")
+                saved.append(str(target))
+            except Exception:
+                continue
+    return saved
+
+
 def extract_file_text(path: Path, settings: Any) -> Prepared:
     """Reduce a document to structured text (never executes anything)."""
 

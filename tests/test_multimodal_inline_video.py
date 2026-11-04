@@ -34,6 +34,8 @@ def runtime(tmp_path, provider, **settings):
         settings={
             "mm_default_model": "p",
             "mm_retries": 3,
+            # These tests cover the complete-clip route, which is opt-in.
+            "mm_video_strategy": "inline",
             **settings,
         },
     )

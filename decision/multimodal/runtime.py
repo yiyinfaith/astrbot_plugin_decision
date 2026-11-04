@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import threading
 import time
 from pathlib import Path
@@ -52,13 +53,6 @@ PROMPTS = {
         "下面是一份文档提取出的文本。请概括它的用途、结构与要点，保留关键的章节、表格或数据信息。"
     ),
 }
-
-AGENTIC_PROMPT = (
-    "你在分析一段较长视频。下面是从整个视频等间隔抽取的画面与时间点。"
-    "请先概括整体内容，再列出你认为需要更仔细查看的时间段（最多 {limit} 段），"
-    "每段用一行“起-止秒: 原因”表示。最后另起一行输出“摘要: ”加一句总述。"
-)
-
 
 class MultimodalRuntime:
     """Long-lived coordinator owned by the plugin."""
@@ -568,7 +562,7 @@ class MultimodalRuntime:
                     workdir = preprocess.new_workdir()
                     summary, meta = await asyncio.wait_for(
                         self._run_kind(ref, choice, model_instruction, detail, workdir),
-                        timeout=timeout,
+                        timeout=self._pipeline_timeout(kind, detail),
                     )
                 if prior is not None and summary.strip():
                     summary = f"{prior.summary[:8000]}\n\n补充理解：\n{summary.strip()}"
@@ -613,7 +607,7 @@ class MultimodalRuntime:
                 await self.cache.put(item)
                 return item
             except TimeoutError:
-                last_error = f"理解超时（{timeout:.0f}s）"
+                last_error = f"理解超时（{self._pipeline_timeout(kind, detail):.0f}s）"
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -635,6 +629,20 @@ class MultimodalRuntime:
         item.media_key = ref.content_key
         await self.cache.put(item)
         return item
+
+    def _pipeline_timeout(self, kind: str, detail: bool) -> float:
+        """Time for the whole analysis; each model call keeps its own timeout.
+
+        A long video makes an overview call, one call per seeking round and
+        possibly an audio transcript, so one call's timeout would cut the
+        seeking short.
+        """
+
+        timeout = float(self._settings.int("mm_timeout_seconds"))
+        if kind != "video":
+            return timeout
+        rounds = int(self._settings.int("mm_video_agentic_rounds")) + (1 if detail else 0)
+        return timeout * (rounds + 2)
 
     def _sweep_gif_dirs(self, max_age: float = 900.0) -> None:
         """Delete frame directories that no in-flight request can still reference."""
@@ -675,9 +683,10 @@ class MultimodalRuntime:
                 f"segment={settings.int('mm_audio_segment_seconds')}"
             )
         if kind == "video":
+            from .config import video_strategy
             from .inline_video import inline_credentials
 
-            strategy = settings.text("mm_video_strategy") or "auto"
+            strategy = video_strategy(settings.text("mm_video_strategy"))
             model = ""
             if provider is not None:
                 try:
@@ -689,23 +698,26 @@ class MultimodalRuntime:
                 if strategy == "native"
                 else (
                     "short-inline-long-seeking"
-                    if strategy == "auto" and inline_credentials(provider, model)[0]
-                    else "frames"
+                    if strategy == "inline" and inline_credentials(provider, model)[0]
+                    else "adaptive-frames-seeking"
                 )
             )
             endpoint = str((getattr(provider, "provider_config", None) or {}).get("api_base") or "")
             endpoint_id = hashlib.sha256(endpoint.encode()).hexdigest()[:16]
             return (
-                f"video:version=4:{strategy}:route={route}:endpoint={endpoint_id}:"
+                f"video:version=5:{strategy}:route={route}:endpoint={endpoint_id}:"
                 f"short={settings.int('mm_video_short_seconds')}:"
                 f"max={settings.int('mm_video_max_seconds')}:"
                 f"rounds={settings.int('mm_video_agentic_rounds')}:"
                 f"frames={settings.int('mm_video_max_frames')}:"
-                f"segments={settings.int('mm_video_agentic_segments')}"
+                f"segments={settings.int('mm_video_agentic_segments')}:"
+                f"scene={settings.int('mm_video_scene_sensitivity')}:"
+                f"budget={settings.int('mm_video_frame_budget')}:"
+                f"fps={settings.int('mm_video_seek_max_fps')}"
             )
         if kind == "file":
             return (
-                "file:version=2:enabled={enabled}:ocr={ocr}:{engine}:lang={lang}:"
+                "file:version=3:enabled={enabled}:ocr={ocr}:{engine}:lang={lang}:"
                 "ocr_timeout={ocr_timeout}:pages={pages}:max_chars={max_chars}:"
                 "chunk={chunk}:office={office}:office_pages={office_pages}:"
                 "office_timeout={office_timeout}:xlsx=stream-v1"
@@ -821,46 +833,43 @@ class MultimodalRuntime:
         workdir: Path,
         path: Path,
     ) -> tuple[str, dict[str, Any]]:
+        from . import video_seek
+        from .config import video_strategy
+
         settings = self._settings
-        strategy = (settings.text("mm_video_strategy") or "auto").lower()
-        # Unknown/long clips never use the complete inline route. Explicit
-        # native keeps the separately selected Files/Interactions behavior.
+        strategy = video_strategy(settings.text("mm_video_strategy"))
         info: dict[str, Any] = {}
         try:
             info = await preprocess.probe_video(path)
         except Exception as exc:
+            if strategy != "native":
+                raise
             logger.info("Decision Engine 视频元数据读取失败，将按未知时长处理：%s", str(exc)[:120])
-        if strategy in {"auto", "native"}:
-            duration = float(info.get("duration") or 0)
-            limit = float(settings.int("mm_video_max_seconds"))
-            if limit and duration > limit:
-                raise ValueError(f"视频时长 {duration:.0f}s 超过上限 {limit:.0f}s")
-            if strategy == "native":
-                native = await self._native_video(
-                    ref,
-                    choice,
-                    prompt,
-                    path,
-                    workdir,
-                    agentic=bool(duration > float(settings.int("mm_video_short_seconds"))),
-                )
-                if native is not None:
-                    return native
-            if strategy == "native":
-                raise ValueError(
-                    "当前模型/Provider 不支持原生视频理解（需要 Gemini 且可复用其 API Key）；"
-                    "请改用“自动选择”或“强制通用处理”"
-                )
-        if not info:
-            info = await preprocess.probe_video(path)
         duration = float(info.get("duration") or 0)
         limit = float(settings.int("mm_video_max_seconds"))
         if limit and duration > limit:
             raise ValueError(f"视频时长 {duration:.0f}s 超过上限 {limit:.0f}s")
-        timeout = float(settings.int("mm_timeout_seconds"))
         short_limit = float(settings.int("mm_video_short_seconds"))
+        timeout = float(settings.int("mm_timeout_seconds"))
 
-        if strategy == "auto" and 0 < duration <= short_limit:
+        # A time range in ``target`` (understand_video_segment, or the target
+        # argument of understand_video) is a focused re-read of that span.
+        focus = video_seek.parse_target(self._target(ref))
+        if focus is not None:
+            return await self._video_focus(ref, choice, prompt, detail, workdir, path, info, focus)
+
+        if strategy == "native":
+            native = await self._native_video(
+                ref, choice, prompt, path, workdir, agentic=bool(duration > short_limit)
+            )
+            if native is not None:
+                return native
+            raise ValueError(
+                "当前模型/Provider 不支持原生视频理解（需要 Gemini 官方 Files API）；"
+                "请改用“自动”"
+            )
+
+        if strategy == "inline" and 0 < duration <= short_limit:
             from . import inline_video
 
             inline_prompt = (
@@ -888,39 +897,63 @@ class MultimodalRuntime:
                     "has_audio": bool(info.get("has_audio")),
                 }
 
-        if duration <= short_limit or duration <= 0:
-            stamps = preprocess.sample_video(info, settings)
-            frames = await preprocess.extract_frames(path, workdir, stamps)
-            if not frames:
-                raise ValueError("无法从视频中提取画面")
-            transcript = (
-                await self._video_transcript(choice, path, workdir, timeout)
-                if info.get("has_audio")
-                else ""
-            )
-            answer = await adapters.call_provider(
-                choice.provider,
-                stream=self._settings.bool("mm_stream_enabled"),
-                gateway_openai=self._settings.bool("mm_gateway_openai_stream"),
-                prompt=self._compose(
-                    prompt,
-                    self._stamp_notes(stamps),
-                    self._video_audio_note(info, transcript),
-                ),
-                images=frames,
-                model=choice.model or None,
-                timeout=timeout,
-            )
-            return answer, {"duration": duration, "frames": len(frames), "mode": "frames"}
+        if duration <= short_limit:
+            return await self._video_short(choice, prompt, detail, workdir, path, info)
+        return await self._video_seek(choice, prompt, detail, workdir, path, info)
 
-        # Long video: iterate. Each round asks the model what to look at next and
-        # re-reads those windows at higher density.
-        rounds = max(1, int(settings.int("mm_video_agentic_rounds")))
-        windows_per_round = max(1, int(settings.int("mm_video_agentic_segments")) // 2 or 1)
-        stamps = preprocess.plan_timestamps(
-            duration, min(settings.int("mm_video_max_frames"), max(4, windows_per_round * 2))
+    def _video_frames_per_call(self, detail: bool) -> int:
+        from . import video_seek
+
+        frames = int(self._settings.int("mm_video_max_frames"))
+        if detail:
+            frames = int(math.ceil(frames * video_seek.DETAIL_FRAME_FACTOR))
+        return max(2, min(video_seek.HARD_MAX_FRAMES_PER_CALL, frames))
+
+    async def _video_call(self, choice: Any, prompt: str, notes: list[str], body: str, frames):
+        return await adapters.call_provider(
+            choice.provider,
+            stream=self._settings.bool("mm_stream_enabled"),
+            gateway_openai=self._settings.bool("mm_gateway_openai_stream"),
+            prompt=self._compose(prompt, notes, body),
+            images=frames,
+            model=choice.model or None,
+            timeout=float(self._settings.int("mm_timeout_seconds")),
         )
-        frames = await preprocess.extract_frames(path, workdir, stamps)
+
+    async def _video_short(
+        self,
+        choice: Any,
+        prompt: str,
+        detail: bool,
+        workdir: Path,
+        path: Path,
+        info: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        """Short clip: adaptive frames (even baseline + scene changes), one call."""
+
+        from . import video_seek
+
+        settings = self._settings
+        duration = float(info.get("duration") or 0)
+        timeout = float(settings.int("mm_timeout_seconds"))
+        per_call = self._video_frames_per_call(detail)
+        scenes: list[float] = []
+        if duration > 0:
+            # Density follows the length (about two frames a second, at least
+            # eight) and scene changes, so quick actions are not skipped.
+            budget = min(per_call, max(8, int(math.ceil(duration * 2))))
+            scenes = await video_seek.scene_changes(
+                path,
+                threshold=settings.int("mm_video_scene_sensitivity") / 100,
+                timeout=min(timeout, 120.0),
+            )
+            stamps = video_seek.adaptive_timestamps(
+                duration, budget, scenes, source_fps=float(info.get("fps") or 0)
+            )
+        else:
+            stamps = preprocess.plan_timestamps(duration, per_call)
+        edge = video_seek.DETAIL_EDGE if detail else video_seek.NORMAL_EDGE
+        frames = await preprocess.extract_frames(path, workdir, stamps, edge=edge)
         if not frames:
             raise ValueError("无法从视频中提取画面")
         transcript = (
@@ -928,75 +961,236 @@ class MultimodalRuntime:
             if info.get("has_audio")
             else ""
         )
-        audio_note = self._video_audio_note(info, transcript)
-        overview = await adapters.call_provider(
-            choice.provider,
-            stream=self._settings.bool("mm_stream_enabled"),
-            gateway_openai=self._settings.bool("mm_gateway_openai_stream"),
-            prompt=self._compose(
-                f"本次分析目标：{prompt}\n\n" + AGENTIC_PROMPT.format(limit=windows_per_round),
-                self._stamp_notes(stamps),
-                audio_note,
-            ),
-            images=frames,
-            model=choice.model or None,
-            timeout=timeout,
+        goal = prompt + (video_seek.DETAIL_SUFFIX if detail else "")
+        answer = await self._video_call(
+            choice,
+            goal,
+            self._stamp_notes(stamps),
+            self._video_audio_note(info, transcript),
+            frames,
         )
-        details: list[str] = []
-        seen: set[tuple[float, float]] = set()
-        if transcript:
-            overview = f"{overview}\n\n视频音轨转录与声音描述：\n{transcript}"
-        for round_index in range(rounds):
-            planned = self._parse_windows(
-                overview if round_index == 0 else "\n".join(details) or overview,
-                duration,
-                windows_per_round,
-            )
-            fresh = [window for window in planned if window not in seen][:windows_per_round]
-            if not fresh:
-                break
-            for window in fresh:
-                seen.add(window)
-                focus_stamps = preprocess.sample_video(info, settings, window=window)
-                focus = await preprocess.extract_frames(path, workdir, focus_stamps)
-                if not focus:
-                    continue
-                seen_text = "\n".join(details[-4:]) or "（暂无）"
-                pending_text = (
-                    "、".join(f"{w[0]:.0f}-{w[1]:.0f}s" for w in planned if w not in seen) or "无"
-                )
-                part = await adapters.call_provider(
-                    choice.provider,
-                    stream=self._settings.bool("mm_stream_enabled"),
-                    gateway_openai=self._settings.bool("mm_gateway_openai_stream"),
-                    prompt=self._compose(
-                        f"本次分析目标：{prompt}\n\n"
-                        f"这是第 {round_index + 2} 轮。已有发现：\n{seen_text}\n"
-                        f"尚未细看的区间：{pending_text}\n"
-                        f"现在只聚焦 {window[0]:.1f}s 到 {window[1]:.1f}s，"
-                        "说明与本次分析目标有关的细节，并指出仍需确认的问题。",
-                        self._stamp_notes(focus_stamps),
-                        audio_note,
-                    ),
-                    images=focus,
-                    model=choice.model or None,
-                    timeout=timeout,
-                )
-                details.append(f"[{window[0]:.1f}s-{window[1]:.1f}s] {part.strip()}")
-        summary = overview.strip()
-        if details:
-            summary = (
-                f"{summary}\n\n重点片段（{len(details)} 段，{rounds} 轮迭代）：\n"
-                + "\n".join(details)
-            )
-        return summary, {
+        return answer, {
             "duration": duration,
             "frames": len(frames),
-            "windows": len(details),
+            "mode": "frames",
+            "sampling": "adaptive",
+            "scene_cuts": len(scenes),
+            "detail": detail,
+        }
+
+    async def _video_seek(
+        self,
+        choice: Any,
+        prompt: str,
+        detail: bool,
+        workdir: Path,
+        path: Path,
+        info: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        """Long clip: global overview, then model-chosen windows until it is satisfied.
+
+        Every reply carries the model's next decision (``next``/``done``), so the
+        loop only ends when the model says it has enough, it repeats itself, or
+        a round, window or frame budget is exhausted.
+        """
+
+        from . import video_seek
+
+        settings = self._settings
+        duration = float(info.get("duration") or 0)
+        timeout = float(settings.int("mm_timeout_seconds"))
+        rounds = max(1, int(settings.int("mm_video_agentic_rounds")) + (1 if detail else 0))
+        max_windows = max(1, int(settings.int("mm_video_agentic_segments")))
+        per_round = max(1, int(math.ceil(max_windows / rounds)))
+        max_fps = float(settings.int("mm_video_seek_max_fps"))
+        per_call = self._video_frames_per_call(detail)
+        frame_budget = int(settings.int("mm_video_frame_budget"))
+        if detail:
+            frame_budget = int(frame_budget * video_seek.DETAIL_FRAME_FACTOR)
+        edge = video_seek.DETAIL_EDGE if detail else video_seek.NORMAL_EDGE
+        limits = {"min_fps": video_seek.MIN_FOCUS_FPS, "max_fps": f"{max_fps:g}"}
+
+        scenes = await video_seek.scene_changes(
+            path,
+            threshold=settings.int("mm_video_scene_sensitivity") / 100,
+            timeout=min(timeout, 180.0),
+        )
+        stamps = video_seek.adaptive_timestamps(
+            duration, per_call, scenes, source_fps=float(info.get("fps") or 0)
+        )
+        frames = await preprocess.extract_frames(path, workdir, stamps, edge=edge)
+        if not frames:
+            raise ValueError("无法从视频中提取画面")
+        used = len(frames)
+        transcript = (
+            await self._video_transcript(choice, path, workdir, timeout)
+            if info.get("has_audio")
+            else ""
+        )
+        audio_note = self._video_audio_note(info, transcript)
+        goal = prompt + (video_seek.DETAIL_SUFFIX if detail else "")
+        overview = await self._video_call(
+            choice,
+            video_seek.OVERVIEW_PROMPT.format(goal=goal, limit=max_windows, **limits),
+            self._stamp_notes(stamps),
+            audio_note,
+            frames,
+        )
+        calls = 1
+        # The overview may plan every window; each round reads ``per_round`` of them.
+        plan = video_seek.parse_plan(overview, duration, max_fps=max_fps, limit=max_windows)
+        answer = plan.answer or overview.strip()
+        if not plan.structured and not plan.windows:
+            # Neither JSON nor time ranges: still take one even look around.
+            plan.windows = video_seek.even_windows(duration, min(per_round, 3), 1.0)
+        seen: list[video_seek.Window] = []
+        findings: list[str] = []
+        rounds_used = 0
+        stop = "rounds"
+        while True:
+            if plan.structured and plan.done:
+                stop = "model_done"
+                break
+            if rounds_used >= rounds:
+                stop = "rounds"
+                break
+            fresh = [w for w in plan.windows if not video_seek.overlaps_seen(w, seen)]
+            fresh = fresh[: min(per_round, max_windows - len(seen))]
+            if not fresh:
+                stop = "windows" if len(seen) >= max_windows else "no_new_windows"
+                break
+            frames_left = frame_budget - used
+            if frames_left < 2:
+                stop = "frame_budget"
+                break
+            cap = max(2, min(frames_left, per_call) // len(fresh))
+            batch: list[str] = []
+            labels: list[str] = []
+            for index, window in enumerate(fresh):
+                window_dir = workdir / f"seek-{rounds_used}-{index}"
+                window_dir.mkdir(parents=True, exist_ok=True)
+                window_stamps = video_seek.window_timestamps(window, cap)
+                got = await preprocess.extract_frames(path, window_dir, window_stamps, edge=edge)
+                seen.append(window)
+                if not got:
+                    continue
+                used += len(got)
+                batch.extend(got)
+                points = "、".join(f"{s:.2f}" for s in window_stamps[: len(got)])
+                labels.append(
+                    f"\n- {window.label()}（约每秒 {window.fps:g} 帧，{len(got)} 帧，时间点：{points}）"
+                    + (f"：{window.reason}" if window.reason else "")
+                )
+            if not batch:
+                stop = "no_frames"
+                break
+            rounds_used += 1
+            reply = await self._video_call(
+                choice,
+                video_seek.SEEK_PROMPT.format(
+                    goal=goal,
+                    answer=video_seek.truncate(answer),
+                    seen="、".join(w.label() for w in seen) or "无",
+                    windows="".join(labels),
+                    limit=max(1, max_windows - len(seen)),
+                    rounds_left=rounds - rounds_used,
+                    frames_left=max(0, frame_budget - used),
+                    **limits,
+                ),
+                [],
+                audio_note,
+                batch,
+            )
+            calls += 1
+            span = "、".join(w.label() for w in fresh)
+            update = video_seek.parse_plan(
+                reply, duration, max_fps=max_fps, limit=max(1, max_windows - len(seen))
+            )
+            if update.structured:
+                answer = update.answer or answer
+                if update.findings:
+                    findings.append(f"[{span}] {update.findings}")
+                plan = update
+            else:
+                # Free text: keep it as a finding and continue with whatever
+                # the previous plan still had left, instead of giving up.
+                findings.append(f"[{span}] {video_seek.truncate(reply, 1500)}")
+                plan = video_seek.SeekPlan(
+                    answer=answer,
+                    windows=update.windows
+                    + [w for w in plan.windows if not video_seek.overlaps_seen(w, seen)],
+                )
+        summary = answer.strip()
+        if findings:
+            summary += (
+                f"\n\n重点片段（{len(findings)} 轮精读，共 {len(seen)} 段）：\n" + "\n".join(findings)
+            )
+        if transcript:
+            summary += f"\n\n视频音轨转录与声音描述：\n{transcript}"
+        return summary, {
+            "duration": duration,
+            "frames": used,
+            "windows": len(seen),
             "rounds": rounds,
-            "rounds_used": len(details),
+            "rounds_used": rounds_used,
+            "calls": calls,
+            "stop": stop,
             "mode": "agentic",
+            "scene_cuts": len(scenes),
             "has_audio": bool(info.get("has_audio")),
+            "detail": detail,
+        }
+
+    async def _video_focus(
+        self,
+        ref: MediaRef,
+        choice: Any,
+        prompt: str,
+        detail: bool,
+        workdir: Path,
+        path: Path,
+        info: dict[str, Any],
+        focus: Any,
+    ) -> tuple[str, dict[str, Any]]:
+        """Re-read one time range at a chosen frame rate (one call)."""
+
+        from . import video_seek
+
+        duration = float(info.get("duration") or 0)
+        start = max(0.0, focus.start)
+        end = min(focus.end, duration) if duration > 0 else focus.end
+        if end - start < 0.5:
+            raise ValueError(f"时间范围 {focus.start:g}-{focus.end:g}s 不在视频内（时长 {duration:.1f}s）")
+        per_call = self._video_frames_per_call(detail)
+        max_fps = float(self._settings.int("mm_video_seek_max_fps"))
+        span = end - start
+        fps = focus.fps or per_call / span
+        fps = max(video_seek.MIN_FOCUS_FPS, min(max_fps, fps))
+        window = video_seek.Window(start, end, fps)
+        stamps = video_seek.window_timestamps(window, per_call)
+        edge = video_seek.DETAIL_EDGE if detail else video_seek.NORMAL_EDGE
+        frames = await preprocess.extract_frames(path, workdir, stamps, edge=edge)
+        if not frames:
+            raise ValueError("无法从该时间范围提取画面")
+        # Share what is already known about the whole clip (no extra call).
+        context = ""
+        for prior in await self.cache.analyses_for_media(ref.umo, ref.content_key, target=""):
+            if prior.ok and prior.summary:
+                context = video_seek.truncate(prior.summary, 3000)
+                break
+        goal = video_seek.FOCUS_PROMPT.format(
+            start=start, end=end, fps=round(len(frames) / span, 2), goal=prompt
+        ) + (video_seek.DETAIL_SUFFIX if detail else "")
+        if context:
+            goal += f"\n\n此前对整段视频的理解（仅供参考，以画面为准）：\n{context}"
+        answer = await self._video_call(choice, goal, self._stamp_notes(stamps), "", frames)
+        return answer, {
+            "duration": duration,
+            "frames": len(frames),
+            "mode": "focus",
+            "window": [round(start, 2), round(end, 2)],
+            "fps": round(len(frames) / span, 2),
+            "detail": detail,
         }
 
     async def _run_file(
@@ -1207,6 +1401,13 @@ class MultimodalRuntime:
 
         try:
             import fitz
+        except ImportError:
+            # Without PyMuPDF, still find scanned pages and embedded images.
+            try:
+                return preprocess.pdf_pages_needing_vision(path)
+            except Exception:
+                return []
+        try:
 
             pages: list[int] = []
             with fitz.open(str(path)) as document:
@@ -1265,9 +1466,20 @@ class MultimodalRuntime:
             raise ValueError("该文件没有可提取文本，且只有 PDF 支持页面渲染 OCR")
         strategy = (self._settings.text("mm_ocr_strategy") or "auto").lower()
         selected_pages = pages or self._target_pdf_pages(target) or None
-        images = await asyncio.to_thread(
-            preprocess.pdf_page_images, path, self._settings, workdir, selected_pages
-        )
+        try:
+            images = await asyncio.to_thread(
+                preprocess.pdf_page_images, path, self._settings, workdir, selected_pages
+            )
+        except ValueError:
+            # No PyMuPDF to render pages: hand the embedded images (charts,
+            # photos, scans) to the vision model instead.
+            images = await asyncio.to_thread(
+                preprocess.pdf_embedded_images,
+                path,
+                workdir,
+                list(selected_pages) if selected_pages is not None else None,
+                limit=self._settings.int("mm_file_ocr_max_pages") * 2,
+            )
         # A hybrid page can have a perfectly healthy text layer and still hide
         # unique text in a scanned image.  Add bounded crops of those image
         # regions so OCR/vision can inspect the region without relying on the
@@ -1314,8 +1526,10 @@ class MultimodalRuntime:
             stream=self._settings.bool("mm_stream_enabled"),
             gateway_openai=self._settings.bool("mm_gateway_openai_stream"),
             prompt=(
-                f"{prompt}\n\n这是扫描版文档的页面图片，PDF 页码为：{page_numbers}。"
-                "请按对应页码逐页转写可见文字并保留章节与表格结构；无法辨认处标注“不清”。"
+                f"{prompt}\n\n下面是文档页面图片及页面中嵌入图片的放大图，对应 PDF 页码为：{page_numbers}。"
+                "请按页码：1. 转写可见文字并保留章节与表格结构，无法辨认处标注“不清”；"
+                "2. 对图表、照片、示意图等非文字图片，说明画面内容、其中的数据或趋势，"
+                "以及它与正文的关系，不要只写“这是一张图片”。"
                 + (
                     f"\n本地 OCR 初稿如下，请校对并补充视觉中遗漏的内容：\n{local_text}"
                     if local_text
@@ -1547,31 +1761,6 @@ class MultimodalRuntime:
     @staticmethod
     def _stamp_notes(stamps: list[float]) -> list[str]:
         return [f"第 {index + 1} 张 ≈ {moment:.1f}s" for index, moment in enumerate(stamps)]
-
-    @staticmethod
-    def _parse_windows(
-        text: str, duration: float, fallback_count: int
-    ) -> list[tuple[float, float]]:
-        import re
-
-        windows: list[tuple[float, float]] = []
-        for match in re.finditer(
-            r"(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*[-~到]\s*(\d+(?:\.\d+)?)", text or ""
-        ):
-            try:
-                start = max(0.0, float(match.group(1)))
-                end = min(duration or float(match.group(2)), float(match.group(2)))
-            except (TypeError, ValueError):
-                continue
-            if end - start >= 0.5:
-                windows.append((start, end))
-        if windows:
-            return windows[:6]
-        step = (duration or fallback_count) / max(1, fallback_count)
-        return [
-            (round(step * index, 2), round(step * (index + 1), 2))
-            for index in range(min(fallback_count, 3))
-        ]
 
     @staticmethod
     def _compose(prompt: str, notes: list[str], body: str) -> str:

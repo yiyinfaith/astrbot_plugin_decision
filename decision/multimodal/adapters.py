@@ -113,11 +113,8 @@ def describe_provider(provider: Any) -> dict[str, Any]:
         ),
         "supports": {kind: kind_supported(provider, kind) for kind in KIND_LABELS},
         "capability": {kind: classify_kind(provider, kind) for kind in KIND_LABELS},
-        "video_route_label": (
-            "自动：短片完整视频；长片抽帧与 Agentic Seeking"
-            if inline_credentials(provider, model)[0]
-            else "自动：短片抽帧；长片抽帧与 Agentic Seeking"
-        ),
+        # Whether the "inline" video strategy can send short clips whole.
+        "video_inline": bool(inline_credentials(provider, model)[0]),
     }
 
 

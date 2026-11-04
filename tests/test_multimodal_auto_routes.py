@@ -132,14 +132,10 @@ async def test_auto_gateway_uses_provider_frames_without_files(
         item = await runtime.understand(ref, instruction="检查红色花朵")
         assert item.ok, item.error
         assert state["native_calls"] == [], "auto must not probe Files/Interactions on a gateway"
-        inline = provider_type == "googlegenai_chat_completion" and duration == 5
-        assert item.meta["mode"] == (
-            "inline" if inline else "frames" if duration == 5 else "agentic"
-        )
-        assert len(state["inline_calls"]) == int(inline)
-        if inline:
-            assert not provider.calls and not state["frame_calls"]
-            return
+        # auto is frames + vision model for every provider (no complete-clip
+        # upload either), so a CPA-style Gemini proxy works unchanged.
+        assert item.meta["mode"] == ("frames" if duration == 5 else "agentic")
+        assert state["inline_calls"] == []
         assert len(provider.calls) == (1 if duration == 5 else 2)
         assert all(call["image_urls"] for call in provider.calls)
         assert "检查红色花朵" in provider.calls[0]["prompt"]
@@ -179,10 +175,10 @@ async def test_official_auto_and_explicit_native_keep_native_route(
 
 
 @pytest.mark.asyncio
-async def test_auto_route_change_invalidates_video_cache(tmp_path, video_pipeline):
+async def test_inline_route_change_invalidates_video_cache(tmp_path, video_pipeline):
     video, state = video_pipeline
     provider = RecordingProvider("openai_chat_completion", "https://gateway.example/v1")
-    runtime = runtime_for(tmp_path, provider)
+    runtime = runtime_for(tmp_path, provider, "inline")
     ref = MediaRef(kind="video", reference=str(video), urn="v", umo="chat:1")
     try:
         await runtime.initialize()

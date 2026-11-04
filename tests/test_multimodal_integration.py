@@ -271,13 +271,15 @@ async def test_long_video_runs_real_rounds(tmp_path, monkeypatch):
 
     monkeypatch.setattr("decision.multimodal.preprocess.probe_video", fake_probe)
     monkeypatch.setattr("decision.multimodal.preprocess.extract_frames", fake_frames)
-    # Every reply proposes a fresh window so round 2 has work to do.
+    # The model keeps asking for a fresh window, so every round has work to do;
+    # the old loop stopped after round 1 because it re-parsed free text.
     replies = iter(
         [
-            "整体是一次户外活动。\n10-40: 人物讲话\n40-80: 有人走动",
-            "第 2 轮：这里出现了关键动作。",
-            "第 3 轮：补充细节。",
-            "第 4 轮：更多细节。",
+            '{"answer": "一次户外活动", "next": [{"start": 10, "end": 40, "fps": 1}], "done": false}',
+            '{"answer": "户外活动，有人讲话", "findings": "12s 有人举手",'
+            ' "next": [{"start": 40, "end": 80, "fps": 2}], "done": false}',
+            '{"answer": "户外活动：讲话后有人走动", "findings": "55s 起身离开", "next": [], "done": true}',
+            '{"answer": "不应被调用", "next": [], "done": true}',
         ]
     )
 
@@ -295,8 +297,11 @@ async def test_long_video_runs_real_rounds(tmp_path, monkeypatch):
     assert item.ok
     assert item.meta.get("rounds") == 2
     assert item.meta.get("mode") == "agentic"
-    # round 1 overview + one focused read per round => at least 3 calls
-    assert len(provider.calls) >= 3
+    # overview + both seeking rounds, then the model's done ends it
+    assert len(provider.calls) == 3
+    assert item.meta["rounds_used"] == 2 and item.meta["stop"] == "model_done"
+    assert item.summary.startswith("户外活动：讲话后有人走动")
+    assert "55s 起身离开" in item.summary
     await runtime.terminate()
 
 

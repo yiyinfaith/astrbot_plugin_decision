@@ -375,3 +375,10 @@ textarea { min-height: 180px; resize: vertical; line-height: 1.55; font: 12px/1.
 .native-tab.selected { color: #fff; border-color: #aebaff85; background: linear-gradient(125deg, #2460c5, #6752b6); }
 .billing-picker-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 @media (max-width: 560px) { .native-tabs, .billing-picker-row { grid-template-columns: 1fr; } }
+.mm-group { margin-top: 22px; padding-top: 18px; border-top: 1px solid rgba(170,205,255,.16); }
+.mm-group > h3 { margin: 0 0 4px; color: #9ec5ff; font-size: 15px; }
+.mm-group h4 { margin: 18px 0 0; color: #a9b6d4; font-size: 13px; }
+.life-howto { margin-top: 12px; } .life-howto > summary { cursor: pointer; color: #a9b6d4; font-size: 12px; }
+.life-actions-label { align-self: center; min-width: 56px; color: #a9b6d4; font-size: 12px; }
+.life-section-title { display: flex; align-items: baseline; gap: 10px; margin: 8px 4px 0; color: #e8f2ff; font-size: 16px; }
+.life-section-title small { color: #a9b6d4; font-size: 12px; font-weight: 400; }

@@ -18,7 +18,7 @@ from typing import Any
 
 # A proactive request that has not come back after this long (a hung agent or
 # tool) no longer blocks the session's next proactive reply.
-PENDING_REPLY_TIMEOUT_SECONDS = 900.0
+PENDING_REPLY_TIMEOUT_SECONDS = 300.0
 GROUP_TARGET_ID = "group"
 GROUP_TARGET_NAME = "群聊"
 BOT_TARGET_ID = "bot"

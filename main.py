@@ -1761,8 +1761,22 @@ class DecisionPlugin(Star):
             return False
 
     def _message_address_flags(self, event: AstrMessageEvent) -> tuple[bool, bool, bool, bool]:
-        """Return (at-self, reply-to-self, at-all, parse-failed) safely."""
+        """Return (at-self, reply-to-self, at-all, parse-failed) safely.
 
+        Several hooks ask for the same message; parse it once per event.
+        """
+
+        cached = getattr(event, "_decision_address_flags", None)
+        if cached is not None:
+            return cached
+        flags = self._parse_address_flags(event)
+        try:
+            event._decision_address_flags = flags
+        except (AttributeError, TypeError):
+            pass
+        return flags
+
+    def _parse_address_flags(self, event: AstrMessageEvent) -> tuple[bool, bool, bool, bool]:
         at_self = reply_self = at_all = False
         try:
             from astrbot.api.message_components import At, AtAll, Reply
@@ -2464,12 +2478,15 @@ class DecisionPlugin(Star):
         tools = []
         seen_names: set[str] = set()
         builtin_names = self._builtin_tool_names()
+        from .decision.multimodal.tools import all_tool_names
+
         allowed_mm = self._mm_allowed_tool_names(self._multimodal_settings())
+        mm_tool_names = all_tool_names()
         for tool in [*self._manager_tool_objects(), *self._subagent_tool_objects()]:
             name = str(getattr(tool, "name", ""))
             if not name or name in seen_names:
                 continue
-            if name.startswith("understand_") and name not in allowed_mm:
+            if name in mm_tool_names and name not in allowed_mm:
                 continue
             seen_names.add(name)
             tools.append(
@@ -2575,12 +2592,12 @@ class DecisionPlugin(Star):
     def _sync_multimodal_tools(self, runtime) -> None:
         """(Re)register the understanding tools according to the current switches."""
 
-        from .decision.multimodal.tools import build_tools
+        from .decision.multimodal.tools import build_tools, tool_names
 
         wanted = set(runtime.settings.tool_kinds)
         existing = {tool.name: tool for tool in self._multimodal_tools}
         for name, tool in list(existing.items()):
-            if name not in {f"understand_{kind}" for kind in wanted}:
+            if name not in tool_names(wanted):
                 self._life_tools.remove(tool) if tool in self._life_tools else None
                 self._multimodal_tools.remove(tool)
         for tool in build_tools(runtime, tuple(wanted)):
@@ -2901,9 +2918,11 @@ class DecisionPlugin(Star):
     def _mm_allowed_tool_names(settings: dict[str, Any]) -> set[str]:
         from .decision.multimodal.config import MEDIA_KINDS
 
+        from .decision.multimodal.tools import tool_names
+
         if not settings.get("mm_enabled") or not settings.get("mm_tools_enabled"):
             return set()
-        return {f"understand_{kind}" for kind in MEDIA_KINDS if settings.get(f"mm_tool_{kind}")}
+        return tool_names([kind for kind in MEDIA_KINDS if settings.get(f"mm_tool_{kind}")])
 
     async def _apply_multimodal_tool_state(self, settings: dict[str, Any]) -> None:
         """Activate or deactivate the understanding tools inside AstrBot itself.
@@ -2913,11 +2932,10 @@ class DecisionPlugin(Star):
         a disabled tool is really unavailable instead of just hidden.
         """
 
-        from .decision.multimodal.config import MEDIA_KINDS
+        from .decision.multimodal.tools import all_tool_names
 
         allowed = self._mm_allowed_tool_names(settings)
-        for kind in MEDIA_KINDS:
-            name = f"understand_{kind}"
+        for name in sorted(all_tool_names()):
             try:
                 verb = "activate" if name in allowed else "deactivate"
                 toggle = getattr(self.context, f"{verb}_llm_tool_async", None)

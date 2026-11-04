@@ -63,6 +63,10 @@ MULTIMODAL_DEFAULTS: dict[str, Any] = {
     "mm_video_max_frames": 24,
     "mm_video_agentic_rounds": 2,
     "mm_video_agentic_segments": 6,
+    # Adaptive sampling and Agentic Seeking budgets (frames + vision model only).
+    "mm_video_scene_sensitivity": 30,
+    "mm_video_frame_budget": 96,
+    "mm_video_seek_max_fps": 4,
     # --- audio -------------------------------------------------------------
     "mm_audio_max_seconds": 600,
     "mm_audio_segment_seconds": 120,
@@ -116,6 +120,9 @@ INT_BOUNDS: dict[str, tuple[int, int]] = {
     "mm_video_max_frames": (2, 96),
     "mm_video_agentic_rounds": (1, 5),
     "mm_video_agentic_segments": (2, 24),
+    "mm_video_scene_sensitivity": (5, 90),
+    "mm_video_frame_budget": (8, 400),
+    "mm_video_seek_max_fps": (1, 10),
     "mm_audio_max_seconds": (10, 3600),
     "mm_audio_segment_seconds": (20, 600),
     "mm_file_max_chars": (500, 200_000),
@@ -189,6 +196,20 @@ class MultimodalSettings:
         return matched
 
 
+# auto: FFmpeg frames + vision model everywhere (adaptive sampling, local
+# Agentic Seeking); works through chat-only gateways such as a CPA proxy.
+# inline: Gemini short clips are sent whole inside generateContent.
+# native: Gemini Files / Interactions APIs.  "frames" was the old name of auto.
+VIDEO_STRATEGIES = ("auto", "inline", "native")
+LEGACY_VIDEO_STRATEGIES = {"frames": "auto"}
+
+
+def video_strategy(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    text = LEGACY_VIDEO_STRATEGIES.get(text, text)
+    return text if text in VIDEO_STRATEGIES else "auto"
+
+
 def normalize_settings(raw: Any) -> dict[str, Any]:
     """Merge stored values over the defaults, coercing types defensively."""
 
@@ -213,6 +234,7 @@ def normalize_settings(raw: Any) -> dict[str, Any]:
             merged[key] = max(low, min(high, number))
         elif isinstance(default, str):
             merged[key] = str(value or "").strip()
+    merged["mm_video_strategy"] = video_strategy(merged.get("mm_video_strategy"))
     return merged
 
 
@@ -246,6 +268,8 @@ def validate_page_payload(payload: Mapping[str, Any]) -> tuple[dict[str, Any], s
             if not isinstance(value, str):
                 return {}, f"{key} must be a string"
             cleaned[key] = value.strip()
+    if "mm_video_strategy" in cleaned:
+        cleaned["mm_video_strategy"] = video_strategy(cleaned["mm_video_strategy"])
     # Cross-field sanity: the short/long boundary must stay inside the hard limit.
     short = cleaned.get("mm_video_short_seconds", MULTIMODAL_DEFAULTS["mm_video_short_seconds"])
     longest = cleaned.get("mm_video_max_seconds", MULTIMODAL_DEFAULTS["mm_video_max_seconds"])

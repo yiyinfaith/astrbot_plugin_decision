@@ -13,7 +13,7 @@ async function waitForBridge(timeoutMs = 5000) {
 }
 // The liquid-glass theme is optional. While it is off, neither the WebGL
 // library nor liquid.css is loaded and the page uses style.css.
-const ASSET_VERSION = '0.4.6';
+const ASSET_VERSION = '0.4.7';
 let glassLibraryLoading = null;
 let liquidSheetLoading = null;
 function supportsWebGL2() {
@@ -217,6 +217,8 @@ const app = createApp({
     };
   },
   computed: {
+    // The session picker matters only where data is read per conversation.
+    lifeNeedsSession() { return ['life', 'reminders', 'status'].includes(this.lifePanel); },
     lifeSessions() { return [...new Set([...(this.lifeConfig.friend_settings?.session_list || []), ...(this.lifeConfig.group_settings?.session_list || []), ...Object.keys(this.lifeStatus.sessions || {})])]; },
     // friend/group/network/appearance render as dedicated cards above, so
     // the generic grid must not repeat them.
@@ -257,11 +259,12 @@ const app = createApp({
     },
     mmVideoRouteLabel() {
       const config = this.mm.multimodal || {};
-      if (config.mm_video_strategy === 'frames') return '短片抽帧；长片使用 Agentic Seeking 按需精读。';
-      if (config.mm_video_strategy === 'native') return '显式原生策略：需要上游支持 Google Files / Interactions。';
+      if (config.mm_video_strategy === 'native') return '官方原生：需要 Gemini 官方 Files / Interactions API，反代通常不支持。';
       const id = config.mm_model_video || config.mm_default_model;
       const row = this.mmModels.find(item => item.id === id);
-      return (row && row.video_route_label ? row.video_route_label : '请选择视频理解模型') + '；完整短片超过大小预算时改用抽帧。';
+      if (!row) return '请选择视频理解模型。';
+      if (config.mm_video_strategy === 'inline') return row.video_inline ? '短片完整视频直传（超过大小预算时改用抽帧）；长片抽帧 + Agentic Seeking。' : '该模型不支持完整视频直传，将按抽帧处理。';
+      return '短片自适应抽帧；长片先概览，再由模型自主选择时间段精读。只用 FFmpeg 抽帧与图像理解，兼容各类反代。';
     },
     mmScopeText() {
       const value = this.mm.multimodal && this.mm.multimodal.mm_auto_scope;
