@@ -206,7 +206,7 @@ def control_schema():
                     "string",
                     "天气来源",
                     "off",
-                    "随机天气按季节和气候生成，同一天保持一致；指定城市通过已安装的 astrbot_plugin_weather 查询，沿用它的 API Key。",
+                    "随机天气按季节和气候生成，同一天保持一致；指定城市通过已安装的综合插件（astrbot_plugin_omni）或 astrbot_plugin_weather 查询，沿用它的 API Key。",
                     options=["off", "random", "city"],
                     labels=["不使用", "随机天气", "指定城市（天气插件）"],
                 ),
