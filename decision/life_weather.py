@@ -1,9 +1,8 @@
 """Weather for the virtual life: a seasonal random weather or a real city.
 
-The city mode is a plugin link: it calls the public coroutine methods of an
-installed weather plugin instance (``astrbot_plugin_omni`` or the older
-``astrbot_plugin_weather``), so the API key stays in that plugin's own
-configuration and is never copied here.
+The city mode is a plugin link: it calls the public coroutine methods of the
+installed ``astrbot_plugin_omni`` (综合插件) instance, so the API key stays in
+that plugin's own configuration and is never copied here.
 """
 
 from __future__ import annotations
@@ -15,8 +14,7 @@ import time
 from datetime import date, datetime
 from typing import Any
 
-# Tried in order; the first enabled one with an API key wins.
-WEATHER_PLUGINS = ("astrbot_plugin_omni", "astrbot_plugin_weather")
+WEATHER_PLUGIN = "astrbot_plugin_omni"
 WEATHER_WORDS = re.compile(
     r"天气|下雨|下雪|雨伞|带伞|晴天|阴天|多云|气温|温度|几度|降温|升温|好冷|好热|太冷|太热"
     r"|冷不冷|热不热|穿什么|穿多少|雾霾|台风|刮风|风好大|闷热"
@@ -173,24 +171,15 @@ class WeatherService:
     def _plugin(self):
         context = self.runtime.context
         getter = getattr(context, "get_registered_star", None)
-        found = [(name, getter(name)) for name in WEATHER_PLUGINS] if callable(getter) else []
-        found = [(name, meta) for name, meta in found if meta is not None]
-        if not found:
-            raise RuntimeError("未安装天气插件（综合插件 astrbot_plugin_omni 或 astrbot_plugin_weather）")
-        usable = [
-            (name, meta.star_cls)
-            for name, meta in found
-            if getattr(meta, "activated", True) and getattr(meta, "star_cls", None) is not None
-        ]
-        if not usable:
-            raise RuntimeError(f"天气插件 {found[0][0]} 未启用")
-        for _, instance in usable:
-            if getattr(instance, "api_key", ""):
-                return instance
-        name = usable[0][0]
-        if name == "astrbot_plugin_omni":
+        meta = getter(WEATHER_PLUGIN) if callable(getter) else None
+        if meta is None:
+            raise RuntimeError("未安装综合插件 astrbot_plugin_omni")
+        instance = getattr(meta, "star_cls", None)
+        if not getattr(meta, "activated", True) or instance is None:
+            raise RuntimeError("综合插件 astrbot_plugin_omni 未启用")
+        if not getattr(instance, "api_key", ""):
             raise RuntimeError("综合插件 astrbot_plugin_omni 的天气功能未开启或未配置 API Key")
-        raise RuntimeError(f"天气插件 {name} 未配置 API Key")
+        return instance
 
     def city(self) -> str:
         configured = str(self.settings.get("city") or "").strip()
@@ -211,7 +200,7 @@ class WeatherService:
             self.last_error = str(exc)[:200]
             raise
         if value is None:
-            self.last_error = f"天气插件没有返回「{key[1]}」的天气"
+            self.last_error = f"综合插件没有返回「{key[1]}」的天气"
             raise RuntimeError(self.last_error)
         self._cache[key] = (time.monotonic(), value)
         if len(self._cache) > 64:
@@ -244,7 +233,7 @@ class WeatherService:
             return ""
         city = self.city()
         if not city:
-            raise RuntimeError("没有可用的城市：请填写城市，或在天气插件里设置默认城市")
+            raise RuntimeError("没有可用的城市：请填写城市，或在综合插件的天气设置里填写默认城市")
         days = await self._forecast(city)
         if not isinstance(days, list) or not days:
             return ""
@@ -260,7 +249,7 @@ class WeatherService:
             return ""
         city = self.city()
         if not city:
-            raise RuntimeError("没有可用的城市：请填写城市，或在天气插件里设置默认城市")
+            raise RuntimeError("没有可用的城市：请填写城市，或在综合插件的天气设置里填写默认城市")
         now = await self._current(city)
         feels = now.get("feels_like")
         text = f"{city}当前{now.get('desc', '未知')}，{now.get('temp')}℃"

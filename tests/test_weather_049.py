@@ -1,4 +1,4 @@
-"""0.4.9: city weather also links to the omni plugin (astrbot_plugin_omni)."""
+"""0.4.9: city weather links to the omni plugin (astrbot_plugin_omni) only."""
 
 import asyncio
 from datetime import datetime
@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from decision.life_config import life_defaults
-from decision.life_weather import WEATHER_PLUGINS, WeatherService
+from decision.life_weather import WEATHER_PLUGIN, WeatherService
 
 
 class _Plugin:
@@ -35,32 +35,24 @@ def _meta(plugin, activated=True):
     return SimpleNamespace(star_cls=plugin, activated=activated)
 
 
-def test_omni_is_tried_first():
-    assert WEATHER_PLUGINS[0] == "astrbot_plugin_omni"
-    stars = {"astrbot_plugin_omni": _meta(_Plugin("综合")), "astrbot_plugin_weather": _meta(_Plugin("旧"))}
-    text = asyncio.run(_service(stars).now_text(datetime(2026, 11, 4, 15, 0)))
-    assert text.startswith("上海当前综合")
-
-
-def test_omni_alone_works_and_uses_its_default_city():
-    stars = {"astrbot_plugin_omni": _meta(_Plugin("晴", default_city="杭州"))}
-    service = _service(stars)
+def test_links_to_omni_and_uses_its_default_city():
+    assert WEATHER_PLUGIN == "astrbot_plugin_omni"
+    service = _service({"astrbot_plugin_omni": _meta(_Plugin("晴", default_city="杭州"))})
     assert service.city() == "杭州"
     assert asyncio.run(service.now_text(datetime(2026, 11, 4, 15, 0))).startswith("杭州当前晴")
     assert service.status()["plugin"] == "可用"
 
 
-def test_falls_back_when_omni_weather_is_off_or_disabled():
-    stars = {"astrbot_plugin_omni": _meta(_Plugin("综合", api_key="")), "astrbot_plugin_weather": _meta(_Plugin("旧"))}
-    assert asyncio.run(_service(stars).now_text(datetime(2026, 11, 4, 15, 0))).startswith("上海当前旧")
-    stars["astrbot_plugin_omni"] = _meta(_Plugin("综合"), activated=False)
-    assert asyncio.run(_service(stars).now_text(datetime(2026, 11, 4, 15, 0))).startswith("上海当前旧")
+def test_old_weather_plugin_is_ignored():
+    service = _service({"astrbot_plugin_weather": _meta(_Plugin("旧"))}, city="北京")
+    with pytest.raises(RuntimeError, match="未安装综合插件"):
+        asyncio.run(service.now_text(datetime(2026, 11, 4, 15, 0)))
 
 
 @pytest.mark.parametrize(
     ("stars", "message"),
     [
-        ({}, "未安装天气插件（综合插件"),
+        ({}, "未安装综合插件 astrbot_plugin_omni"),
         ({"astrbot_plugin_omni": _meta(None, activated=False)}, "astrbot_plugin_omni 未启用"),
         ({"astrbot_plugin_omni": _meta(_Plugin("x", api_key=""))}, "天气功能未开启或未配置 API Key"),
     ],

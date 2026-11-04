@@ -2,7 +2,7 @@
 
 ## 0.4.9 (2026-11-04)
 
-- 指定城市天气改为依次查找综合插件 `astrbot_plugin_omni` 和 `astrbot_plugin_weather`，使用第一个已启用且配置了心知天气 API Key 的；只装综合插件也能用。
+- 指定城市天气改为联动综合插件 `astrbot_plugin_omni`（原 `astrbot_plugin_weather` 已并入综合插件），沿用它的心知天气 API Key 和默认城市。
 
 ## 0.4.8 (2026-11-04)
 

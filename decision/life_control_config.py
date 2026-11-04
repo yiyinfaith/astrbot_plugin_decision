@@ -206,15 +206,15 @@ def control_schema():
                     "string",
                     "天气来源",
                     "off",
-                    "随机天气按季节和气候生成，同一天保持一致；指定城市通过已安装的综合插件（astrbot_plugin_omni）或 astrbot_plugin_weather 查询，沿用它的 API Key。",
+                    "随机天气按季节和气候生成，同一天保持一致；指定城市通过已安装的综合插件（astrbot_plugin_omni）查询，沿用它的天气 API Key。",
                     options=["off", "random", "city"],
-                    labels=["不使用", "随机天气", "指定城市（天气插件）"],
+                    labels=["不使用", "随机天气", "指定城市（综合插件）"],
                 ),
                 "city": _field(
                     "string",
                     "城市",
                     "",
-                    "留空时使用天气插件里配置的默认城市。",
+                    "留空时使用综合插件天气设置里的默认城市。",
                 ),
                 "random_climate": _field(
                     "string",

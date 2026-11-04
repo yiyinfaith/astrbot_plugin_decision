@@ -290,7 +290,7 @@ class _WeatherPlugin:
 def _weather(meta, **settings):
     config = life_defaults()
     config["weather_settings"].update(settings)
-    stars = {"astrbot_plugin_weather": meta} if meta else {}
+    stars = {"astrbot_plugin_omni": meta} if meta else {}
     runtime = SimpleNamespace(
         config=config, context=SimpleNamespace(get_registered_star=lambda name: stars.get(name))
     )
