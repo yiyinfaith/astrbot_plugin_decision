@@ -944,7 +944,9 @@ class MultimodalRuntime:
             budget = min(per_call, max(8, int(math.ceil(duration * 2))))
             scenes = await video_seek.scene_changes(
                 path,
-                threshold=settings.int("mm_video_scene_sensitivity") / 100,
+                sensitivity=settings.int("mm_video_scene_sensitivity"),
+                max_points=budget // 2,
+                end=duration,
                 timeout=min(timeout, 120.0),
             )
             stamps = video_seek.adaptive_timestamps(
@@ -1012,7 +1014,9 @@ class MultimodalRuntime:
 
         scenes = await video_seek.scene_changes(
             path,
-            threshold=settings.int("mm_video_scene_sensitivity") / 100,
+            sensitivity=settings.int("mm_video_scene_sensitivity"),
+            max_points=per_call // 2,
+            end=duration,
             timeout=min(timeout, 180.0),
         )
         stamps = video_seek.adaptive_timestamps(
@@ -1029,10 +1033,14 @@ class MultimodalRuntime:
         )
         audio_note = self._video_audio_note(info, transcript)
         goal = prompt + (video_seek.DETAIL_SUFFIX if detail else "")
+        notes = self._stamp_notes(stamps)
+        if scenes:
+            # Where the picture changes: cheap hints for choosing what to re-read.
+            notes.append("画面变化明显的时间点（秒）：" + "、".join(f"{t:.1f}" for t in scenes))
         overview = await self._video_call(
             choice,
             video_seek.OVERVIEW_PROMPT.format(goal=goal, limit=max_windows, **limits),
-            self._stamp_notes(stamps),
+            notes,
             audio_note,
             frames,
         )

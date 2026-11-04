@@ -89,30 +89,37 @@ class SeekPlan:
 async def scene_changes(
     path: Path,
     *,
-    threshold: float,
+    sensitivity: int = 30,
+    max_points: int = 24,
     start: float = 0.0,
     end: float | None = None,
     timeout: float = 120.0,
 ) -> list[float]:
-    """Timestamps where the picture changes noticeably (FFmpeg scene score).
+    """Timestamps where the picture changes the most (FFmpeg scene scores).
 
-    The clip is decoded at a small size and a bounded frame rate, so this stays
-    cheap even for long videos.  Any failure just means "no scene hints".
+    A fixed cut threshold only finds shot changes: a small object appearing
+    in a still shot scores about 0.02.  So every sampled frame is scored and
+    the peaks that stand out from the clip's own level (``sensitivity``:
+    smaller means more sensitive) are kept, largest first.  The clip is
+    decoded small and at a bounded rate, so this stays cheap for long videos.
+    Any failure just means "no scene hints".
     """
 
+    span = (end - start) if end is not None and end > start else 0.0
+    sample_fps = SCENE_SAMPLE_FPS if not span or span <= 300 else SCENE_SAMPLE_FPS / 2
     command = ["ffmpeg", "-hide_banner", "-nostdin"]
     if start > 0:
         command += ["-ss", f"{start:.3f}"]
-    if end is not None and end > start:
-        command += ["-t", f"{end - start:.3f}"]
+    if span:
+        command += ["-t", f"{span:.3f}"]
     command += [
         "-i",
         str(path),
         "-an",
         "-vf",
         (
-            f"fps={SCENE_SAMPLE_FPS:g},scale={SCENE_DOWNSCALE}:-2,"
-            f"select='gt(scene,{max(0.01, min(0.99, threshold)):.3f})',showinfo"
+            f"fps={sample_fps:g},scale={SCENE_DOWNSCALE}:-2,"
+            "select='gte(scene,0)',metadata=print:key=lavfi.scene_score"
         ),
         "-f",
         "null",
@@ -124,13 +131,50 @@ async def scene_changes(
         return []
     if code != 0:
         return []
-    found = []
-    for match in re.finditer(r"pts_time:\s*([0-9.]+)", error.decode("utf-8", "replace")):
-        try:
-            found.append(round(start + float(match.group(1)), 3))
-        except ValueError:
+    return pick_scene_peaks(
+        parse_scene_scores(error.decode("utf-8", "replace"), offset=start),
+        sensitivity=sensitivity,
+        max_points=max_points,
+    )
+
+
+def parse_scene_scores(text: str, *, offset: float = 0.0) -> list[tuple[float, float]]:
+    """``metadata=print`` output -> [(time, scene score)] in order."""
+
+    scores: list[tuple[float, float]] = []
+    moment: float | None = None
+    for line in text.splitlines():
+        time_match = re.search(r"pts_time:\s*([0-9.]+)", line)
+        if time_match:
+            moment = float(time_match.group(1))
             continue
-    return found
+        score_match = re.search(r"lavfi\.scene_score=([0-9.]+)", line)
+        if score_match and moment is not None:
+            scores.append((round(offset + moment, 3), float(score_match.group(1))))
+            moment = None
+    return scores
+
+
+def pick_scene_peaks(
+    scores: list[tuple[float, float]], *, sensitivity: int, max_points: int
+) -> list[float]:
+    """Local maxima clearly above the clip's typical change, largest first."""
+
+    if not scores or max_points <= 0:
+        return []
+    values = sorted(score for _, score in scores)
+    median = values[len(values) // 2]
+    sensitivity = max(1, int(sensitivity))
+    # 30 (default): at least 0.005 and four times the median change.
+    threshold = max(sensitivity / 6000, median * (1 + sensitivity / 10))
+    peaks = []
+    for index, (moment, score) in enumerate(scores):
+        before = scores[index - 1][1] if index else -1.0
+        after = scores[index + 1][1] if index + 1 < len(scores) else -1.0
+        if score >= threshold and score >= before and score >= after:
+            peaks.append((score, moment))
+    peaks.sort(reverse=True)
+    return sorted(moment for _, moment in peaks[:max_points])
 
 
 def adaptive_timestamps(

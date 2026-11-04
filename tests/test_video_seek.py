@@ -292,3 +292,48 @@ def test_legacy_frames_strategy_maps_to_auto():
     assert normalize_settings({"mm_video_strategy": "frames"})["mm_video_strategy"] == "auto"
     assert normalize_settings({"mm_video_strategy": "inline"})["mm_video_strategy"] == "inline"
     assert normalize_settings({"mm_video_strategy": "bogus"})["mm_video_strategy"] == "auto"
+
+
+SCENE_LOG = """
+[Parsed_metadata_3 @ 0x1] frame:24   pts:24      pts_time:6
+[Parsed_metadata_3 @ 0x1] lavfi.scene_score=0.000000
+[Parsed_metadata_3 @ 0x1] frame:25   pts:25      pts_time:6.25
+[Parsed_metadata_3 @ 0x1] lavfi.scene_score=0.017641
+[Parsed_metadata_3 @ 0x1] frame:26   pts:26      pts_time:6.5
+[Parsed_metadata_3 @ 0x1] lavfi.scene_score=0.000000
+[Parsed_metadata_3 @ 0x1] frame:27   pts:27      pts_time:6.75
+[Parsed_metadata_3 @ 0x1] lavfi.scene_score=0.017641
+"""
+
+
+def test_scene_scores_are_parsed_in_order_with_the_offset():
+    assert video_seek.parse_scene_scores(SCENE_LOG, offset=100) == [
+        (106.0, 0.0),
+        (106.25, 0.017641),
+        (106.5, 0.0),
+        (106.75, 0.017641),
+    ]
+
+
+def test_a_small_object_in_a_still_shot_is_a_scene_hint():
+    # A 100x100 box appearing on a static 640x360 shot scores only ~0.02,
+    # far below a shot-cut threshold such as 0.3.
+    # 12 s sampled at 4 fps: the box is visible from 6.25 s to 6.5 s.
+    scores = [(t / 4, 0.0) for t in range(48)]
+    scores[25] = (6.25, 0.017641)
+    scores[27] = (6.75, 0.017641)
+    assert video_seek.pick_scene_peaks(scores, sensitivity=30, max_points=5) == [6.25, 6.75]
+
+
+def test_constant_motion_only_reports_changes_that_stand_out():
+    scores = [(t / 4, 0.05 + 0.01 * (t % 2)) for t in range(40)]
+    scores[10] = (2.5, 0.12)  # ordinary jitter, not a change
+    scores[30] = (7.5, 0.6)  # a real cut
+    assert video_seek.pick_scene_peaks(scores, sensitivity=30, max_points=5) == [7.5]
+
+
+def test_scene_peaks_keep_the_largest_changes():
+    scores = [(float(t), 0.0) for t in range(20)]
+    for moment, score in ((3.0, 0.2), (8.0, 0.9), (15.0, 0.5)):
+        scores[int(moment)] = (moment, score)
+    assert video_seek.pick_scene_peaks(scores, sensitivity=30, max_points=2) == [8.0, 15.0]
