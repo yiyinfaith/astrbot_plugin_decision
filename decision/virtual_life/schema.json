@@ -335,10 +335,30 @@
         "default": false
       },
       "notify_user": {
-        "description": "发送等待提示",
+        "description": "忙碌时先回一句",
         "type": "bool",
-        "hint": "延迟大于 0 时，每个消息批次发送一次不经过 LLM 的公开提示。",
+        "hint": "延迟较长时先回一句“在忙，晚点回你”之类的话；睡觉时不发。",
         "default": true
+      },
+      "notification_style": {
+        "description": "提示方式",
+        "type": "string",
+        "options": [
+          "persona",
+          "template"
+        ],
+        "hint": "persona＝用当前人格和会话模型生成一句符合当下活动的话（多一次很短的模型调用）；template＝直接用下面的模板。",
+        "default": "persona",
+        "labels": [
+          "人格口吻",
+          "固定模板"
+        ]
+      },
+      "notify_min_seconds": {
+        "description": "提示的最短延迟",
+        "type": "int",
+        "hint": "延迟低于这个秒数时直接晚点回复，不先说一句。",
+        "default": 120
       },
       "active_conversation_seconds": {
         "description": "连续对话免延迟窗口",
@@ -351,6 +371,18 @@
         "type": "int",
         "hint": "公式结果的全局上限，单位为秒；实际延迟还会被当前日程时段结尾截断。",
         "default": 1800
+      },
+      "sleep_until_wake": {
+        "description": "睡觉时等醒来再回",
+        "type": "bool",
+        "hint": "消息到达时日程处于睡眠，就等到这段睡眠结束再回复，并像刚醒来看到消息那样回应；不受上面的最长延迟限制，只受下面的上限限制。@Bot、引用 Bot 和命令仍然立即处理。",
+        "default": true
+      },
+      "max_sleep_delay_seconds": {
+        "description": "睡眠等待上限",
+        "type": "int",
+        "hint": "单位为秒，最长 86400；插件重载或 AstrBot 重启时正在等待的消息会立即回复。",
+        "default": 28800
       },
       "delay_formulas": {
         "description": "各可打扰度延迟公式",
@@ -382,35 +414,35 @@
       "public_reasons": {
         "description": "公开等待原因",
         "type": "object",
-        "hint": "仅用于发给用户的提示，不会自动暴露具体活动或地点。",
+        "hint": "人格口吻提示失败或选择模板时使用，不会暴露具体活动或地点。",
         "items": {
           "blocked": {
             "description": "禁止打扰",
             "type": "string",
-            "default": "当前不方便被打扰"
+            "default": "现在不太方便"
           },
           "low": {
             "description": "低可打扰",
             "type": "string",
-            "default": "当前不太方便回复"
+            "default": "在忙"
           },
           "normal": {
             "description": "普通可打扰",
             "type": "string",
-            "default": "当前正在处理手头的事情"
+            "default": "手头有点事"
           },
           "high": {
             "description": "高可打扰",
             "type": "string",
-            "default": "当前可以回复，但会稍作停顿"
+            "default": "稍等"
           }
         }
       },
       "notification_template": {
-        "description": "等待提示模板",
+        "description": "提示兜底模板",
         "type": "string",
-        "hint": "可使用 {delay_seconds}、{public_reason}、{availability}；无法引用具体活动和地点。",
-        "default": "预计 {delay_seconds} 秒后回复，原因：{public_reason}。"
+        "hint": "人格口吻生成失败或选择模板时使用。可用 {public_reason}、{availability}、{delay_minutes}、{delay_seconds}。",
+        "default": "{public_reason}，晚点回你"
       }
     }
   },

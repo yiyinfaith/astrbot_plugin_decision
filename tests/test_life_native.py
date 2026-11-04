@@ -187,6 +187,9 @@ def native(tmp_path, monkeypatch):
     state = runtime.policy.ensure_state(UMO, "alice", plan, now)
     state.last_user_message_at = (now - timedelta(hours=1)).isoformat()
     runtime.deadlines[UMO] = time.monotonic() + 60
+    # _attempt_unsolicited records the persona being delivered for; tests that
+    # call dispatch_life_agent directly stand in for that step.
+    runtime._delivery_persona_ids[UMO] = "alice"
     owner._get_life_runtime = AsyncMock(return_value=runtime)
     event = CronMessageEvent(
         context=ctx, session=MessageSession.from_str(UMO), message="hello", extras={}
@@ -226,8 +229,18 @@ async def test_adaptive_ignores_old_unanswered_hard_stop_and_real_send_counts_on
         data = runtime.contacts.profile(db, UMO, "alice", runtime._now())
         data["created"] -= 3 * 86400
         runtime.ledger.save_profile(db, UMO, "alice", data)
+    # The low-frequency floor lowers the bar to floor_threshold but never
+    # sends against a clear Jev rejection.
     native.owner._evaluate.return_value = SimpleNamespace(
         answers={q: {"noul": 0.0} for q in ("initiate", "relevant", "timing")}
+    )
+    sent, _ = await runtime._attempt_unsolicited(
+        UMO, native.persona, native.plan, "有意义的读书分享", "adaptive"
+    )
+    assert not sent
+    assert native.context.send_message.await_count == 0
+    native.owner._evaluate.return_value = SimpleNamespace(
+        answers={q: {"noul": 0.45} for q in ("initiate", "relevant", "timing")}
     )
     sent, _ = await runtime._attempt_unsolicited(
         UMO, native.persona, native.plan, "有意义的读书分享", "adaptive"
@@ -433,7 +446,9 @@ async def test_jev_rejection_error_and_stale_never_dispatch(native, monkeypatch)
         answers={q: {"noul": 0.1} for q in ("initiate", "relevant", "timing")}
     )
     assert not await native.runtime._deliver(UMO, native.persona, native.plan, "hello", 0, 0)
-    assert len(native.owner._evaluate.call_args.kwargs["questions"]) == 3
+    questions = native.owner._evaluate.call_args.kwargs["questions"]
+    assert set(questions) == {"initiate", "relevant", "timing", "angle"}
+    assert questions["angle"]["type"] == "choice"
     native.owner._evaluate.side_effect = RuntimeError("timeout")
     assert not await native.runtime._deliver(UMO, native.persona, native.plan, "hello", 0, 0)
 
@@ -1045,14 +1060,14 @@ async def test_media_sent_then_new_message_does_not_save_unsent_final_text(nativ
 def test_life_chat_status_does_not_expose_other_conversations(native):
     other = "qq:FriendMessage:private_other"
     native.runtime.policy.ensure_state(other, "alice", native.plan, native.runtime._now())
-    native.runtime.audit = [
-        {"umo": UMO, "reason": "current"},
-        {"umo": other, "reason": "private_other_reason"},
-    ]
+    native.runtime.record_audit(UMO, False, "current")
+    native.runtime.record_audit(other, False, "private_other_reason")
     scoped = native.runtime.status(UMO)
-    assert list(scoped["sessions"]) == [UMO]
+    # Session keys are scoped by persona; each entry names its conversation.
+    assert [row["umo"] for row in scoped["sessions"].values()] == [UMO]
+    assert [row["reason"] for row in scoped["audit"]] == ["current"]
     assert other not in str(scoped) and "private_other_reason" not in str(scoped)
-    assert other in native.runtime.status()["sessions"]
+    assert other in {row["umo"] for row in native.runtime.status()["sessions"].values()}
 
 
 def test_proactive_runtime_follows_per_kind_switches(native):
@@ -1247,3 +1262,122 @@ def test_should_retry_window_respects_its_switches(native):
     assert runtime._should_retry_window(UMO, "conversation is not idle enough") is True
     assert runtime._should_retry_window(UMO, "agent task active") is True
     assert runtime._should_retry_window(UMO, "cooldown active") is True
+
+
+@pytest.mark.asyncio
+async def test_each_jev_question_has_its_own_threshold(native, monkeypatch):
+    dispatch = AsyncMock(return_value=True)
+    monkeypatch.setattr("decision.life_runtime.dispatch_life_agent", dispatch)
+    # Timing is only a supplementary check now: 0.55 passes its 0.5 default.
+    native.owner._evaluate.return_value = SimpleNamespace(
+        answers={"initiate": {"noul": 0.8}, "relevant": {"noul": 0.8}, "timing": {"noul": 0.55}}
+    )
+    assert await native.runtime._deliver(UMO, native.persona, native.plan, "share", 0, 0)
+    native.runtime.config["integration_settings"]["jev_relevant_threshold"] = 0.9
+    native.runtime.deadlines[UMO] = time.monotonic() + 60
+    assert not await native.runtime._deliver(UMO, native.persona, native.plan, "share", 0, 0)
+    assert "话题价值 0.8/0.9" in native.runtime.audit[-1]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_floor_contact_retries_later_when_jev_fails(native, monkeypatch):
+    runtime = native.runtime
+    runtime.config["adaptive_settings"]["enable"] = True
+    runtime._schedule_available_umos.add(UMO)
+    with runtime.ledger.transaction() as db:
+        data = runtime.contacts.profile(db, UMO, "alice", runtime._now())
+        data["created"] -= 3 * 86400
+        runtime.ledger.save_profile(db, UMO, "alice", data)
+    dispatch = AsyncMock(return_value=True)
+    monkeypatch.setattr("decision.life_runtime.dispatch_life_agent", dispatch)
+    native.owner._evaluate.side_effect = RuntimeError("jev down")
+    scheduled = []
+    monkeypatch.setattr(
+        runtime, "_schedule_idle", lambda umo, run_at=None: scheduled.append(run_at)
+    )
+    assert not await runtime._deliver(UMO, native.persona, native.plan, "share", 0, 0)
+    dispatch.assert_not_awaited()
+    assert scheduled and scheduled[0] is not None
+    assert "15 分钟后重试" in runtime.audit[-1]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_angle_and_opening_reach_the_agent_prompt(native, monkeypatch):
+    dispatch = AsyncMock(return_value=True)
+    monkeypatch.setattr("decision.life_runtime.dispatch_life_agent", dispatch)
+    monkeypatch.setattr("decision.life_runtime.random.random", lambda: 0.1)
+    native.owner._evaluate.return_value = SimpleNamespace(
+        answers={
+            **{q: {"noul": 0.9} for q in ("initiate", "relevant", "timing")},
+            "angle": {"choice": "today"},
+        }
+    )
+    assert await native.runtime._deliver(UMO, native.persona, native.plan, "share", 0, 0)
+    prompt = dispatch.call_args.args[2]
+    assert "[本次切入角度]" in prompt and "今天聊天记录" in prompt
+    # 0.1 < two_stage_probability (0.25): a short opening that waits for a reply.
+    assert "[本次开场方式]" in prompt and "等对方回应后再展开" in prompt
+    hook = native.runtime.contacts.take_hook(UMO, "alice", native.runtime._now())
+    assert hook["intent"] == "share"
+    assert native.runtime.contacts.take_hook(UMO, "alice", native.runtime._now()) is None
+
+
+@pytest.mark.asyncio
+async def test_answered_two_stage_opening_is_injected_once(native):
+    runtime = native.runtime
+    now = runtime._now()
+    runtime.contacts.set_hook(
+        UMO, "alice", now, {"intent": "想分享今天读到的书", "expires": now.timestamp() + 600}
+    )
+    req = SimpleNamespace(extra_user_content_parts=[], system_prompt="", contexts=[])
+    await runtime.inject_cached_state(native.event, req)
+    texts = [getattr(part, "text", "") for part in req.extra_user_content_parts]
+    assert any("想分享今天读到的书" in text for text in texts)
+    req2 = SimpleNamespace(extra_user_content_parts=[], system_prompt="", contexts=[])
+    await runtime.inject_cached_state(native.event, req2)
+    assert not any(
+        "想分享今天读到的书" in getattr(part, "text", "") for part in req2.extra_user_content_parts
+    )
+
+
+@pytest.mark.asyncio
+async def test_rarely_online_hour_postpones_window_candidates(native, monkeypatch):
+    runtime = native.runtime
+    now = runtime._now()
+    with runtime.ledger.transaction() as db:
+        data = runtime.contacts.profile(db, UMO, "alice", now)
+        hours = [10.0] * 24
+        for hour in (now.hour - 1, now.hour, now.hour + 1):
+            hours[hour % 24] = 0.0
+        data.update(active_hours=hours, active_samples=200, active_updated=now.timestamp())
+        runtime.ledger.save_profile(db, UMO, "alice", data)
+    dispatch = AsyncMock(return_value=True)
+    monkeypatch.setattr("decision.life_runtime.dispatch_life_agent", dispatch)
+    native.owner._evaluate.return_value = SimpleNamespace(
+        answers={q: {"noul": 1.0} for q in ("initiate", "relevant", "timing")}
+    )
+    sent, reason = await runtime._attempt_unsolicited(
+        UMO, native.persona, native.plan, "share", "window", attempt_key="w1"
+    )
+    assert not sent and reason == "user usually away"
+    assert runtime.audit[-1]["stage"] == "程序规则"
+    assert runtime.ledger.audits(UMO)[-1]["reason"].startswith("对方此时通常不在线")
+    # A manual request is never postponed by the habit statistics.
+    sent, _ = await runtime._attempt_unsolicited(UMO, native.persona, native.plan, "hi", "manual")
+    assert sent
+
+
+@pytest.mark.asyncio
+async def test_random_weather_reaches_proactive_prompt_and_state(native, monkeypatch):
+    runtime = native.runtime
+    runtime.config["weather_settings"]["mode"] = "random"
+    dispatch = AsyncMock(return_value=True)
+    monkeypatch.setattr("decision.life_runtime.dispatch_life_agent", dispatch)
+    native.owner._evaluate.return_value = SimpleNamespace(
+        answers={q: {"noul": 0.9} for q in ("initiate", "relevant", "timing")}
+    )
+    assert await runtime._deliver(UMO, native.persona, native.plan, "share", 0, 0)
+    assert "[当前天气" in dispatch.call_args.args[2]
+    assert "当前" in json.dumps(
+        native.owner._evaluate.call_args.kwargs["state"], ensure_ascii=False
+    )

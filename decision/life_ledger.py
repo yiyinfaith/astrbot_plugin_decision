@@ -56,6 +56,10 @@ class LifeLedger:
                 CREATE INDEX IF NOT EXISTS utterance_scope ON utterances(umo,persona,at);
                 CREATE TABLE IF NOT EXISTS persona_states (
                     persona TEXT PRIMARY KEY, data TEXT);
+                CREATE TABLE IF NOT EXISTS audit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, umo TEXT, at REAL,
+                    sent INTEGER, data TEXT);
+                CREATE INDEX IF NOT EXISTS audit_scope ON audit(umo,at);
             """)
 
     @contextmanager
@@ -164,8 +168,34 @@ class LifeLedger:
             row = db.execute("SELECT * FROM tasks WHERE id=?", (ident,)).fetchone()
             return self.task(row) if row else None
 
+    def add_audit(self, umo, at, sent, entry):
+        with self.transaction() as db:
+            db.execute(
+                "INSERT INTO audit(umo,at,sent,data) VALUES (?,?,?,?)",
+                (umo, at, 1 if sent else 0, json.dumps(entry, ensure_ascii=False)),
+            )
+
+    def audits(self, umo=None, limit=60):
+        with self.transaction() as db:
+            rows = db.execute(
+                "SELECT data FROM audit"
+                + (" WHERE umo=?" if umo else "")
+                + " ORDER BY at DESC, id DESC LIMIT ?",
+                ((umo, limit) if umo else (limit,)),
+            ).fetchall()
+        return [json.loads(row[0]) for row in reversed(rows)]
+
     def prune(self, now):
         with self.transaction() as db:
+            # Decision records are for troubleshooting: two weeks, and at most
+            # 500 per conversation.
+            db.execute("DELETE FROM audit WHERE at<?", (now - 14 * 86400,))
+            db.execute(
+                """DELETE FROM audit WHERE id IN (
+                SELECT id FROM (SELECT id, ROW_NUMBER() OVER (
+                    PARTITION BY umo ORDER BY at DESC, id DESC) AS rank
+                    FROM audit) WHERE rank>500)"""
+            )
             db.execute("DELETE FROM signals WHERE at<?", (now - 7 * 86400,))
             db.execute("DELETE FROM idea_attempts WHERE at<?", (now - 7 * 86400,))
             db.execute("DELETE FROM conversation_calls WHERE at<?", (now - 7 * 86400,))

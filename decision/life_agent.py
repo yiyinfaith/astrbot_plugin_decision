@@ -350,6 +350,9 @@ async def dispatch_life_agent(
                 if not runtime.can_commit(umo, generation):
                     return sent > 0
             response = runner.get_final_llm_resp()
+            from .usage_meter import record as record_usage
+
+            record_usage("主动发起·消息生成", response=response, prompt=prompt)
             # MAIN_AGENT_HOOKS already dispatches OnLLMResponseEvent. Calling
             # it again would apply other plugins' state changes twice.
             if response and getattr(response, "role", "assistant") == "assistant":

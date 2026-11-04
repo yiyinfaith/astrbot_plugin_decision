@@ -5,12 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="./network-view.css?v=0.4.7" />
+    <link rel="stylesheet" href="./network-view.css?v=0.4.8" />
     <!-- style.css is the default AstrBot-style theme; app.js swaps it for liquid.css when the liquid-glass switch is on. -->
-    <link id="default-theme" rel="stylesheet" href="./style.css?v=0.4.7" />
+    <link id="default-theme" rel="stylesheet" href="./style.css?v=0.4.8" />
     <title>jev决策综合插件设置</title>
     <script src="./vendor/vue.global.prod.js"></script>
-    <script src="./life-workspace.js?v=0.4.7"></script>
+    <script src="./life-workspace.js?v=0.4.8"></script>
   </head>
   <body>
     <div id="app" v-cloak class="app-shell">
@@ -114,6 +114,11 @@
             </div>
 
 
+            <div class="glass-card life-presets" v-show="lifePanel === 'contact'">
+              <div class="card-heading"><div><div class="section-kicker">Presets</div><h2>联系频率预设</h2><p>一键填好沉默时长、冷却、每日额度、忙闲触发概率、未回应上限和 Jev 阈值，保存后生效，之后仍可逐项微调。名单、免打扰和开关不会被改动。</p></div><span class="status-pill">{{ lifePresetActive ? '当前：' + lifePresets[lifePresetActive].label : '自定义' }}</span></div>
+              <div class="life-actions"><button v-for="(preset,id) in lifePresets" :key="id" type="button" class="button" :class="lifePresetActive === id ? 'primary' : 'secondary'" :aria-pressed="lifePresetActive === id" @click="applyLifePreset(id)">{{ preset.label }}</button></div>
+              <p class="hint">{{ lifePresets[lifePresetActive || 'normal'].description }}</p>
+            </div>
             <div class="life-pair" v-show="lifePanel === 'contact'">
             <div v-if="lifeConfig.friend_settings" class="glass-card">
               <div class="card-heading"><div><div class="section-kicker">Private Chat</div><h2>私聊主动</h2><p>控制虚拟生活是否、以及多久才在私聊里主动开口；名单模式决定下方名单的含义。</p></div><span class="status-pill">{{ lifeConfig.friend_settings.enable ? '已启用' : '未启用' }}</span></div>
@@ -153,6 +158,13 @@
               <p v-if="lifeInspection.pending_thought" class="hint">待择机分享：{{ lifeInspection.pending_thought.text }}。分享受间隔、额度、偏好和免打扰限制，已过期的想法不会发送。<button class="button ghost" :disabled="lifeControlBusy" @click="lifeControl('dismiss_idea',{idea_id:lifeInspection.pending_thought.id})">不再向本会话分享这条</button></p>
               <p class="hint">自适应模式开启后，普通主动按目标间隔和每日硬上限执行；旧的随机基础预算、连续未回应停发和随机可打扰概率由自适应规则接管。明确暂停、名单、睡眠和免打扰始终优先。发送结果 unknown 表示平台确认不明，程序不会自动重发。</p>
             </div>
+            <div class="glass-card" v-show="lifePanel === 'status'">
+              <div class="card-heading"><div><div class="section-kicker">Usage</div><h2>今日模型调用</h2><p>按功能统计本插件发起的模型调用。模型返回用量时是实际值，否则按字数估算（标“约”）；普通聊天由原生 Agent 负责，不在这里统计。</p></div></div>
+              <table class="usage-table" v-if="usageRows.length"><thead><tr><th>功能</th><th>调用</th><th>失败</th><th>token</th></tr></thead><tbody><tr v-for="row in usageRows" :key="row.feature"><td>{{ row.feature }}</td><td>{{ row.calls }}</td><td>{{ row.failures }}</td><td>{{ row.estimated ? '约 ' : '' }}{{ formatTokens(row.tokens) }}</td></tr></tbody></table>
+              <p v-else class="hint">今天还没有调用。</p>
+              <p class="hint" v-if="usageWeek.length">近 7 天：<span v-for="row in usageWeek" :key="row.day">{{ row.day.slice(5) }} {{ row.calls }} 次 · </span></p>
+              <p class="hint" v-if="lifeStatus.weather && lifeStatus.weather.mode !== 'off'">天气：{{ ({random:'随机天气',city:'城市天气'})[lifeStatus.weather.mode] }}<template v-if="lifeStatus.weather.city"> · {{ lifeStatus.weather.city }}</template><template v-if="lifeStatus.weather.plugin"> · 天气插件{{ lifeStatus.weather.plugin === '可用' ? '可用' : '：' + lifeStatus.weather.plugin }}</template><template v-if="lifeStatus.weather.last_error"> · 最近失败：{{ lifeStatus.weather.last_error }}</template></p>
+            </div>
             <div class="glass-card" v-show="lifePanel==='status' && !lifeInspection.contact_control"><h2>先选择一个会话</h2><p>上方选择会话后，会自动读取当前人格的实际联系状态、话题和发送记录。此处显示状态，修改全局规则请切换到对应板块。</p></div>
             <div class="glass-card" v-show="lifePanel==='reminders'">
               <h2>明确约定的提醒与时间承诺</h2><p class="hint">这里的任务有明确时间并预留额度；与下方择机跟进的话题分别管理。</p>
@@ -164,7 +176,7 @@
             <div class="glass-card" v-show="lifePanel==='status' && lifeInspection.contact_control">
               <h2>实际发送与生活进展</h2><p class="hint" v-if="lifeInspection.semantic_usage">今日语义分析 {{ lifeInspection.semantic_usage.used }} / {{ lifeInspection.semantic_usage.limit }} 次；失败也计入预算。</p><div v-if="lifeInspection.life_state?.activity"><strong>{{ lifeInspection.life_state.activity }} · {{ lifeInspection.life_state.phase }}</strong><p class="hint">计划进度 {{ Math.round(lifeInspection.life_state.progress*100) }}% · {{ lifeInspection.life_state.tone }}。依据保存的虚拟日程推演，外部任务完成另行确认。</p></div>
               <div class="life-record" v-for="(row,index) in lifeInspection.recent_messages || []" :key="index"><small>{{ new Date(row.at*1000).toLocaleString() }} · {{ row.kind }}</small><p>{{ row.text }}</p><p class="hint" v-if="row.ideas?.length || row.topics?.length">分享确认：{{ row.match_status==='checked' ? ((row.matches || []).length+' 项有实际发送证据') : '待确认，尚未记为已分享' }}</p></div>
-              <h3>最近主动判断</h3><div class="life-record" v-for="(row,index) in (lifeStatus.audit || []).filter(r=>r.umo===lifeUmo).slice(-8).reverse()" :key="index"><small>{{ row.time }} · {{ row.sent?'已发送':'未发送' }}</small><p>{{ row.reason }}</p></div>
+              <h3>最近主动判断</h3><p class="hint">保留两周，重启后仍在。每条写明候选从哪里来、卡在哪一步。</p><div class="life-timeline"><div class="life-record" v-for="(row,index) in lifeAuditRows" :key="index" :class="{sent: row.sent}"><small>{{ new Date(row.time).toLocaleString() }} · <strong>{{ row.sent ? '已发送' : (row.stage || '未发送') }}</strong><template v-if="row.trigger"> · {{ ({window:'日程窗口',idle:'沉默后联系',adaptive:'联系频率',sleep:'睡眠偶发',manual:'手动请求'})[row.trigger] || row.trigger }}</template></small><p>{{ row.reason }}</p><p v-if="row.intent" class="hint">候选：{{ row.intent }}</p></div><p v-if="!lifeAuditRows.length" class="hint">这个会话还没有主动判断记录。</p></div>
             </div>
             <h3 class="life-section-title" v-show="lifePanel === 'life'">生活规则<small>所有人格共用；展开后调整</small></h3>
             <div class="life-config-grid"><details v-for="(group,key) in lifeConfigGroups" :key="key" class="glass-card life-config-section" :class="{'life-wide':key==='media_settings' && lifePanel==='media'}" ><summary><span>{{ lifeGroupTitle(key) }}</span><small>{{ lifePanel === 'advanced' ? Object.keys(lifePanelSchema(key)).length + ' 项精细设置' : lifeGroupSummary(key) }}</small></summary><template v-if="key === 'media_settings' && lifeConfig[key]"><template v-if="lifePanel==='media'"><life-settings :schema="mediaGeneralSchema" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><div class="life-media-kinds" v-if="lifeConfig.media_settings.enable"><section v-for="kind in ['photo','video','audio']" :key="kind" class="life-media-kind"><h3>{{ {photo:'照片',video:'视频',audio:'音频'}[kind] }}</h3><life-settings :schema="mediaKindSchema(kind)" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings></section></div></template><life-settings v-else :schema="mediaSettingsSchema" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><div class="billing-picker-row" v-if="lifePanel === 'media'"><div class="field"><label>固定账户平台名 <span>来自 AstrBot 已配置的平台</span></label><select aria-label="固定账户平台名" v-model="lifeConfig.media_settings.proactive_billing_platform"><option value="">沿用当前平台</option><option v-for="row in billingPlatforms" :key="row.id" :value="row.id">{{ row.name }}</option><option v-if="lifeConfig.media_settings.proactive_billing_platform && !billingPlatforms.some(p => p.id === lifeConfig.media_settings.proactive_billing_platform)" :value="lifeConfig.media_settings.proactive_billing_platform">{{ lifeConfig.media_settings.proactive_billing_platform }}（已保存）</option></select></div><div class="field"><label>固定账户用户 ID <span>来自 aigen 记账账户，可搜索</span></label><div class="life-picker"><input type="text" :value="billingUserLabel" placeholder="搜索平台或用户 ID" autocomplete="off" aria-label="固定账户用户 ID" @focus="showBillingUserList = true" @input="onBillingUserInput($event.target.value)" @keydown.esc="showBillingUserList = false" @blur="hidePicker('billingUser')"><div v-if="showBillingUserList" class="life-picker-list"><button v-for="row in filteredBillingAccounts" :key="row.label" type="button" :class="{active: row.user_id === lifeConfig.media_settings.proactive_billing_user_id}" @mousedown.prevent="pickBillingAccount(row)"><strong>{{ row.user_id }}</strong><small>{{ row.platform }} · 余额 {{ row.amount }}</small></button><div v-if="!filteredBillingAccounts.length" class="life-picker-empty">没有匹配的记账账户；也可直接输入用户 ID。</div></div></div><p class="hint">列出的是 aigen 账本中已有余额行的账户；主动发起会消耗这里选中的账户。</p></div></div></template><life-settings v-else-if="lifeConfig[key]" :schema="lifePanelSchema(key)" :value="lifeConfig[key]" :providers="lifeProviders"></life-settings><p v-if="key === 'media_settings'" class="hint">三项概率独立掷骰，判定为“生成多媒体”后只会从已启用的种类里挑一种发送，数量由模型在配置区间内决定。</p></details></div>
@@ -668,6 +680,6 @@
       <p class="footer-note">全局服务参数仍由 AstrBot 原生配置页管理；本页保存的详细策略写入 AstrBot 数据目录。修改后请点击“保存全部设置”。</p>
       <div class="save-bar"><span class="save-status" :class="saveState">{{ statusText }}</span><button class="button primary" :disabled="loading || saving || !loaded" @click="save">{{ saving ? '保存中…' : '保存全部设置' }}</button></div>
     </div>
-    <script src="./app.js?v=0.4.7"></script>
+    <script src="./app.js?v=0.4.8"></script>
   </body>
 </html>

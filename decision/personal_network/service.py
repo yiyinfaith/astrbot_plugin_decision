@@ -865,6 +865,9 @@ class PersonalNetworkService:
                 ),
                 timeout=GENERATION_TASK_TIMEOUT_SECONDS,
             )
+            from ..usage_meter import record as record_usage
+
+            record_usage("人际网络生成", response=response, prompt=system_prompt + prompt)
             raw = self._completion_text(response)
             result = await self._validate_generation_text(
                 persona_id,

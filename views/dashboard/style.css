@@ -326,3 +326,8 @@ html #network-shell { --bg: var(--theme-bg); --surface: var(--theme-surface); --
 .life-actions-label { align-self: center; min-width: 56px; color: var(--muted); font-size: 12px; }
 .life-section-title { display: flex; align-items: baseline; gap: 10px; margin: 8px 2px 0; font-size: 15px; }
 .life-section-title small { color: var(--muted); font-size: 12px; font-weight: 400; }
+.usage-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.usage-table th, .usage-table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); }
+.usage-table th { color: var(--muted); font-weight: 600; }
+.usage-table td:not(:first-child), .usage-table th:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+.life-timeline .life-record.sent strong { color: var(--primary); }

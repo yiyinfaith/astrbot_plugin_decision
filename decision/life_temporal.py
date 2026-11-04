@@ -14,10 +14,24 @@ import math
 import re
 from datetime import datetime, timedelta
 
+from . import usage_meter
 from .life_contacts import group_authorized
 from .virtual_life.core.utils import extract_json_object
 
 ACTIVE = {"pending", "preparing", "ready", "suspended", "awaiting_delivery"}
+
+
+PURPOSE_FEATURES = {
+    "conversation_facts": "主动发起·互动分析",
+    "activity_idea": "主动发起·日程想法",
+    "reply_delay_notice": "回复延迟·提示",
+    "temporal": "时间承诺",
+    "time_guard": "时间承诺",
+    "scheduled_prepare": "时间承诺",
+    "commitment_receipt": "时间承诺",
+    "delivery_receipt": "主动发起·辅助",
+    "external_confirmation": "时间承诺",
+}
 
 
 class PreparationDeferred(Exception):
@@ -66,11 +80,25 @@ class TemporalControl:
             async with self.model_slots:
                 if before_submit is not None and not await before_submit():
                     raise PreparationDeferred()
-                response = await provider.text_chat(
-                    prompt=prompt,
-                    system_prompt=system,
-                    session_id=f"decision_{purpose}::{identity}",
-                )
+                try:
+                    response = await provider.text_chat(
+                        prompt=prompt,
+                        system_prompt=system,
+                        session_id=f"decision_{purpose}::{identity}",
+                    )
+                except Exception:
+                    usage_meter.record(
+                        PURPOSE_FEATURES.get(purpose, "主动发起·辅助"),
+                        prompt=system + prompt,
+                        output="",
+                        ok=False,
+                    )
+                    raise
+        usage_meter.record(
+            PURPOSE_FEATURES.get(purpose, "主动发起·辅助"),
+            response=response,
+            prompt=system + prompt,
+        )
         text = str(getattr(response, "completion_text", "") or "").strip()
         if not text:
             raise ValueError("时间状态模型返回空内容")

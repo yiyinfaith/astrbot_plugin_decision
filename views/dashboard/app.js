@@ -13,7 +13,7 @@ async function waitForBridge(timeoutMs = 5000) {
 }
 // The liquid-glass theme is optional. While it is off, neither the WebGL
 // library nor liquid.css is loaded and the page uses style.css.
-const ASSET_VERSION = '0.4.7';
+const ASSET_VERSION = '0.4.8';
 let glassLibraryLoading = null;
 let liquidSheetLoading = null;
 function supportsWebGL2() {
@@ -122,6 +122,33 @@ const defaults = {
   dense_conversation_threshold: 30, dense_conversation_window_seconds: 600, min_participant_count: 2
 };
 const TOOL_THRESHOLD_DEFAULT = .65;
+const LIFE_PRESETS = {
+  restrained: {label:'克制', description:'少打扰：沉默更久才开口，额度更少，对方没回就更快收敛。', values:{
+    friend_settings:{idle_min_minutes:180, idle_max_minutes:480, cooldown_minutes:240, daily_budget_min:0, daily_budget_max:2, daily_hard_max:3},
+    group_settings:{idle_min_minutes:90, idle_max_minutes:240, cooldown_minutes:120, daily_budget_min:0, daily_budget_max:1, daily_hard_max:1},
+    adaptive_settings:{friend_min_minutes:240, group_min_minutes:120, max_interval_minutes:4320},
+    delivery_settings:{max_unanswered:2, availability_probabilities:{blocked:0, low:0.1, normal:0.5, high:0.8}},
+    integration_settings:{jev_threshold:0.75, jev_relevant_threshold:0.75, jev_timing_threshold:0.6}}},
+  normal: {label:'正常', description:'插件默认值：每天一到三次，留出足够的沉默和冷却。', values:{
+    friend_settings:{idle_min_minutes:90, idle_max_minutes:240, cooldown_minutes:120, daily_budget_min:1, daily_budget_max:3, daily_hard_max:5},
+    group_settings:{idle_min_minutes:45, idle_max_minutes:120, cooldown_minutes:60, daily_budget_min:0, daily_budget_max:1, daily_hard_max:2},
+    adaptive_settings:{friend_min_minutes:120, group_min_minutes:60, max_interval_minutes:2880},
+    delivery_settings:{max_unanswered:3, availability_probabilities:{blocked:0, low:0.25, normal:0.7, high:1}},
+    integration_settings:{jev_threshold:0.7, jev_relevant_threshold:0.7, jev_timing_threshold:0.5}}},
+  clingy: {label:'黏人', description:'更常找人：沉默不久就开口，额度更多，但仍遵守免打扰、暂停和每日硬上限。', values:{
+    friend_settings:{idle_min_minutes:30, idle_max_minutes:120, cooldown_minutes:45, daily_budget_min:3, daily_budget_max:6, daily_hard_max:10},
+    group_settings:{idle_min_minutes:30, idle_max_minutes:90, cooldown_minutes:40, daily_budget_min:1, daily_budget_max:2, daily_hard_max:4},
+    adaptive_settings:{friend_min_minutes:45, group_min_minutes:30, max_interval_minutes:1440},
+    delivery_settings:{max_unanswered:4, availability_probabilities:{blocked:0, low:0.4, normal:0.9, high:1}},
+    integration_settings:{jev_threshold:0.6, jev_relevant_threshold:0.6, jev_timing_threshold:0.4}}}
+};
+function presetMatches(config, values) {
+  return Object.entries(values).every(([group, fields]) => Object.entries(fields).every(([key, value]) => {
+    const current = config?.[group]?.[key];
+    if (value && typeof value === 'object') return Object.entries(value).every(([k, v]) => Number(current?.[k]) === v);
+    return Number(current) === value;
+  }));
+}
 const app = createApp({
   data() {
     return {
@@ -135,7 +162,7 @@ const app = createApp({
       activeTab: 'tools',
       proactiveTab: 'reactive', flowTab: 'input', messageInterjection: true,
       lifePanel: 'contact', lifePanels: LifeWorkspace.panels, lifeAdvancedSearch: '', lifeTaskDraft: {id:'',note:'',runAt:'',originalRunAt:'',originalLocalAt:''}, lifeControlBusy:false,
-      lifeConfig: {}, lifeSchema: {}, lifeProviders: [], lifeStatus: {}, lifeTasks: {},
+      lifeConfig: {}, lifeSchema: {}, lifeProviders: [], lifeStatus: {}, lifeTasks: {}, usageStats: {}, lifePresets: LIFE_PRESETS,
       lifeUmo: '', lifeActionText: '', lifeDateRange: '', lifeMessage: '', lifeBusy: false,
       appearancePersona: '', appearanceImages: [], appearanceDescription: '', appearancePersonaId: '', personaOptions: [], sessionOptions: [], sessionSearch: '', personaSearch: '', showSessionList: false, showPersonaList: false,
       networkDetailLoaded: false,
@@ -219,6 +246,10 @@ const app = createApp({
   computed: {
     // The session picker matters only where data is read per conversation.
     lifeNeedsSession() { return ['life', 'reminders', 'status'].includes(this.lifePanel); },
+    lifePresetActive() { return Object.keys(LIFE_PRESETS).find(id => presetMatches(this.lifeConfig, LIFE_PRESETS[id].values)) || ''; },
+    lifeAuditRows() { return (this.lifeStatus.audit || []).filter(r => r.umo === this.lifeUmo).slice(-20).reverse(); },
+    usageRows() { const day = this.usageStats.days?.[this.usageStats.today] || {}; return Object.entries(day).map(([feature, row]) => ({feature, ...row, tokens: (row.input_tokens || 0) + (row.output_tokens || 0)})).sort((a, b) => b.calls - a.calls); },
+    usageWeek() { const days = this.usageStats.days || {}; return Object.entries(days).map(([day, rows]) => ({day, calls: Object.values(rows).reduce((n, r) => n + (r.calls || 0), 0), tokens: Object.values(rows).reduce((n, r) => n + (r.input_tokens || 0) + (r.output_tokens || 0), 0)})); },
     lifeSessions() { return [...new Set([...(this.lifeConfig.friend_settings?.session_list || []), ...(this.lifeConfig.group_settings?.session_list || []), ...Object.keys(this.lifeStatus.sessions || {})])]; },
     // friend/group/network/appearance render as dedicated cards above, so
     // the generic grid must not repeat them.
@@ -304,7 +335,7 @@ const app = createApp({
     mediaKindSchema(kind) { return Object.fromEntries(Object.entries(this.mediaSettingsSchema).filter(([key])=>this.mediaKindFor(key)===kind)); },
     lifePanelSchema(key) { const schema=LifeWorkspace.schemaFor(this.lifeSchema,key,this.lifePanel,this.lifePanel==='advanced'?this.lifeAdvancedSearch:''); if(this.lifePanel==='advanced') return schema; const value=this.lifeConfig[key] || {}; return Object.fromEntries(Object.entries(schema).filter(([field])=>LifeWorkspace.enabledField(key,field,value))); },
     lifeGroupTitle(key) { return LifeWorkspace.names[key] || this.cleanLifeLabel(this.lifeSchema[key]?.description || key); },
-    lifeGroupSummary(key) { const v=this.lifeConfig[key] || {}; if(key==='adaptive_settings') return v.enable?'自适应已开启':'使用传统规则'; if(key==='humanization_settings') return v.enable?'关系、节奏与内容轮换已开启':'拟人化优化已关闭'; if(key==='integration_settings') return `${v.quiet_start}—${v.quiet_end}`; if(key==='media_settings') return ['photo','video','audio'].filter(k=>v[k+'_enable']).map(k=>({photo:'照片',video:'视频',audio:'音频'}[k])).join(' · ') || '多媒体已关闭'; if('enable' in v) return v.enable?'已开启':'已关闭'; return '全局规则'; },
+    lifeGroupSummary(key) { const v=this.lifeConfig[key] || {}; if(key==='adaptive_settings') return v.enable?'自适应已开启':'使用传统规则'; if(key==='humanization_settings') return v.enable?'关系、节奏与内容轮换已开启':'拟人化优化已关闭'; if(key==='integration_settings') return `${v.quiet_start}—${v.quiet_end} · 阈值 ${v.jev_threshold}/${v.jev_relevant_threshold}/${v.jev_timing_threshold}`; if(key==='weather_settings') return ({off:'不使用天气',random:'随机天气',city:'城市天气 · ' + (v.city || '天气插件默认城市')})[v.mode] || '不使用天气'; if(key==='media_settings') return ['photo','video','audio'].filter(k=>v[k+'_enable']).map(k=>({photo:'照片',video:'视频',audio:'音频'}[k])).join(' · ') || '多媒体已关闭'; if('enable' in v) return v.enable?'已开启':'已关闭'; return '全局规则'; },
     localTaskTime(value) { const d=new Date(value); return Number.isNaN(d.getTime())?'':new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,19); },
     async lifeControl(action,extra={}) { if(!this.lifeUmo.trim()) return this.showToast('err','未选择会话','先选择目标会话'); const umo=this.lifeUmo.trim(); this.lifeControlBusy=true; try { const bridge=await waitForBridge(); const result=payloadOf(await bridge.apiPost('life/control',{umo,action,...extra})); if(!result.saved) throw new Error(result.error || '操作未保存'); if(this.lifeUmo.trim()===umo) { await this.lifeAction('inspect'); this.showToast('ok','已保存','任务与状态已更新'); } return true; } catch(e) {this.showToast('err','操作未保存',e.message || String(e));} finally {this.lifeControlBusy=false;} },
     async createLifeTask() { if(!this.lifeTaskDraft.note || !this.lifeTaskDraft.runAt) return this.showToast('err','信息不完整','填写提醒内容和时间'); const draft={...this.lifeTaskDraft}; const runAt=draft.id && draft.runAt===draft.originalLocalAt ? draft.originalRunAt : new Date(draft.runAt).toISOString(); if(await this.lifeControl(draft.id?'edit_task':'create_task',{task_id:draft.id,note:draft.note,run_at:runAt})) this.lifeTaskDraft={id:'',note:'',runAt:'',originalRunAt:'',originalLocalAt:''}; },
@@ -542,7 +573,7 @@ const app = createApp({
     async refreshLife() {
       try {
         const bridge = await waitForBridge(); const result = payloadOf(await bridge.apiGet('life'));
-        this.lifeStatus = result.status || {}; this.lifeTasks = result.tasks || {}; this.aigenAvailable = result.aigen_available === true;
+        this.lifeStatus = result.status || {}; this.lifeTasks = result.tasks || {}; this.aigenAvailable = result.aigen_available === true; this.usageStats = result.usage || {};
         const running = Object.values(this.lifeTasks).some(task => task.state === 'running');
         if (this.lifePoll) clearTimeout(this.lifePoll);
         if (running) this.lifePoll = setTimeout(() => this.refreshLife(), 2000);
@@ -596,6 +627,8 @@ const app = createApp({
       })[action] || action;
     },
     showToast(kind, title, text) { this.lifeToast = { kind, title, text }; },
+    applyLifePreset(id) { const preset = LIFE_PRESETS[id]; if (!preset) return; for (const [group, fields] of Object.entries(preset.values)) { if (!this.lifeConfig[group]) continue; for (const [key, value] of Object.entries(fields)) { if (value && typeof value === 'object') this.lifeConfig[group][key] = {...(this.lifeConfig[group][key] || {}), ...value}; else this.lifeConfig[group][key] = value; } } this.showToast('success', `已套用「${preset.label}」`, '只改了频率相关的参数，保存后生效；之后仍可逐项微调。'); },
+    formatTokens(value) { const n = Number(value) || 0; return n >= 10000 ? (n / 10000).toFixed(1) + ' 万' : String(n); },
     describeResult(result) {
       if (result == null) return '完成，没有返回内容。';
       if (typeof result === 'string') return result.slice(0, 300);
@@ -900,7 +933,7 @@ const app = createApp({
         this._offContext = activeBridge.onContext?.(applyTheme);
         const [rawToolData, rawSettings, rawLife] = await Promise.all([activeBridge.apiGet('tools'), activeBridge.apiGet('settings'), activeBridge.apiGet('life')]);
         const life = payloadOf(rawLife); if (!life.schema || !life.settings) throw new Error('生活设置未完整加载，已阻止保存');
-        this.lifeSchema = life.schema; this.lifeConfig = life.settings; this.lifeProviders = life.providers || []; this.lifeStatus = life.status || {}; this.lifeTasks = life.tasks || {}; this.aigenAvailable = life.aigen_available === true;
+        this.lifeSchema = life.schema; this.lifeConfig = life.settings; this.lifeProviders = life.providers || []; this.lifeStatus = life.status || {}; this.lifeTasks = life.tasks || {}; this.aigenAvailable = life.aigen_available === true; this.usageStats = life.usage || {};
         const toolData = payloadOf(rawToolData); const settings = payloadOf(rawSettings);
         if (!Array.isArray(toolData.tools) || !settings || typeof settings !== 'object' || Array.isArray(settings) || !Array.isArray(settings.always_keep_tools)) throw new Error('服务器返回的数据格式无效');
         this.tools = normalizeTools(toolData);

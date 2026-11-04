@@ -6,7 +6,10 @@ import re
 from pathlib import Path
 
 import pytest
+
 from tests.dashboard_source import dashboard_source
+
+from .plugin_source import plugin_source
 
 ROOT = Path(__file__).resolve().parents[1]
 DASH = ROOT / "views" / "dashboard"
@@ -72,6 +75,6 @@ def test_standalone_page_is_gone():
 
 
 def test_server_has_no_dead_embed_route():
-    main = (ROOT / "main.py").read_text(encoding="utf-8")
+    main = plugin_source()
     assert "network_embed_url" not in main
     assert '"network/embed"' not in main

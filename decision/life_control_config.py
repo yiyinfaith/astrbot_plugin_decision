@@ -70,6 +70,12 @@ def control_schema():
                     2880,
                     "未回应只逐步降频；在允许联系的时段保留低频联系。明确暂停、禁用和名单限制优先。",
                 ),
+                "floor_threshold": _field(
+                    "float",
+                    "保底联系时的 Jev 阈值",
+                    0.4,
+                    "超过最长间隔后不再跳过 Jev，只把三项阈值降到这里；Jev 调用失败时 15 分钟后重试。",
+                ),
                 "response_window_minutes": _field("int", "主动消息回应观察期（分）", 120),
                 "adjustment_cooldown_minutes": _field("int", "积极互动自动调整间隔（分）", 360),
                 "positive_factor": _field("float", "积极互动间隔倍率", 0.85),
@@ -139,6 +145,106 @@ def control_schema():
                 "rhythm_history_days": _field(
                     "int", "回复节奏参考天数", 30, "只保留粗粒度节奏，不保存完整消息副本。"
                 ),
+                "today_angle_enable": _field(
+                    "bool",
+                    "按当天聊天选择切入角度",
+                    True,
+                    "在同一次 Jev 判断里选择沿用原定意图、接着今天聊过的内容或分享当下生活，不额外调用模型。",
+                ),
+                "opening_style_enable": _field(
+                    "bool",
+                    "开场方式多样化",
+                    True,
+                    "按概率让主动消息只发一句短话，或先简短开场、等对方回应后再展开。",
+                ),
+                "short_opening_probability": _field(
+                    "float",
+                    "只发一句短话的概率",
+                    0.35,
+                    "命中时只发一句很短的话、语气词或表情。",
+                ),
+                "two_stage_probability": _field(
+                    "float",
+                    "两段式开场的概率",
+                    0.25,
+                    "先发简短开场，对方在等待时间内回应后，正常回复会自然接上原本想说的事。",
+                ),
+                "two_stage_window_minutes": _field(
+                    "int",
+                    "两段式等待回应时间（分）",
+                    30,
+                    "超时未回应就不再展开，按一次未回应计算。",
+                ),
+                "active_hours_enable": _field(
+                    "bool",
+                    "参考对方常在线的时段",
+                    True,
+                    "按小时统计对方发消息的时间；候选落在对方很少在线的时段时，按概率顺延到对方常在线的时间。",
+                ),
+                "active_hours_min_samples": _field(
+                    "int", "活跃时段最少样本数", 30, "样本不足时不影响主动发起。"
+                ),
+                "active_hours_low_ratio": _field(
+                    "float",
+                    "低活跃时段判定比例",
+                    0.35,
+                    "该小时活跃度低于平均值的这个比例时视为对方通常不在线。",
+                ),
+                "active_hours_half_life_days": _field(
+                    "int",
+                    "活跃时段记忆半衰期（天）",
+                    14,
+                    "越久远的消息权重越低，作息变化后会逐渐跟上。",
+                ),
+            },
+        },
+        "weather_settings": {
+            "type": "object",
+            "description": "🌦️ 天气",
+            "items": {
+                "mode": _field(
+                    "string",
+                    "天气来源",
+                    "off",
+                    "随机天气按季节和气候生成，同一天保持一致；指定城市通过已安装的 astrbot_plugin_weather 查询，沿用它的 API Key。",
+                    options=["off", "random", "city"],
+                    labels=["不使用", "随机天气", "指定城市（天气插件）"],
+                ),
+                "city": _field(
+                    "string",
+                    "城市",
+                    "",
+                    "留空时使用天气插件里配置的默认城市。",
+                ),
+                "random_climate": _field(
+                    "string",
+                    "随机天气气候",
+                    "temperate",
+                    "决定各月的气温范围和降水概率。",
+                    options=["temperate", "subtropical", "tropical", "cold"],
+                    labels=["四季分明", "温暖湿润", "炎热多雨", "寒冷"],
+                ),
+                "cache_minutes": _field(
+                    "int",
+                    "实时天气缓存（分）",
+                    60,
+                    "同一城市的实时天气查询间隔，减少天气 API 调用；预报每 6 小时更新。",
+                ),
+                "schedule_enable": _field(
+                    "bool", "日程与穿搭参考天气", True, "生成当天日程和穿搭时带上当天天气。"
+                ),
+                "proactive_enable": _field(
+                    "bool",
+                    "主动消息参考天气",
+                    True,
+                    "主动消息可以自然提到天气，也可用 {weather} 变量。",
+                ),
+                "chat_enable": _field(
+                    "bool",
+                    "聊到天气时注入",
+                    True,
+                    "普通对话提到天气、冷热、下雨等词时注入当前天气，避免随机天气前后矛盾。",
+                ),
             },
         },
         "temporal_settings": {
@@ -207,11 +313,32 @@ def validate_control(settings):
     ):
         if not low <= human[key] <= high:
             raise ValueError(f"{key} 须在 {low} 到 {high} 之间")
+    for key in ("short_opening_probability", "two_stage_probability"):
+        if not 0 <= human[key] <= 1:
+            raise ValueError("开场方式概率须在 0 到 1 之间")
+    if human["short_opening_probability"] + human["two_stage_probability"] > 1:
+        raise ValueError("短句开场与两段式开场的概率之和不能超过 1")
+    for key, low, high in (
+        ("two_stage_window_minutes", 1, 1440),
+        ("active_hours_min_samples", 1, 10000),
+        ("active_hours_half_life_days", 1, 365),
+    ):
+        if not low <= human[key] <= high:
+            raise ValueError(f"{key} 须在 {low} 到 {high} 之间")
+    if not 0 < human["active_hours_low_ratio"] <= 1:
+        raise ValueError("低活跃时段判定比例须在 0 到 1 之间")
+    weather = settings["weather_settings"]
+    if not 1 <= weather["cache_minutes"] <= 1440:
+        raise ValueError("实时天气缓存须在 1 到 1440 分钟之间")
+    if len(weather["city"]) > 60:
+        raise ValueError("城市名称过长")
     adaptive = settings["adaptive_settings"]
     if not 1 <= adaptive["friend_min_minutes"] <= adaptive["max_interval_minutes"] <= 43200:
         raise ValueError("私聊最短间隔须为 1 分钟以上且不大于最长间隔；最长不超过 30 天")
     if not 1 <= adaptive["group_min_minutes"] <= adaptive["max_interval_minutes"]:
         raise ValueError("群聊最短间隔须为 1 分钟以上且不大于最长间隔")
+    if not 0 <= adaptive["floor_threshold"] <= 1:
+        raise ValueError("保底联系阈值须在 0 到 1 之间")
     for key in ("response_window_minutes", "adjustment_cooldown_minutes"):
         if not 1 <= adaptive[key] <= 43200:
             raise ValueError("频率观察／调整间隔须在 1 到 43200 分钟之间")

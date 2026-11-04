@@ -54,6 +54,7 @@ PROMPTS = {
     ),
 }
 
+
 class MultimodalRuntime:
     """Long-lived coordinator owned by the plugin."""
 
@@ -865,8 +866,7 @@ class MultimodalRuntime:
             if native is not None:
                 return native
             raise ValueError(
-                "当前模型/Provider 不支持原生视频理解（需要 Gemini 官方 Files API）；"
-                "请改用“自动”"
+                "当前模型/Provider 不支持原生视频理解（需要 Gemini 官方 Files API）；请改用“自动”"
             )
 
         if strategy == "inline" and 0 < duration <= short_limit:
@@ -889,6 +889,15 @@ class MultimodalRuntime:
                     timeout=timeout,
                     stream=settings.bool("mm_stream_enabled"),
                     gateway_openai=settings.bool("mm_gateway_openai_stream"),
+                )
+                from ..usage_meter import record as record_usage
+
+                # Gemini bills roughly 300 tokens per second of video with audio.
+                record_usage(
+                    "多模态理解",
+                    prompt=inline_prompt,
+                    output=answer,
+                    extra_input=int(float(duration or 0) * 300),
                 )
                 return answer, {
                     "duration": duration,
@@ -1130,8 +1139,8 @@ class MultimodalRuntime:
                 )
         summary = answer.strip()
         if findings:
-            summary += (
-                f"\n\n重点片段（{len(findings)} 轮精读，共 {len(seen)} 段）：\n" + "\n".join(findings)
+            summary += f"\n\n重点片段（{len(findings)} 轮精读，共 {len(seen)} 段）：\n" + "\n".join(
+                findings
             )
         if transcript:
             summary += f"\n\n视频音轨转录与声音描述：\n{transcript}"
@@ -1168,7 +1177,9 @@ class MultimodalRuntime:
         start = max(0.0, focus.start)
         end = min(focus.end, duration) if duration > 0 else focus.end
         if end - start < 0.5:
-            raise ValueError(f"时间范围 {focus.start:g}-{focus.end:g}s 不在视频内（时长 {duration:.1f}s）")
+            raise ValueError(
+                f"时间范围 {focus.start:g}-{focus.end:g}s 不在视频内（时长 {duration:.1f}s）"
+            )
         per_call = self._video_frames_per_call(detail)
         max_fps = float(self._settings.int("mm_video_seek_max_fps"))
         span = end - start
@@ -1416,7 +1427,6 @@ class MultimodalRuntime:
             except Exception:
                 return []
         try:
-
             pages: list[int] = []
             with fitz.open(str(path)) as document:
                 for number, page in enumerate(document):
@@ -1752,6 +1762,14 @@ class MultimodalRuntime:
             timeout=float(self._settings.int("mm_timeout_seconds")) * 2,
             workdir=workdir,
             agentic=agentic,
+        )
+        from ..usage_meter import record as record_usage
+
+        record_usage(
+            "多模态理解",
+            prompt=prompt,
+            output=result.text or "",
+            ok=bool(result.route == "native" and result.text),
         )
         if result.route != "native" or not result.text:
             from .submissions import current

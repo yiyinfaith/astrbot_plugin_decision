@@ -20,7 +20,24 @@ def life_schema() -> dict[str, Any]:
         "type": "object",
         "description": "🚀 主动发起与 Jev",
         "items": {
-            "jev_threshold": {"type": "float", "description": "主动发起阈值", "default": 0.7},
+            "jev_threshold": {
+                "type": "float",
+                "description": "主动发起阈值：是否自然",
+                "default": 0.7,
+                "hint": "Jev 判断此刻主动联系是否自然、受欢迎。",
+            },
+            "jev_relevant_threshold": {
+                "type": "float",
+                "description": "主动发起阈值：话题价值",
+                "default": 0.7,
+                "hint": "Jev 判断话题是否有内容，而不是重复的泛泛问候。旧配置沿用上面的阈值。",
+            },
+            "jev_timing_threshold": {
+                "type": "float",
+                "description": "主动发起阈值：时机",
+                "default": 0.5,
+                "hint": "免打扰、冷却、额度和未回应上限已由程序把关，这一项只做补充判断，默认放宽。",
+            },
             "quiet_start": {"type": "string", "description": "免打扰开始", "default": "23:00"},
             "quiet_end": {"type": "string", "description": "免打扰结束", "default": "07:00"},
             "offline_retry_minutes": {
@@ -133,6 +150,22 @@ def normalize_life(value: Any) -> dict[str, Any]:
                 result[key] = item
         return result
 
+    integration = value.get("integration_settings")
+    if (
+        isinstance(integration, dict)
+        and "jev_threshold" in integration
+        and "jev_relevant_threshold" not in integration
+    ):
+        # Before 0.4.8 one threshold covered every Jev question. The relevance
+        # check keeps that value; the timing check deliberately uses its new,
+        # looser default because program rules already gate timing.
+        value = {
+            **value,
+            "integration_settings": {
+                **integration,
+                "jev_relevant_threshold": integration["jev_threshold"],
+            },
+        }
     out = walk(value, life_schema())
     from .life_control_config import validate_control
 
@@ -161,8 +194,9 @@ def normalize_life(value: Any) -> dict[str, Any]:
     ):
         if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", out[group][key]):
             raise ValueError(f"{key} 请填写 HH:MM")
-    if not 0 <= out["integration_settings"]["jev_threshold"] <= 1:
-        raise ValueError("主动发起阈值须在 0 到 1 之间")
+    for key in ("jev_threshold", "jev_relevant_threshold", "jev_timing_threshold"):
+        if not 0 <= out["integration_settings"][key] <= 1:
+            raise ValueError("主动发起阈值须在 0 到 1 之间")
     if not 1 <= out["integration_settings"]["max_concurrent"] <= 8:
         raise ValueError("后台并发请设置为 1 到 8")
     if not 1 <= out["media_settings"]["video_duration"] <= 120:
@@ -233,8 +267,11 @@ def normalize_life(value: Any) -> dict[str, Any]:
             re.compile(pattern)
         except re.error as exc:
             raise ValueError(f"代词匹配规则不是合法正则：{pattern}") from exc
-    if out["reply_delay_settings"]["max_delay_seconds"] > 86400:
+    delay = out["reply_delay_settings"]
+    if delay["max_delay_seconds"] > 86400 or delay["max_sleep_delay_seconds"] > 86400:
         raise ValueError("回复等待最长为 86400 秒")
+    if delay["notify_min_seconds"] > 86400:
+        raise ValueError("提示的最短延迟最长为 86400 秒")
     for key in ("image_aspect_ratio", "video_aspect_ratio"):
         if not re.fullmatch(r"\d{1,2}:\d{1,2}", out["media_settings"][key]) or any(
             int(x) == 0 for x in out["media_settings"][key].split(":")

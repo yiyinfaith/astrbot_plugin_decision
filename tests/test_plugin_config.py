@@ -82,6 +82,12 @@ def host(monkeypatch, tmp_path):
     )
     package = module("_decision_config_test")
     package.__path__ = [str(ROOT)]
+    # main.py takes its host imports from the shared mixin modules; reload them
+    # too so each test sees its own stubbed AstrBot functions.
+    for name in [
+        key for key in sys.modules if key.startswith("_decision_config_test.decision.plugin_")
+    ]:
+        monkeypatch.delitem(sys.modules, name)
     spec = importlib.util.spec_from_file_location("_decision_config_test.main", ROOT / "main.py")
     integration = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, integration)
@@ -761,8 +767,9 @@ async def test_proactive_request_is_yielded_after_the_session_lock_is_released(h
         get_messages=lambda: [],
         get_extra=lambda key, default=None: default,
         get_message_outline=lambda: "普通消息",
-        request_llm=lambda **kwargs: lock_held.append(plugin.proactive.lock_for(session).locked())
-        or "provider-request",
+        request_llm=lambda **kwargs: (
+            lock_held.append(plugin.proactive.lock_for(session).locked()) or "provider-request"
+        ),
         should_call_llm=lambda value: setattr(event, "call_llm", value),
     )
 
@@ -1583,9 +1590,7 @@ async def test_only_the_proactive_request_settles_its_reply_slot(host):
     await plugin.remember_bot_response(event({}), response)
     assert plugin.proactive.has_pending_reply(session)
     token = plugin.proactive.pending_reply_token(session)
-    await plugin.remember_bot_response(
-        event({host.module.PROACTIVE_REPLY_EXTRA: token}), response
-    )
+    await plugin.remember_bot_response(event({host.module.PROACTIVE_REPLY_EXTRA: token}), response)
     assert not plugin.proactive.has_pending_reply(session)
 
 
@@ -1602,9 +1607,17 @@ async def test_finished_proactive_request_never_settles_a_newer_reservation(host
         get_conversation=AsyncMock(return_value=SimpleNamespace()),
     )
     full = {"noul": 1.0}
-    keys = ("is_addressing_bot", "should_interject", "conversation_relevance", "timing", "continuity")
+    keys = (
+        "is_addressing_bot",
+        "should_interject",
+        "conversation_relevance",
+        "timing",
+        "continuity",
+    )
     monkeypatch.setattr(
-        plugin, "_evaluate", AsyncMock(return_value=SimpleNamespace(answers=dict.fromkeys(keys, full)))
+        plugin,
+        "_evaluate",
+        AsyncMock(return_value=SimpleNamespace(answers=dict.fromkeys(keys, full))),
     )
     session = "qq:GroupMessage:group-1"
     extras: dict = {}

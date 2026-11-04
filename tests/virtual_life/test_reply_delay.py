@@ -186,7 +186,14 @@ class ReplyDelayPolicyTests(unittest.TestCase):
         self.assertTrue(policy.notify_user)
         self.assertEqual(policy.active_conversation_seconds, 300)
         self.assertEqual(policy.max_delay_seconds, 1800)
-        self.assertEqual(policy.notification(policy.decide(self.item, self.now, 4))[:2], "预计")
+        self.assertEqual(policy.notification_style, "persona")
+        self.assertEqual(policy.notify_min_seconds, 120)
+        self.assertTrue(policy.sleep_until_wake)
+        self.assertEqual(policy.max_sleep_delay_seconds, 28800)
+        # The fallback reads like a person, not like a countdown.
+        self.assertEqual(
+            policy.notification(policy.decide(self.item, self.now, 4)), "在忙，晚点回你"
+        )
 
     def test_schema_documents_every_reply_delay_field_and_formula_function(self):
         schema = json.loads(Path("decision/virtual_life/schema.json").read_text(encoding="utf-8"))

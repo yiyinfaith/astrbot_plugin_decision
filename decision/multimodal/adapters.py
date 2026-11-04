@@ -199,6 +199,40 @@ async def call_provider(
 ) -> str:
     """Run one multi-modal completion and return the plain text answer."""
 
+    from ..usage_meter import record as record_usage
+
+    # Images and audio have no text length; count a typical per-item cost.
+    media = 260 * len(images or ()) + 400 * len(audio or ())
+    try:
+        text = await _call_provider(
+            provider,
+            prompt=prompt,
+            images=images,
+            audio=audio,
+            model=model,
+            timeout=timeout,
+            stream=stream,
+            gateway_openai=gateway_openai,
+        )
+    except Exception:
+        record_usage("多模态理解", prompt=prompt, output="", extra_input=media, ok=False)
+        raise
+    record_usage("多模态理解", prompt=prompt, output=text, extra_input=media)
+    return text
+
+
+async def _call_provider(
+    provider: Any,
+    *,
+    prompt: str,
+    images: list[str] | None = None,
+    audio: list[str] | None = None,
+    model: str | None = None,
+    timeout: float = 180.0,
+    stream: bool = True,
+    gateway_openai: bool = False,
+) -> str:
+
     if stream and gateway_openai:
         from . import openai_transport
 

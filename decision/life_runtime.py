@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import time
 from collections import deque
 from dataclasses import replace
@@ -19,12 +20,55 @@ from .life_ideas import LifeIdeas
 from .life_ledger import LifeLedger
 from .life_state import PersonaLifeState
 from .life_temporal import TemporalControl
+from .life_weather import WEATHER_WORDS, WeatherService
 from .tokens import estimate_request_tokens
 from .virtual_life.core.models import SessionState
 from .virtual_life.core.persona import PersonaContext
 from .virtual_life.core.proactive import ProactivePolicy
 from .virtual_life.core.utils import format_outfit, prune_date_keys, timeline_item_at
 from .virtual_life.engine import VirtualLifeBase, temporary_text
+
+# A candidate postponed because the person is rarely online at this hour.
+USUALLY_AWAY = "user usually away"
+# Outcomes whose own record is already written deeper in the delivery path.
+AUDITED_REASONS = {"sent", "Jev 未通过或候选已失效", "request failed", "platform send failed"}
+GATE_LABELS = {
+    "disabled": "主动发起未开启",
+    "quiet hours": "免打扰时段，30 分钟后再看",
+    "platform offline": "平台多次发送失败，暂停中",
+    "schedule unavailable": "今天没有可用日程",
+    "agent task active": "正在处理其他任务，不打断",
+    "conversation is not idle enough": "会话还在热聊，不打断",
+    "duplicate trigger": "同一候选已处理过",
+    "sleeping or unavailable": "日程显示在睡觉或不可打扰",
+    "session disabled or not whitelisted": "会话不在名单内或已关闭",
+    "maximum unanswered count reached": "连续未回应已达上限",
+    "daily budget exhausted": "今日额度已用完",
+    "cooldown active": "距上次主动太近，冷却中",
+    "sleeping": "日程显示在睡觉",
+    "availability probability rejected": "按当前忙闲程度掷骰未触发",
+    USUALLY_AWAY: "对方此时通常不在线，顺延到常在线的时间",
+}
+JEV_LABELS = {"initiate": "是否自然", "relevant": "话题价值", "timing": "时机"}
+ANGLE_CRITERIA = {
+    "planned": "Follow the planned intent of this candidate.",
+    "today": "Pick up something actually said in today's chat history instead.",
+    "life": "Share what is happening in the persona's own life right now.",
+}
+ANGLE_LABELS = {"planned": "按原定意图", "today": "接着今天聊过的内容", "life": "分享当下的生活"}
+ANGLE_PROMPTS = {
+    "planned": "按触发原因里的原定意图自然开口。",
+    "today": "原定意图只作参考：优先接着今天聊天记录里真实出现过、还值得聊的内容开口，不要编造对方没说过的事。",
+    "life": "原定意图只作参考：从你此刻的活动、心情或看到的事情自然说起。",
+}
+OPENING_LABELS = {"short": "只发一句短话", "two_stage": "两段式"}
+OPENING_PROMPTS = {
+    "short": "这次只发一句很短的话（不超过 15 个字），也可以只是语气词或表情，不要长篇大论。",
+    "two_stage": (
+        "这次只发一句简短的开场来引起对方注意或试探对方是否有空，比如叫一下对方或抛个引子；"
+        "不要把想说的事情一次说完，等对方回应后再展开。"
+    ),
+}
 
 
 def fit_life_state(state, questions, budget):
@@ -159,6 +203,38 @@ class LifeRuntime(VirtualLifeBase):
         self._contact_attempts = {}
         self._delivery_contact_ids = {}
         self._delivery_persona_ids = {}
+        self.weather = WeatherService(self)
+        # Trigger and intent of the candidate being judged, for its records.
+        self._audit_context: dict[str, tuple[str, str]] = {}
+        self.plan_generator.weather_resolver = self._schedule_weather
+
+    async def _schedule_weather(self, target_date) -> str:
+        settings = self.config["weather_settings"]
+        if settings["mode"] == "off" or not settings["schedule_enable"]:
+            return ""
+        try:
+            return await self.weather.for_day(target_date)
+        except Exception as exc:
+            logger.info("Decision 日程天气获取失败：%s", str(exc)[:120])
+            return ""
+
+    async def _weather_text(self, now, purpose, message="") -> str:
+        """Weather for a proactive message, or for a chat that mentions it."""
+
+        settings = self.config["weather_settings"]
+        if settings["mode"] == "off":
+            return ""
+        if purpose == "proactive" and not settings["proactive_enable"]:
+            return ""
+        if purpose == "chat" and (
+            not settings["chat_enable"] or not WEATHER_WORDS.search(str(message or ""))
+        ):
+            return ""
+        try:
+            return await self.weather.now_text(now)
+        except Exception as exc:
+            logger.info("Decision 天气获取失败：%s", str(exc)[:120])
+            return ""
 
     def spawn(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -498,6 +574,10 @@ class LifeRuntime(VirtualLifeBase):
         self.offline.pop(umo.split(":", 1)[0], None)
         now = self._now()
         persona = await self.personas.resolve(umo)
+        try:
+            self.contacts.record_activity(umo, persona.id, now)
+        except Exception as exc:
+            logger.debug("Decision 记录活跃时段失败：%s", type(exc).__name__)
         state = self.storage.sessions.get_for(umo, persona.id)
         if state is None:
             state = SessionState(
@@ -579,7 +659,13 @@ class LifeRuntime(VirtualLifeBase):
             "session disabled or not whitelisted",
             "disabled",
         }:
-            self._schedule_idle(umo)
+            run_at = None
+            if reason == USUALLY_AWAY:
+                persona = await self.personas.resolve(umo)
+                run_at = self.contacts.next_active_at(umo, persona.id, self._now())
+                if run_at is not None:
+                    run_at += timedelta(minutes=random.randint(3, 20))
+            self._schedule_idle(umo, run_at=run_at)
 
     def _quiet(self):
         settings = self.config["integration_settings"]
@@ -634,6 +720,27 @@ class LifeRuntime(VirtualLifeBase):
         )
 
     async def _attempt_unsolicited(self, umo, persona, plan, intent, trigger, *, attempt_key=""):
+        audit_context = self.__dict__.setdefault("_audit_context", {})
+        audit_context[umo] = (trigger, intent)
+        try:
+            sent, reason = await self._attempt_candidate(
+                umo, persona, plan, intent, trigger, attempt_key=attempt_key
+            )
+        finally:
+            audit_context.pop(umo, None)
+        if not sent and reason not in AUDITED_REASONS:
+            self.record_audit(
+                umo,
+                False,
+                GATE_LABELS.get(reason, reason),
+                stage="程序规则",
+                trigger=trigger,
+                intent=intent,
+                log=False,
+            )
+        return sent, reason
+
+    async def _attempt_candidate(self, umo, persona, plan, intent, trigger, *, attempt_key=""):
         if not self.enabled:
             return False, "disabled"
         # Manual, scheduled and window triggers use the same policy. A sleep
@@ -694,6 +801,11 @@ class LifeRuntime(VirtualLifeBase):
                 )
                 if not intent_allowed:
                     return False, intent_reason
+                if trigger in {"window", "idle", "adaptive"} and self._usually_away(
+                    umo, persona.id, now
+                ):
+                    self._sleep_sessions().discard(umo)
+                    return False, USUALLY_AWAY
                 decision = self.policy.evaluate(
                     umo=umo,
                     state=state,
@@ -747,12 +859,50 @@ class LifeRuntime(VirtualLifeBase):
             self.record_audit(umo, False, f"请求或生成失败：{str(exc)[:160]}")
             return False, "request failed"
 
-    def record_audit(self, umo, sent, reason):
-        self.audit.append(
-            {"time": self._now().isoformat(), "umo": umo, "sent": sent, "reason": reason}
-        )
+    def _usually_away(self, umo, persona_id, now) -> bool:
+        """Roll whether to postpone because the person is rarely around now.
+
+        The lower this hour's activity is relative to their average, the more
+        likely the candidate waits for an hour they are usually online.
+        """
+
+        ratio, _ = self.contacts.activity(umo, persona_id, now)
+        if ratio is None:
+            return False
+        low = float(self.config["humanization_settings"]["active_hours_low_ratio"])
+        if ratio >= low:
+            return False
+        return random.random() >= ratio / low
+
+    def record_audit(self, umo, sent, reason, *, stage="", trigger="", intent="", log=True):
+        now = self._now()
+        entry = {"time": now.isoformat(), "umo": umo, "sent": sent, "reason": reason}
+        context = getattr(self, "_audit_context", {}).get(umo)
+        if context and not trigger:
+            trigger, intent = context[0], intent or context[1]
+        if not stage:
+            stage = (
+                "已发送"
+                if sent
+                else "Jev 判断"
+                if reason.startswith("Jev")
+                else "生成与发送"
+                if context
+                else "后台"
+            )
+        for key, value in (("stage", stage), ("trigger", trigger), ("intent", intent)):
+            if value:
+                entry[key] = str(value)[:120]
+        self.audit.append(entry)
         del self.audit[:-100]
-        logger.warning("Decision Engine 因为%s，所以%s主动发起。", reason, "" if sent else "不")
+        try:
+            self.ledger.add_audit(umo, now.timestamp(), sent, entry)
+        except Exception as exc:
+            logger.debug("Decision 判断记录保存失败：%s", type(exc).__name__)
+        if log:
+            logger.warning("Decision Engine 因为%s，所以%s主动发起。", reason, "" if sent else "不")
+        else:
+            logger.info("Decision Engine 主动候选未发送：%s", reason)
 
     async def _deliver(self, umo, persona, plan, intent, unanswered_count, generation):
         if not self.enabled:
@@ -775,6 +925,13 @@ class LifeRuntime(VirtualLifeBase):
                 "instructions": "Is the timing appropriate considering quiet periods, prior unanswered contacts and the current group conversation?",
             },
         }
+        human = self.config.get("humanization_settings", {}) or {}
+        if human.get("enable", True) and human.get("today_angle_enable", True):
+            questions["angle"] = {
+                "type": "choice",
+                "instructions": "Which angle should this proactive message take, given what was actually said in today's chat history?",
+                "criteria": dict(ANGLE_CRITERIA),
+            }
         history = await self.message_generator._recent_history(
             umo, self.config["delivery_settings"]["recent_chat_messages"]
         )
@@ -794,7 +951,9 @@ class LifeRuntime(VirtualLifeBase):
         }
         contact = self.contacts.summary(umo, persona.id, now)
         state["contact_control"] = contact
-        human = self.config.get("humanization_settings", {}) or {}
+        weather = await self._weather_text(now, "proactive")
+        if weather:
+            state["weather"] = weather
         if human.get("response_rhythm_enable", True):
             state["response_rhythm_rule"] = (
                 "用户回复较快时可以自然多说一点；回复较慢时优先短消息并留出空间，"
@@ -837,23 +996,46 @@ class LifeRuntime(VirtualLifeBase):
             result = await self.owner._evaluate(
                 state=fit_life_state(state, questions, self.owner._context_budget()),
                 questions=questions,
+                feature="主动发起",
             )
         except Exception as exc:
-            self.record_audit(umo, False, f"Jev 判断失败：{str(exc)[:100]}")
-            if not floor_due:
-                return False
-            result = None
-        scores = [result.answers.get(q, {}).get("noul", 0) for q in questions] if result else []
-        threshold = settings["jev_threshold"]
-        if not floor_due and not all(
+            if floor_due:
+                # The floor only lowers the bar; it never sends without Jev.
+                self._schedule_idle(umo, run_at=now + timedelta(minutes=15))
+                self.record_audit(
+                    umo, False, f"Jev 判断失败，保底联系 15 分钟后重试：{str(exc)[:100]}"
+                )
+            else:
+                self.record_audit(umo, False, f"Jev 判断失败：{str(exc)[:100]}")
+            return False
+        thresholds = {
+            "initiate": settings["jev_threshold"],
+            "relevant": settings["jev_relevant_threshold"],
+            "timing": settings["jev_timing_threshold"],
+        }
+        if floor_due:
+            floor = self.config["adaptive_settings"]["floor_threshold"]
+            thresholds = {key: min(value, floor) for key, value in thresholds.items()}
+        scores = {key: result.answers.get(key, {}).get("noul") for key in thresholds}
+        if not all(
             isinstance(score, (int, float))
             and not isinstance(score, bool)
             and 0 <= score <= 1
-            and score >= threshold
-            for score in scores
+            and score >= thresholds[key]
+            for key, score in scores.items()
         ):
-            self.record_audit(umo, False, f"Jev 未通过，分数 {scores}，阈值 {threshold}")
+            self.record_audit(
+                umo,
+                False,
+                "Jev 未通过，"
+                + "，".join(
+                    f"{JEV_LABELS[key]} {scores[key]}/{thresholds[key]}" for key in thresholds
+                )
+                + ("（保底联系）" if floor_due else ""),
+            )
             return False
+        angle = result.answers.get("angle", {}).get("choice") if "angle" in questions else None
+        opening = self._roll_opening(human)
         if not self.can_commit(umo, generation):
             self.record_audit(umo, False, "判断期间会话发生变化或候选过期")
             return False
@@ -869,9 +1051,16 @@ class LifeRuntime(VirtualLifeBase):
             ),
         }.items():
             prompt = prompt.replace("{" + key + "}", str(value))
+        prompt = prompt.replace("{weather}", weather or "未知")
         prompt += (
             "\n这是内部主动发起事件，请沿用当前 AstrBot 人格。不要把触发说明当作用户说过的话。"
         )
+        if angle in ANGLE_PROMPTS:
+            prompt += "\n[本次切入角度]\n" + ANGLE_PROMPTS[angle]
+        if opening in OPENING_PROMPTS:
+            prompt += "\n[本次开场方式]\n" + OPENING_PROMPTS[opening]
+        if weather and "{weather}" not in delivery["proactive_prompt"]:
+            prompt += "\n[当前天气，可自然提起但不必每次都提]\n" + weather
         prompt += "\n[程序记录的联系状态，必须遵守]\n" + json.dumps(contact, ensure_ascii=False)
         if human.get("relationship_memory_enable", True) and contact.get("relationship"):
             prompt += "\n[关系阶段仅用于调整分寸，不得编造关系事实]\n" + json.dumps(
@@ -940,10 +1129,60 @@ class LifeRuntime(VirtualLifeBase):
         )
         if sent:
             self.offline.pop(umo.split(":", 1)[0], None)
+            if opening == "two_stage":
+                minutes = human.get("two_stage_window_minutes", 30)
+                self.contacts.set_hook(
+                    umo,
+                    persona.id,
+                    self._now(),
+                    {
+                        "intent": intent,
+                        "angle": angle or "",
+                        "topic": str((topic or {}).get("title", ""))
+                        if isinstance(topic, dict)
+                        else "",
+                        "thought": str(thought["text"]) if thought else "",
+                        "expires": self._now().timestamp() + minutes * 60,
+                    },
+                )
+        detail = f"候选：{intent}"
+        if angle in ANGLE_CRITERIA:
+            detail += f"；角度：{ANGLE_LABELS[angle]}"
+        if opening:
+            detail += f"；开场：{OPENING_LABELS[opening]}"
         self.record_audit(
-            umo, sent, f"Jev 通过，候选：{intent}" if sent else "生成期间会话更新或消息未发送"
+            umo, sent, f"Jev 通过，{detail}" if sent else "生成期间会话更新或消息未发送"
         )
         return sent
+
+    @staticmethod
+    def _roll_opening(human) -> str:
+        if not human.get("enable", True) or not human.get("opening_style_enable", True):
+            return ""
+        roll = random.random()
+        two_stage = float(human.get("two_stage_probability", 0))
+        if roll < two_stage:
+            return "two_stage"
+        if roll < two_stage + float(human.get("short_opening_probability", 0)):
+            return "short"
+        return ""
+
+    def hook_context(self, umo, persona_id, event):
+        """The plan behind a two-stage opening, once the person answers it."""
+
+        if ":GroupMessage:" in umo:
+            at_bot, reply_bot, _, _ = self.owner._message_address_flags(event)
+            if not (at_bot or reply_bot):
+                return ""
+        hook = self.contacts.take_hook(umo, persona_id, self._now())
+        if not hook:
+            return ""
+        plan = {k: hook[k] for k in ("intent", "topic", "thought") if hook.get(k)}
+        return (
+            "[你刚才主动发了一句简短的开场，对方现在回应了。原本想聊的事如下，"
+            "请自然接上、展开说；如果对方表示在忙或不想聊，就别硬展开]\n"
+            + json.dumps(plan, ensure_ascii=False)
+        )
 
     def _proactive_media_instruction(self) -> tuple[str, tuple[str, int, int] | None]:
         """Roll the per-kind media probabilities for one proactive delivery.
@@ -972,6 +1211,17 @@ class LifeRuntime(VirtualLifeBase):
         return instruction, choice
 
     async def inject_cached_state(self, event, req):
+        if self.enabled and not event.get_extra("decision_life_proactive", False):
+            umo = str(event.unified_msg_origin)
+            persona = await self.personas.resolve(umo)
+            hook = self.hook_context(umo, persona.id, event)
+            if hook:
+                req.extra_user_content_parts.append(temporary_text(hook))
+        weather = await self._weather_text(self._now(), "chat", event.get_message_str())
+        if weather and not event.get_extra("decision_life_proactive", False):
+            req.extra_user_content_parts.append(
+                temporary_text("[当前天气，仅在聊到天气时参考，前后保持一致]\n" + weather)
+            )
         if self.config["continuity_settings"]["enable"]:
             umo = str(event.unified_msg_origin)
             persona = await self.personas.resolve(umo)
@@ -1050,9 +1300,14 @@ class LifeRuntime(VirtualLifeBase):
             req.extra_user_content_parts.append(temporary_text(text))
 
     def status(self, umo=None):
+        try:
+            audit = self.ledger.audits(umo, limit=60)
+        except Exception:
+            audit = [entry for entry in self.audit if umo is None or entry["umo"] == umo][-60:]
         return {
             "enabled": self.enabled,
-            "audit": [entry for entry in self.audit if umo is None or entry["umo"] == umo][-30:],
+            "audit": audit,
+            "weather": self.weather.status(),
             "jobs": [
                 {"id": key, "at": at.isoformat()}
                 for key, at in self.runtime.scheduled_jobs()

@@ -17,7 +17,8 @@ install()
 
 from decision.multimodal import media  # noqa: E402
 from decision.multimodal.runtime import MultimodalRuntime  # noqa: E402
-from tests.dashboard_source import dashboard_source
+from tests.dashboard_source import dashboard_source  # noqa: E402
+from tests.plugin_source import plugin_source  # noqa: E402
 
 
 class FakeProvider:
@@ -421,12 +422,12 @@ async def media_runtime_command():
 
 # --------------------------------------------------- wiring invariants
 def test_multimodal_is_a_detail_section():
-    main = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    main = plugin_source()
     assert '"multimodal": {}' in main, "settings must be registered in DETAIL_DEFAULTS"
 
 
 def test_tool_boot_is_independent_of_proactive_reply():
-    main = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    main = plugin_source()
     boot = main.index("await self._ensure_multimodal()")
     window = main[max(0, boot - 400) : boot]
     assert "proactive_reply_enabled" not in window, (

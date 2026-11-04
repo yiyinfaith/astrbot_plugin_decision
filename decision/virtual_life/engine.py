@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import random
 import uuid
 from datetime import date, datetime, time, timedelta
@@ -31,10 +32,13 @@ from .core.models import (
     DailyPlan,
     ProactiveWindow,
     ScheduleRequirement,
+    TimelineItem,
+    minute_of_day,
 )
 from .core.persona import PersonaContext, PersonaResolver
 from .core.proactive import ProactivePolicy, session_kind
 from .core.reply_delay import (
+    DelayDecision,
     QueuedMessage,
     ReplyDelayCoordinator,
     ReplyDelayPolicy,
@@ -825,6 +829,7 @@ class VirtualLifeBase:
             "cooldown active": "当时你们刚刚才聊过，紧接着再开口会显得太突兀",
             "availability probability rejected": "当时对方的状态不太适合被打扰",
             "sleeping": "当时对方正在休息",
+            "user usually away": "那个时间对方通常不在线",
         }.get(retry_reason, "当时时机不太合适")
         return (
             f"{base}。你原本打算在「{source.activity}」时段联系对方，但{reason_hint}，"
@@ -832,7 +837,7 @@ class VirtualLifeBase:
         )
 
     def _should_retry_window(self, umo: str, reason: str) -> bool:
-        if reason in {"sleeping", "availability probability rejected"}:
+        if reason in {"sleeping", "availability probability rejected", "user usually away"}:
             return True
         delivery = self.config.get("delivery_settings", {}) or {}
         if reason == "conversation is not idle enough":
@@ -850,6 +855,12 @@ class VirtualLifeBase:
             if not next_time:
                 return None
             run_at = next_time + timedelta(minutes=random.randint(3, 15))
+        elif reason == "user usually away":
+            contacts = getattr(self, "contacts", None)
+            next_time = contacts.next_active_at(umo, plan.persona_id, now) if contacts else None
+            if not next_time:
+                return None
+            run_at = next_time + timedelta(minutes=random.randint(3, 20))
         elif reason == "agent task active":
             run_at = now + timedelta(minutes=30)
         elif reason == "conversation is not idle enough":
@@ -1261,6 +1272,7 @@ class VirtualLifeBase:
             received_at,
             len(event.get_message_str()),
             active_conversation=active,
+            sleep_remaining=self._sleep_remaining_seconds(plan, arrival_item, received_at),
         )
         queued = QueuedMessage(
             received_at=received_at,
@@ -1292,8 +1304,8 @@ class VirtualLifeBase:
             )
             return
 
-        if decision.delay_seconds > 0 and self.reply_delay_policy.notify_user:
-            notification = self.reply_delay_policy.notification(decision)
+        if self.reply_delay_policy.should_notify(decision):
+            notification = await self._reply_delay_notice(event, persona, arrival_item, decision)
             if notification:
                 try:
                     await self.context.send_message(
@@ -1317,6 +1329,74 @@ class VirtualLifeBase:
             max(0, int((settled_at - batch.created_at).total_seconds())),
             len(messages),
         )
+
+    def _sleep_remaining_seconds(
+        self, plan: DailyPlan, item: TimelineItem, moment: datetime
+    ) -> int | None:
+        """Seconds until a sleep ends, following consecutive sleep blocks.
+
+        A night's sleep is stored as ``23:00-24:00`` today plus ``00:00-07:00``
+        tomorrow, so a block ending at midnight continues into the next plan
+        when that plan already exists.
+        """
+
+        if item.state != "sleep":
+            return None
+        day_start = moment.replace(hour=0, minute=0, second=0, microsecond=0)
+        ordered = sorted(plan.timeline, key=lambda value: minute_of_day(value.start))
+        end_minute = minute_of_day(item.end)
+        for value in ordered:
+            if minute_of_day(value.start) == end_minute and value.state == "sleep":
+                end_minute = minute_of_day(value.end)
+        end_at = day_start + timedelta(minutes=end_minute)
+        if end_minute >= 24 * 60:
+            tomorrow = self.storage.get_plan(
+                (moment.date() + timedelta(days=1)).isoformat(), plan.persona_id
+            )
+            if tomorrow and tomorrow.has_schedule:
+                minute = 0
+                for value in sorted(tomorrow.timeline, key=lambda v: minute_of_day(v.start)):
+                    if minute_of_day(value.start) != minute or value.state != "sleep":
+                        break
+                    minute = minute_of_day(value.end)
+                end_at += timedelta(minutes=minute)
+        return max(0, int((end_at - moment).total_seconds()))
+
+    async def _reply_delay_notice(
+        self,
+        event: AstrMessageEvent,
+        persona: PersonaContext,
+        item: TimelineItem,
+        decision: DelayDecision,
+    ) -> str:
+        """One short line in the persona's own voice, or the fallback template."""
+
+        fallback = self.reply_delay_policy.notification(decision)
+        temporal = getattr(self, "temporal", None)
+        if self.reply_delay_policy.notification_style != "persona" or temporal is None:
+            return fallback
+        minutes = max(1, math.ceil(decision.delay_seconds / 60))
+        prompt = (
+            f"你此刻正在「{item.activity}」（地点：{item.location or '未说明'}，"
+            f"可打扰程度：{item.availability}）。对方刚给你发来消息：\n"
+            f"「{str(event.get_message_str() or '[非文字消息]')[:200]}」\n"
+            f"你暂时没法认真回复，大约 {minutes} 分钟后才有空。"
+            "用你自己的口吻回一句很短的话（不超过 20 个字），让对方知道你在忙、晚点回复。"
+            "按你们的关系决定是否说出在做什么；不要回答消息内容，不要提程序、系统或延迟。只输出这句话。"
+        )
+        try:
+            text = await temporal.model(
+                str(event.unified_msg_origin),
+                prompt,
+                system=persona.prompt,
+                purpose="reply_delay_notice",
+                persona_id=persona.id,
+            )
+        except Exception as exc:
+            logger.info("[虚拟人生] 人格口吻等待提示生成失败，改用模板：%s", str(exc)[:120])
+            return fallback
+        text = text.strip().strip("\"'“”「」").splitlines()[0].strip() if text.strip() else ""
+        return text[:60] if text else fallback
 
     @staticmethod
     def _message_media_urls(event: AstrMessageEvent, media_type: type) -> tuple[str, ...]:

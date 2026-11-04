@@ -129,6 +129,7 @@ class DelayDecision:
     public_reason: str
     formula_error: str = ""
     active_conversation: bool = False
+    sleeping: bool = False
 
 
 class ReplyDelayPolicy:
@@ -157,6 +158,32 @@ class ReplyDelayPolicy:
     def max_delay_seconds(self) -> int:
         return self._nonnegative_int("max_delay_seconds")
 
+    @property
+    def notification_style(self) -> str:
+        return "template" if self.settings.get("notification_style") == "template" else "persona"
+
+    @property
+    def notify_min_seconds(self) -> int:
+        return self._nonnegative_int("notify_min_seconds")
+
+    @property
+    def sleep_until_wake(self) -> bool:
+        return bool(self.settings.get("sleep_until_wake", True))
+
+    @property
+    def max_sleep_delay_seconds(self) -> int:
+        return self._nonnegative_int("max_sleep_delay_seconds")
+
+    def should_notify(self, decision: DelayDecision) -> bool:
+        """A short wait needs no notice, and nobody announces it while asleep."""
+
+        return (
+            self.notify_user
+            and not decision.sleeping
+            and decision.delay_seconds > 0
+            and decision.delay_seconds >= self.notify_min_seconds
+        )
+
     def decide(
         self,
         item: TimelineItem,
@@ -164,10 +191,23 @@ class ReplyDelayPolicy:
         message_length: int,
         *,
         active_conversation: bool = False,
+        sleep_remaining: int | None = None,
     ) -> DelayDecision:
         remaining = self._remaining_seconds(item, now)
         formula = self._formula(item.availability)
         reason = self._public_reason(item.availability)
+        if item.state == "sleep" and self.sleep_until_wake and not active_conversation:
+            # Asleep means the message is simply seen on waking: the wait runs
+            # to the end of the whole sleep, not to an availability formula.
+            wake = remaining if sleep_remaining is None else max(remaining, sleep_remaining)
+            return DelayDecision(
+                delay_seconds=min(wake, self.max_sleep_delay_seconds),
+                remaining_seconds=wake,
+                availability=item.availability,
+                formula="sleep_until_wake",
+                public_reason=reason,
+                sleeping=True,
+            )
         if active_conversation:
             return DelayDecision(
                 delay_seconds=0,
@@ -205,6 +245,7 @@ class ReplyDelayPolicy:
             return ""
         values = {
             "delay_seconds": decision.delay_seconds,
+            "delay_minutes": max(1, math.ceil(decision.delay_seconds / 60)),
             "public_reason": decision.public_reason,
             "availability": decision.availability,
         }
@@ -384,6 +425,10 @@ def format_delay_context(
     ]
     if batch.decision.active_conversation:
         lines.append("延迟判定：处于连续对话窗口，因此本批次不额外延迟。")
+    if batch.decision.sleeping:
+        lines.append(
+            "消息到达时你在睡觉，现在刚醒来才看到这些消息；像刚醒来那样自然回应，可以简单提一句刚醒。"
+        )
     if arrival is not None:
         lines.extend(
             [

@@ -55,6 +55,15 @@ class DailyPlanGenerator:
             return "无（未填写外貌补充描述；若有外貌参考图，请以参考图为准）"
         return resolved
 
+    async def _weather_context(self, target: date) -> str:
+        resolver = getattr(self, "weather_resolver", None)
+        if not callable(resolver):
+            return ""
+        try:
+            return str(await resolver(target) or "").strip()
+        except Exception:
+            return ""
+
     @staticmethod
     def _pick(values: object, fallback: str) -> str:
         candidates = [str(value) for value in values] if isinstance(values, list) else []
@@ -343,6 +352,7 @@ class DailyPlanGenerator:
                 "current_outfit": outfit_context or "无",
                 "requirements": requirements or "无",
                 "appearance_context": await self._appearance_context(persona.id),
+                "weather": await self._weather_context(target) or "未知",
             }
             components = []
             if include_schedule:
@@ -365,6 +375,13 @@ class DailyPlanGenerator:
                 raise RuntimeError("schedule or outfit generation prompt is empty")
             system_prompt = "\n\n".join(system_prompts)
             base_prompt = "\n\n".join(template.format(**variables) for template in prompt_templates)
+            if variables["weather"] != "未知" and not any(
+                "{weather}" in template for template in prompt_templates
+            ):
+                base_prompt += (
+                    "\n\n当天天气（安排户外活动与选择穿搭时参考，衣物要适合气温和降水）：\n"
+                    + variables["weather"]
+                )
             if include_schedule and relationship_context:
                 base_prompt += (
                     "\n\nUse the following stored relationship data only as factual context. "
@@ -711,9 +728,16 @@ class DailyPlanGenerator:
         provider = provider or self.context.get_using_provider()
         if not provider:
             raise RuntimeError("no LLM provider available")
-        response = await provider.text_chat(
-            prompt=prompt, session_id=session_id, system_prompt=system_prompt
-        )
+        from ...usage_meter import record as record_usage
+
+        try:
+            response = await provider.text_chat(
+                prompt=prompt, session_id=session_id, system_prompt=system_prompt
+            )
+        except Exception:
+            record_usage("日程与穿搭", prompt=system_prompt + prompt, output="", ok=False)
+            raise
+        record_usage("日程与穿搭", response=response, prompt=system_prompt + prompt)
         for key in ("completion_text", "completion", "text", "content"):
             value = getattr(response, key, None)
             if isinstance(value, str) and value.strip():

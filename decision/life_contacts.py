@@ -188,8 +188,14 @@ class ContactControl:
                 rhythm = (
                     "fast" if latency <= 15 * 60 else "normal" if latency <= 2 * 3600 else "slow"
                 )
+            public = {
+                k: v
+                for k, v in data.items()
+                if k not in {"active_hours", "active_updated", "active_last", "pending_hook"}
+            }
             return {
-                **data,
+                **public,
+                "active_hours": self.active_hours_summary(data),
                 "relationship": relationship,
                 "response_rhythm": {
                     "bucket": rhythm,
@@ -228,6 +234,123 @@ class ContactControl:
             if task.get("notify", True):
                 counts["agreed" if task["origin"] == "user" else "ordinary"] += 1
         return counts
+
+    # ----- 对方常在线的时段 -------------------------------------------------
+
+    def _decay_hours(self, data, now):
+        hours = data.get("active_hours")
+        if not isinstance(hours, list) or len(hours) != 24:
+            hours = [0.0] * 24
+        try:
+            hours = [max(0.0, float(value)) for value in hours]
+        except (TypeError, ValueError):
+            hours = [0.0] * 24
+        half_life = max(1, int(self.humanization.get("active_hours_half_life_days", 14)))
+        updated = float(data.get("active_updated", 0) or 0)
+        if updated and now.timestamp() > updated:
+            factor = 0.5 ** ((now.timestamp() - updated) / 86400 / half_life)
+            hours = [value * factor for value in hours]
+        data["active_hours"] = hours
+        data["active_updated"] = now.timestamp()
+        return hours
+
+    def record_activity(self, umo, persona, now):
+        """Count one inbound message toward its local hour.
+
+        A burst of messages within a few minutes is one sitting, so later
+        messages of the same burst add only a small weight.
+        """
+
+        if not self.humanization.get("enable", True) or not self.humanization.get(
+            "active_hours_enable", True
+        ):
+            return
+        with self.ledger.transaction() as db:
+            data = self.profile(db, umo, persona, now)
+            hours = self._decay_hours(data, now)
+            last = float(data.get("active_last", 0) or 0)
+            weight = 0.2 if last and now.timestamp() - last < 300 else 1.0
+            hours[now.hour] += weight
+            data["active_samples"] = int(data.get("active_samples", 0) or 0) + 1
+            data["active_last"] = now.timestamp()
+            self.ledger.save_profile(db, umo, persona, data)
+
+    def _hour_ratios(self, data):
+        hours = data.get("active_hours")
+        if not isinstance(hours, list) or len(hours) != 24:
+            return None
+        total = sum(hours)
+        if total <= 0:
+            return None
+        mean = total / 24
+        # Neighbouring hours smooth a sparse histogram: someone active at 21:00
+        # is plausibly around at 20:30 as well.
+        return [
+            (hours[(h - 1) % 24] * 0.5 + hours[h] + hours[(h + 1) % 24] * 0.5) / 2 / mean
+            for h in range(24)
+        ]
+
+    def activity(self, umo, persona, now):
+        """``(ratio, samples)`` for the current hour; ratio is ``None`` if unknown."""
+
+        settings = self.humanization
+        if not settings.get("enable", True) or not settings.get("active_hours_enable", True):
+            return None, 0
+        with self.ledger.transaction() as db:
+            data = self.profile(db, umo, persona, now)
+        samples = int(data.get("active_samples", 0) or 0)
+        ratios = self._hour_ratios(data)
+        if ratios is None or samples < int(settings.get("active_hours_min_samples", 30)):
+            return None, samples
+        return ratios[now.hour], samples
+
+    def next_active_at(self, umo, persona, now, *, within_hours=8):
+        """Start of the next hour the person is usually around, if any soon."""
+
+        low = float(self.humanization.get("active_hours_low_ratio", 0.35))
+        with self.ledger.transaction() as db:
+            data = self.profile(db, umo, persona, now)
+        ratios = self._hour_ratios(data)
+        if ratios is None:
+            return None
+        start = now.replace(minute=0, second=0, microsecond=0)
+        for step in range(1, within_hours + 1):
+            moment = start + timedelta(hours=step)
+            if ratios[moment.hour] >= low:
+                return moment
+        return None
+
+    def active_hours_summary(self, data):
+        ratios = self._hour_ratios(data)
+        if ratios is None:
+            return None
+        low = float(self.humanization.get("active_hours_low_ratio", 0.35))
+        return {
+            "samples": int(data.get("active_samples", 0) or 0),
+            "usually_away_hours": [h for h, r in enumerate(ratios) if r < low],
+            "busiest_hours": sorted(range(24), key=lambda h: ratios[h], reverse=True)[:3],
+        }
+
+    # ----- 两段式开场 -------------------------------------------------------
+
+    def set_hook(self, umo, persona, now, hook):
+        with self.ledger.transaction() as db:
+            data = self.profile(db, umo, persona, now)
+            data["pending_hook"] = {**hook, "at": now.timestamp()}
+            self.ledger.save_profile(db, umo, persona, data)
+
+    def take_hook(self, umo, persona, now):
+        """Return and clear an unexpired opening the person has just answered."""
+
+        with self.ledger.transaction() as db:
+            data = self.profile(db, umo, persona, now)
+            hook = data.pop("pending_hook", None)
+            if hook is None:
+                return None
+            self.ledger.save_profile(db, umo, persona, data)
+        if not isinstance(hook, dict) or now.timestamp() > float(hook.get("expires", 0) or 0):
+            return None
+        return hook
 
     def gate(self, umo, persona, now, *, agreed=False, exclude="", frequency=True):
         with self.ledger.transaction() as db:

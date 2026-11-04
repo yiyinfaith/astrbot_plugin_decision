@@ -9,6 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tests.dashboard_source import dashboard_source  # noqa: E402
 
+from .plugin_source import plugin_source
+
 ROOT = Path(__file__).resolve().parents[1]
 MAIN = ROOT / "main.py"
 
@@ -104,11 +106,11 @@ def test_model_dropdowns_are_populated_from_the_provider_catalog():
     assert "reloadModels" in html
     # The catalog comes from the plugin's own endpoint, not a hardcoded list.
     assert "multimodal/models" in html
-    assert "multimodal/models" in MAIN.read_text(encoding="utf-8")
+    assert "multimodal/models" in plugin_source()
 
 
 def test_non_text_switch_defaults_to_off_and_gates_the_judgement():
-    main = MAIN.read_text(encoding="utf-8")
+    main = plugin_source()
     assert '"non_text_proactive_enabled": False' in main
     # The switch gates media extraction itself, so with it off a pure-media
     # message has no media and never reaches the judgement.
@@ -122,7 +124,7 @@ def test_non_text_switch_defaults_to_off_and_gates_the_judgement():
 def test_media_detection_does_not_depend_on_multimodal_understanding():
     """The switch must work with mm_enabled off, so detection cannot rely on refs."""
 
-    main = MAIN.read_text(encoding="utf-8")
+    main = plugin_source()
     assert "async def _media_refs_for" in main
     body = main[main.index("async def _media_refs_for") :][:900]
     assert "extract_media(event)" in body, "must fall back to direct extraction"
@@ -130,7 +132,7 @@ def test_media_detection_does_not_depend_on_multimodal_understanding():
 
 
 def test_placeholder_reads_the_cache_through_the_public_api():
-    main = MAIN.read_text(encoding="utf-8")
+    main = plugin_source()
     body = main[main.index("async def _media_placeholder") :][:1600]
     assert "cache._entries" not in body, "must not poke the private cache dict"
     assert "get_for_media" in body
@@ -140,7 +142,7 @@ def test_placeholder_reads_the_cache_through_the_public_api():
 def test_multimodal_does_not_run_inside_on_llm_request_only():
     """Auto understanding needs a message-level hook, not just the LLM one."""
 
-    main = MAIN.read_text(encoding="utf-8")
+    main = plugin_source()
     assert "async def multimodal_observe_message" in main
     hook = main.index("async def multimodal_observe_message")
     segment = main[hook : hook + 2000]
@@ -149,7 +151,7 @@ def test_multimodal_does_not_run_inside_on_llm_request_only():
 
 
 def test_tools_are_registered_through_the_shared_tool_list():
-    main = MAIN.read_text(encoding="utf-8")
+    main = plugin_source()
     assert "_sync_multimodal_tools" in main
     assert "self.context.add_llm_tools(tool)" in main
     assert "self._life_tools.append(tool)" in main
