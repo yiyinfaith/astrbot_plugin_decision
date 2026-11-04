@@ -16,6 +16,7 @@ import io
 import json
 import re
 import shutil
+import sqlite3
 import time
 import uuid
 from datetime import UTC, datetime
@@ -966,9 +967,8 @@ class PersonalNetworkService:
         if not persona_id:
             return error_response("persona_id is required")
         data = await asyncio.to_thread(self.storage.get_network, persona_id)
-        for character in data["characters"]:
-            filename = character.get("avatar_filename")
-            character["avatar_data"] = self._avatar_data(filename) if filename else None
+        # Reading and encoding every avatar file is blocking I/O.
+        await asyncio.to_thread(self._attach_avatar_data, data["characters"])
         return json_response(data)
 
     async def api_set_enabled(self) -> Any:
@@ -1262,28 +1262,43 @@ class PersonalNetworkService:
                 # Resolve it before anything is written, so an unknown
                 # character never leaves an orphan file behind.
                 persona_id = await asyncio.to_thread(self._find_character_persona, character_id)
-            # Decoding and WebP encoding are CPU-bound; keep them off the loop.
-            encoded = await asyncio.to_thread(self._encode_avatar, raw)
-            filename = f"{uuid.uuid4().hex}.webp"
-            target = self.avatar_dir / filename
-            await asyncio.to_thread(target.write_bytes, encoded)
-            try:
-                previous = await asyncio.to_thread(
-                    self.storage.set_avatar, persona_id, character_id, filename
-                )
-            except Exception:
-                # Not on cancellation: the worker thread may still commit the
-                # new filename, which must then keep pointing at a real file.
-                await asyncio.to_thread(target.unlink, missing_ok=True)
-                raise
-            try:
-                await asyncio.to_thread(self._unlink_avatar, previous)
-            except OSError as exc:
-                # The new avatar is saved; a locked old file only stays behind.
-                logger.warning("人际网络旧头像删除失败：%s", exc)
+            encoded = await self._store_avatar(persona_id, character_id, raw)
             return json_response({"saved": True, "avatar_data": self._webp_data_url(encoded)})
-        except (ValueError, UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
+        except (
+            ValueError,
+            UnidentifiedImageError,
+            Image.DecompressionBombError,
+            OSError,
+            sqlite3.Error,
+        ) as exc:
             return error_response(str(exc))
+
+    async def _store_avatar(self, persona_id: str, character_id: str, raw: bytes) -> bytes:
+        """Validate, re-encode and save an avatar for one character.
+
+        Used by uploads and imports alike, so both get the same format and
+        resolution limits.  Returns the stored WebP bytes.
+        """
+        # Decoding and WebP encoding are CPU-bound; keep them off the loop.
+        encoded = await asyncio.to_thread(self._encode_avatar, raw)
+        filename = f"{uuid.uuid4().hex}.webp"
+        target = self.avatar_dir / filename
+        await asyncio.to_thread(target.write_bytes, encoded)
+        try:
+            previous = await asyncio.to_thread(
+                self.storage.set_avatar, persona_id, character_id, filename
+            )
+        except Exception:
+            # Not on cancellation: the worker thread may still commit the new
+            # filename, which must then keep pointing at a real file.
+            await asyncio.to_thread(target.unlink, missing_ok=True)
+            raise
+        try:
+            await asyncio.to_thread(self._unlink_avatar, previous)
+        except OSError as exc:
+            # The new avatar is saved; a locked old file only stays behind.
+            logger.warning("人际网络旧头像删除失败：%s", exc)
+        return encoded
 
     @staticmethod
     def _encode_avatar(raw: bytes) -> bytes:
@@ -1317,6 +1332,11 @@ class PersonalNetworkService:
         if persona_id is None:
             raise ValueError("character not found")
         return persona_id
+
+    def _attach_avatar_data(self, characters: list[dict[str, Any]]) -> None:
+        """Add each character's avatar as a data URL (blocking; run in a thread)."""
+        for character in characters:
+            character["avatar_data"] = self._avatar_data(character.get("avatar_filename"))
 
     def _avatar_data(self, filename: str | None) -> str | None:
         """Read a safe avatar filename as a WebP data URL.
@@ -1360,8 +1380,8 @@ class PersonalNetworkService:
         payload = await asyncio.to_thread(self.storage.get_network, persona_id)
         payload["schema_version"] = 4
         payload["persona_id"] = persona_id
+        await asyncio.to_thread(self._attach_avatar_data, payload["characters"])
         for character in payload["characters"]:
-            character["avatar_data"] = self._avatar_data(character.get("avatar_filename"))
             character.pop("avatar_filename", None)
         for relationship in payload["relationships"]:
             relationship.pop("interaction_stats", None)
@@ -1624,12 +1644,18 @@ class PersonalNetworkService:
                 if not avatar_data or character.get("is_persona"):
                     continue
                 raw = self._decode_avatar_data(avatar_data)
-                filename = f"{uuid.uuid4().hex}.webp"
-                (self.avatar_dir / filename).write_bytes(raw)
-                previous = await asyncio.to_thread(
-                    self.storage.set_avatar, persona_id, character["id"], filename
-                )
-                self._unlink_avatar(previous)
+                try:
+                    await self._store_avatar(persona_id, character["id"], raw)
+                except (
+                    ValueError,
+                    UnidentifiedImageError,
+                    Image.DecompressionBombError,
+                    OSError,
+                    sqlite3.Error,
+                ) as exc:
+                    # The network itself is already imported; one bad avatar
+                    # must not report the whole import as failed.
+                    logger.warning("人际网络导入头像失败，已跳过：%s", exc)
             return json_response({"imported": True, **result})
         except ValueError as exc:
             return error_response(str(exc))

@@ -240,37 +240,41 @@ function bindConnectionHandle() {
   handle.onpointercancel = resetConnectionDrag;
 }
 
-function renderGraph() {
-  // The palette variables live on #network-shell, not on <html>.
+// The palette variables live on #network-shell, not on <html>.
+function graphStyle() {
   const styles = getComputedStyle($("#network-shell") || document.documentElement);
+  return [
+    { selector: "node", style: {
+      width: 62, height: 62, label: "data(label)", "font-size": 11, color: styles.getPropertyValue("--text").trim(),
+      "text-valign": "bottom", "text-margin-y": 9, "text-wrap": "ellipsis", "text-max-width": 92,
+      "background-color": styles.getPropertyValue("--accent-soft").trim(), "border-width": 2,
+      "border-color": styles.getPropertyValue("--accent").trim(),
+    } },
+    { selector: "node.has-avatar", style: { "background-image": "data(avatar)", "background-fit": "cover" } },
+    { selector: "node.persona-root", style: { width: 76, height: 76, "border-width": 4, "background-color": styles.getPropertyValue("--amber").trim(), "border-color": styles.getPropertyValue("--amber").trim() } },
+    { selector: "node:selected", style: { "border-width": 5, "border-color": styles.getPropertyValue("--coral").trim() } },
+    { selector: "node.connection-target", style: { "border-width": 7, "border-color": styles.getPropertyValue("--coral").trim(), "overlay-opacity": 0.12, "overlay-color": styles.getPropertyValue("--coral").trim(), "overlay-padding": 9 } },
+    { selector: "edge", style: {
+      width: "mapData(strength, 0, 100, 1, 5)", "curve-style": "bezier", "target-arrow-shape": "triangle",
+      "line-color": styles.getPropertyValue("--accent").trim(), "target-arrow-color": styles.getPropertyValue("--accent").trim(),
+      label: "data(label)", "font-size": 9, color: styles.getPropertyValue("--muted").trim(), "text-background-color": styles.getPropertyValue("--surface").trim(),
+      "text-background-opacity": 0.9, "text-background-padding": 3, "text-rotation": "autorotate",
+    } },
+    { selector: "edge.status-ended", style: { "line-style": "dashed", opacity: 0.45 } },
+    { selector: "edge.status-uncertain", style: { "line-style": "dotted", "line-color": styles.getPropertyValue("--amber").trim(), "target-arrow-color": styles.getPropertyValue("--amber").trim() } },
+    { selector: "edge:selected", style: { width: 5, "line-color": styles.getPropertyValue("--coral").trim(), "target-arrow-color": styles.getPropertyValue("--coral").trim() } },
+    { selector: ".filtered", style: { opacity: 0.08, "text-opacity": 0 } },
+  ];
+}
+
+function renderGraph() {
   if (state.cy) state.cy.destroy();
   state.cy = window.cytoscape({
     container: $("#network-graph"),
     elements: graphElements(),
     minZoom: 0.25,
     maxZoom: 2.5,
-    style: [
-      { selector: "node", style: {
-        width: 62, height: 62, label: "data(label)", "font-size": 11, color: styles.getPropertyValue("--text").trim(),
-        "text-valign": "bottom", "text-margin-y": 9, "text-wrap": "ellipsis", "text-max-width": 92,
-        "background-color": styles.getPropertyValue("--accent-soft").trim(), "border-width": 2,
-        "border-color": styles.getPropertyValue("--accent").trim(),
-      } },
-      { selector: "node.has-avatar", style: { "background-image": "data(avatar)", "background-fit": "cover" } },
-      { selector: "node.persona-root", style: { width: 76, height: 76, "border-width": 4, "background-color": styles.getPropertyValue("--amber").trim(), "border-color": styles.getPropertyValue("--amber").trim() } },
-      { selector: "node:selected", style: { "border-width": 5, "border-color": styles.getPropertyValue("--coral").trim() } },
-      { selector: "node.connection-target", style: { "border-width": 7, "border-color": styles.getPropertyValue("--coral").trim(), "overlay-opacity": 0.12, "overlay-color": styles.getPropertyValue("--coral").trim(), "overlay-padding": 9 } },
-      { selector: "edge", style: {
-        width: "mapData(strength, 0, 100, 1, 5)", "curve-style": "bezier", "target-arrow-shape": "triangle",
-        "line-color": styles.getPropertyValue("--accent").trim(), "target-arrow-color": styles.getPropertyValue("--accent").trim(),
-        label: "data(label)", "font-size": 9, color: styles.getPropertyValue("--muted").trim(), "text-background-color": styles.getPropertyValue("--surface").trim(),
-        "text-background-opacity": 0.9, "text-background-padding": 3, "text-rotation": "autorotate",
-      } },
-      { selector: "edge.status-ended", style: { "line-style": "dashed", opacity: 0.45 } },
-      { selector: "edge.status-uncertain", style: { "line-style": "dotted", "line-color": styles.getPropertyValue("--amber").trim(), "target-arrow-color": styles.getPropertyValue("--amber").trim() } },
-      { selector: "edge:selected", style: { width: 5, "line-color": styles.getPropertyValue("--coral").trim(), "target-arrow-color": styles.getPropertyValue("--coral").trim() } },
-      { selector: ".filtered", style: { opacity: 0.08, "text-opacity": 0 } },
-    ],
+    style: graphStyle(),
     layout: { name: "cose", animate: false, padding: 54, nodeRepulsion: 8500, idealEdgeLength: 130, gravity: 0.35 },
   });
   state.cy.on("tap", "node, edge", (event) => {
@@ -942,6 +946,6 @@ async function start() {
 // ask cytoscape to re-measure after the card is shown again.
 window.__decisionNetworkResize = () => state.cy?.resize();
 // The dashboard swaps themes at runtime; cytoscape copies colours at render time.
-window.__decisionNetworkRestyle = () => { if (state.cy) renderGraph(); };
+window.__decisionNetworkRestyle = () => state.cy?.style(graphStyle()).update();
 
 start();

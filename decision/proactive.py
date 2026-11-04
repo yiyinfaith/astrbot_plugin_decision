@@ -488,8 +488,15 @@ class ProactiveState:
         self.last_reply[str(session)] = now
         return True
 
-    def mark_reply_success(self, session: str) -> None:
+    def _owns_reservation(self, current: Any, token: int | None) -> bool:
+        """Whether ``token`` (when given) is the reservation still pending."""
+
+        return current.pending_reply and (token is None or current.reply_token == token)
+
+    def mark_reply_success(self, session: str, token: int | None = None) -> None:
         current = self._session(session)
+        if not self._owns_reservation(current, token):
+            return
         current.pending_reply = False
         current.consecutive_failures = 0
         self.set_status(session, ProactiveStatus.SUMMONED)
@@ -516,8 +523,10 @@ class ProactiveState:
     def has_pending_reply(self, session: str) -> bool:
         return self.pending_reply_token(session) is not None
 
-    def mark_reply_finished(self, session: str) -> None:
-        self._session(session).pending_reply = False
+    def mark_reply_finished(self, session: str, token: int | None = None) -> None:
+        current = self._session(session)
+        if self._owns_reservation(current, token):
+            current.pending_reply = False
 
     def cancel_reply(self, session: str, token: int | None = None) -> None:
         """Release a reply slot when the request was never queued.
@@ -527,9 +536,7 @@ class ProactiveState:
 
         key = str(session)
         current = self._session(key)
-        if not current.pending_reply:
-            return
-        if token is not None and current.reply_token != token:
+        if not self._owns_reservation(current, token):
             return
         current.pending_reply = False
         # ``allow_reply`` appends the reservation as the newest timestamp. It

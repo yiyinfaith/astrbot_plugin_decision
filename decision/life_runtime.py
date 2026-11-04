@@ -235,20 +235,21 @@ class LifeRuntime(VirtualLifeBase):
 
     async def terminate(self):
         self.closed = True
-        # A failing store close must not skip stopping the scheduler and the
-        # tasks below, or the old runtime would keep running beside a new one.
-        errors: list[Exception] = []
-        for close in (self.conversation.close, self.temporal.close):
-            try:
-                await close()
-            except Exception as exc:
-                errors.append(exc)
+        # Stop producing work first: the scheduler and spawned tasks must not
+        # add workers to stores that are being closed.  A failing store close
+        # then cannot leave the old runtime running beside a new one.
         self.runtime.stop()
         self.reply_delay_coordinator.clear()
         for task in tuple(self.tasks):
             task.cancel()
         if self.tasks:
             await asyncio.gather(*tuple(self.tasks), return_exceptions=True)
+        errors: list[Exception] = []
+        for close in (self.conversation.close, self.temporal.close):
+            try:
+                await close()
+            except Exception as exc:
+                errors.append(exc)
         # Every per-session container is keyed by umo and would otherwise keep an
         # entry for every conversation the bot has ever seen, across reloads.
         self._conversation_generations.clear()

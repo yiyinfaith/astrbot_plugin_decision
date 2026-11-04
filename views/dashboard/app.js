@@ -866,12 +866,16 @@ const app = createApp({
         const body = {life: JSON.parse(JSON.stringify(this.lifeConfig)), message_interjection_enabled: this.messageInterjection, always_keep_tools: Array.from(this.selectedKeep, String), always_keep_recommend_tools: Array.from(this.selectedRecommend, String), always_keep_mcp: Array.from(this.selectedKeepMcp, String), always_keep_recommend_mcp: Array.from(this.selectedRecommendMcp, String), always_keep_skills: Array.from(this.selectedKeepSkills, String), always_keep_recommend_skills: Array.from(this.selectedRecommendSkills, String), always_keep_subagents: Array.from(this.selectedKeepSubagents, String), always_keep_recommend_subagents: Array.from(this.selectedRecommendSubagents, String), jev_pre_prompt: String(this.form.jev_pre_prompt ?? ''), main_llm_post_prompt: String(this.form.main_llm_post_prompt ?? ''), tool_decision_enabled: this.form.tool_decision_enabled === true, mcp_decision_enabled: this.form.mcp_decision_enabled === true, skill_decision_enabled: this.form.skill_decision_enabled === true, subagent_decision_enabled: this.form.subagent_decision_enabled === true, tool_filter_enabled: this.form.tool_filter_enabled === true, mcp_filter_enabled: this.form.mcp_filter_enabled === true, skill_filter_enabled: this.form.skill_filter_enabled === true, subagent_filter_enabled: this.form.subagent_filter_enabled === true, tools_scope: this.scopeList(this.form.tools_scope), tools_scope_blacklist: this.form.tools_scope_blacklist === true, tool_noul_threshold: numberOr(this.form.tool_noul_threshold, TOOL_THRESHOLD_DEFAULT), proactive, dialogue_enhancement: dialogue};
         // Only send the Provider when it was picked here, so a page opened
         // before a change on AstrBot's native config page cannot undo it.
-        if (this.providerTouched) body.decision_provider_id = String(this.form.decision_provider_id || '');
+        const sentProvider = String(this.form.decision_provider_id || '');
+        if (this.providerTouched) body.decision_provider_id = sentProvider;
         const result = payloadOf(await activeBridge.apiPost('settings/save', JSON.parse(JSON.stringify(body))));
         if (result.saved !== true) throw new Error('服务器未确认保存成功');
         if (Array.isArray(result.decision_providers)) this.decisionProviders = result.decision_providers;
-        if (typeof result.decision_provider_id === 'string') this.form.decision_provider_id = result.decision_provider_id;
-        this.providerTouched = false;
+        // A choice made while this save was in flight stays pending for the next save.
+        if (String(this.form.decision_provider_id || '') === sentProvider) {
+          if (typeof result.decision_provider_id === 'string') this.form.decision_provider_id = result.decision_provider_id;
+          this.providerTouched = false;
+        }
         if (Array.isArray(result.always_keep_tools)) this.selectedKeep = result.always_keep_tools.map(String);
         if (Array.isArray(result.always_keep_recommend_tools)) this.selectedRecommend = result.always_keep_recommend_tools.map(String);
         if (Array.isArray(result.always_keep_mcp)) this.selectedKeepMcp = result.always_keep_mcp.map(String);

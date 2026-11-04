@@ -130,7 +130,7 @@ DEFAULT_POLICY = (
 # The JEV Provider (decision_provider_id) is deliberately not a detail key: it
 # lives only in AstrBot's native plugin config.  The dashboard edits it there
 # with a dropdown populated from AstrBot's live Decision Providers.
-LEGACY_PROVIDER_KEY = "decision_provider_id"
+NATIVE_PROVIDER_KEY = "decision_provider_id"
 DETAIL_DEFAULTS: dict[str, Any] = {
     "message_interjection_enabled": True,
     # Multi-modal understanding lives under 对话流增强 → 输入增强. It is a
@@ -188,14 +188,11 @@ class DecisionPlugin(Star):
         self.context = context
         self.config = config
         self._settings_path = self._get_settings_path(config)
-        # A Provider saved by older dashboards in the detail file; kept (and
-        # rewritten by _save_detail_settings) only until it reaches the native
-        # config, so a failed migration is retried on the next start.
-        self._pending_legacy_provider: str | None = None
+        # A Provider saved in the detail file by older dashboards; read only
+        # by the one-time migration into the native config below.
         self._loaded_legacy_provider: str | None = None
         self._detail_settings = self._load_detail_settings()
         legacy_provider_id = self._loaded_legacy_provider
-        self._pending_legacy_provider = legacy_provider_id
         # AstrBot also renders live config keys. Never merge WebUI settings
         # into this framework-owned object, even only in memory.
         legacy = {
@@ -586,9 +583,9 @@ class DecisionPlugin(Star):
                 if isinstance(value, Mapping)
                 else {}
             )
-            if isinstance(value, Mapping) and LEGACY_PROVIDER_KEY in value:
+            if isinstance(value, Mapping) and NATIVE_PROVIDER_KEY in value:
                 # Read only by the startup migration into the native config.
-                self._loaded_legacy_provider = str(value.get(LEGACY_PROVIDER_KEY) or "").strip()
+                self._loaded_legacy_provider = str(value.get(NATIVE_PROVIDER_KEY) or "").strip()
             if "multimodal" in payload:
                 from .decision.multimodal import normalize_settings
 
@@ -607,10 +604,6 @@ class DecisionPlugin(Star):
             from .decision.multimodal import normalize_settings
 
             payload["multimodal"] = normalize_settings(payload["multimodal"])
-        stored = dict(payload)
-        if self._pending_legacy_provider is not None:
-            # Not migrated into the native config yet: keep it for the retry.
-            stored[LEGACY_PROVIDER_KEY] = self._pending_legacy_provider
         self._settings_path.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(
             dir=str(self._settings_path.parent),
@@ -620,7 +613,7 @@ class DecisionPlugin(Star):
         committed = False
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as file:
-                json.dump(stored, file, ensure_ascii=False, indent=2)
+                json.dump(payload, file, ensure_ascii=False, indent=2)
                 file.flush()
                 os.fsync(file.fileno())
             os.replace(temporary, self._settings_path)
@@ -634,28 +627,25 @@ class DecisionPlugin(Star):
         self._detail_settings = payload
 
     def _migrate_legacy_provider(self, config: AstrBotConfig, legacy_provider_id: str) -> None:
-        """Move an old dashboard Provider into AstrBot's native config, once."""
+        """Move an old dashboard Provider into AstrBot's native config, once.
 
-        native_provider_id = str(config.get(LEGACY_PROVIDER_KEY, "") or "").strip()
+        The copy is dropped even if the native write fails: the value stays in
+        the in-memory config (saved with the next native config save), and a
+        retry on a later start could override a clear made in the meantime.
+        """
+
+        native_provider_id = str(config.get(NATIVE_PROVIDER_KEY, "") or "").strip()
         if not native_provider_id and legacy_provider_id:
-            # Copy it for this run even if it cannot be persisted yet.  Once it
-            # is in the native config, clearing that field later remains an
-            # explicit request to use AstrBot's default.
-            config[LEGACY_PROVIDER_KEY] = legacy_provider_id
+            config[NATIVE_PROVIDER_KEY] = legacy_provider_id
             save_config = getattr(config, "save_config", None)
-            try:
-                if not callable(save_config):
-                    raise OSError("the native config cannot be saved")
-                save_config()
-            except Exception as exc:
-                # _pending_legacy_provider stays set, so the copy is kept.
-                logger.warning(
-                    "Decision Engine could not persist the migrated JEV Provider selection: %s",
-                    _safe_error(exc),
-                )
-                return
-        # The native field owns the value now (or already did): drop the copy.
-        self._pending_legacy_provider = None
+            if callable(save_config):
+                try:
+                    save_config()
+                except Exception as exc:
+                    logger.warning(
+                        "Decision Engine could not persist the migrated JEV Provider selection: %s",
+                        _safe_error(exc),
+                    )
         try:
             self._save_detail_settings(self._detail_settings)
         except (OSError, TypeError, ValueError) as exc:
@@ -2143,7 +2133,8 @@ class DecisionPlugin(Star):
             flow_enabled = self._conversation_flow_enabled_for(event)
             # Keep every allowlisted message in the bounded session history,
             # while the analysis cooldown suppresses only the Jev request.
-            if not self.proactive.can_analyze(session):
+            forced_summon = explicit_summon and self._bool("force_reply_when_summoned", True)
+            if not self.proactive.can_analyze(session) and not forced_summon:
                 return
             status = self.proactive.observe_message(
                 session,
@@ -2161,11 +2152,11 @@ class DecisionPlugin(Star):
             # any result, so do not spend a Jev request on this message.  An
             # explicit summon is still answered, by AstrBot's native Agent.
             if self.proactive.has_pending_reply(session):
-                if explicit_summon and self._bool("force_reply_when_summoned", True):
+                if forced_summon:
                     event.is_at_or_wake_command = True
                     self.proactive.set_status(session, ProactiveStatus.SUMMONED)
                 return
-            if explicit_summon and self._bool("force_reply_when_summoned", True):
+            if forced_summon:
                 should_reply = True
                 scores: dict[str, float] = {}
                 aggregate = 1.0
@@ -2279,13 +2270,13 @@ class DecisionPlugin(Star):
                     session, cid
                 )
             except Exception as exc:
-                self.proactive.cancel_reply(session)
+                self.proactive.cancel_reply(session, reply_token)
                 logger.debug(
                     "Decision Engine proactive request was not queued: %s", _safe_error(exc)
                 )
                 return
             if not conversation:
-                self.proactive.cancel_reply(session)
+                self.proactive.cancel_reply(session, reply_token)
                 return
         # Leave the per-session lock first: AstrBot runs the yielded request
         # (the whole agent loop) before resuming this handler, and other
@@ -2324,8 +2315,8 @@ class DecisionPlugin(Star):
             # counted: the reply may still have reached the chat, and counting
             # errs towards interjecting less.  The token check leaves a newer
             # reservation untouched.
-            if queued and self.proactive.pending_reply_token(session) == reply_token:
-                self.proactive.mark_reply_finished(session)
+            if queued:
+                self.proactive.mark_reply_finished(session, reply_token)
 
     @filter.event_message_type(
         EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE,
@@ -2384,11 +2375,8 @@ class DecisionPlugin(Star):
         # switches below: only the reply to that request may do it, never an
         # ordinary user-addressed reply in the same session.
         reply_token = event.get_extra(PROACTIVE_REPLY_EXTRA, None)
-        if (
-            reply_token is not None
-            and self.proactive.pending_reply_token(session) == reply_token
-        ):
-            self.proactive.mark_reply_success(session)
+        if reply_token is not None:
+            self.proactive.mark_reply_success(session, reply_token)
         if not self._bool("proactive_reply_enabled", False):
             return
         if event.get_message_type() not in {
@@ -2863,20 +2851,22 @@ class DecisionPlugin(Star):
         EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE, priority=1100
     )
     async def life_observe_message(self, event: AstrMessageEvent):
+        # One reference per call: a settings save may swap the runtime meanwhile.
+        runtime = self._life_runtime
         if event.get_extra("decision_life_proactive", False):
             return
-        if self._life_runtime:
+        if runtime:
             if self._command_handler_matched(event):
-                self._life_runtime._mark_conversation_activity(str(event.unified_msg_origin))
+                runtime._mark_conversation_activity(str(event.unified_msg_origin))
                 return
-            await self._life_runtime.temporal.prepare_event(event)
+            await runtime.temporal.prepare_event(event)
             if (
-                self._life_runtime.config["continuity_settings"]["enable"]
-                or self._life_runtime.config["temporal_settings"]["enable"]
+                runtime.config["continuity_settings"]["enable"]
+                or runtime.config["temporal_settings"]["enable"]
             ):
-                persona = await self._life_runtime.personas.resolve(str(event.unified_msg_origin))
-                self._life_runtime.delivery.wrap_event(event, persona.id)
-            await self._life_runtime.record_incoming(event)
+                persona = await runtime.personas.resolve(str(event.unified_msg_origin))
+                runtime.delivery.wrap_event(event, persona.id)
+            await runtime.record_incoming(event)
 
     @filter.event_message_type(
         EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE, priority=1001
@@ -2969,25 +2959,29 @@ class DecisionPlugin(Star):
 
     @filter.on_llm_request(priority=1100)
     async def life_inject_state(self, event: AstrMessageEvent, req: ProviderRequest):
-        if self._life_runtime and not self._command_handler_matched(event):
+        # One reference per call: a settings save may swap the runtime meanwhile.
+        runtime = self._life_runtime
+        if runtime and not self._command_handler_matched(event):
             if (
-                self._life_runtime.enabled
+                runtime.enabled
                 and not event.get_extra("decision_life_proactive", False)
                 and not event.get_extra("decision_life_counted", False)
             ):
-                await self._life_runtime.mark_agent_active(event, None)
+                await runtime.mark_agent_active(event, None)
                 event.set_extra("decision_life_counted", True)
-            await self._life_runtime.inject_cached_state(event, req)
+            await runtime.inject_cached_state(event, req)
 
     @getattr(filter, "on_waiting_llm_request", lambda **kw: lambda fn: fn)(priority=1100)
     async def life_waiting_request(self, event: AstrMessageEvent):
+        # One reference per call: a settings save may swap the runtime meanwhile.
+        runtime = self._life_runtime
         if (
-            not self._life_runtime
-            or not self._life_runtime.enabled
+            not runtime
+            or not runtime.enabled
             or self._command_handler_matched(event)
         ):
             return
-        if not self._life_runtime.config["schedule_settings"]["daily_schedule_generation_enable"]:
+        if not runtime.config["schedule_settings"]["daily_schedule_generation_enable"]:
             return
         # Explicit summons keep the immediate native reply contract.
         if event.get_extra("decision_life_proactive", False) or self._direct_reply_requested(event):
@@ -2995,42 +2989,50 @@ class DecisionPlugin(Star):
         at_bot, reply_bot, _, _ = self._message_address_flags(event)
         if at_bot or reply_bot:
             return
-        await self._life_runtime.queue_reply_delay(event)
+        await runtime.queue_reply_delay(event)
 
     @getattr(filter, "on_agent_begin", lambda **kw: lambda fn: fn)()
     async def life_agent_begin(self, event, run_context):
+        # One reference per call: a settings save may swap the runtime meanwhile.
+        runtime = self._life_runtime
         if (
-            self._life_runtime
+            runtime
             and not event.get_extra("decision_life_proactive", False)
             and not event.get_extra("decision_life_counted", False)
         ):
-            await self._life_runtime.mark_agent_active(event, run_context)
+            await runtime.mark_agent_active(event, run_context)
             event.set_extra("decision_life_counted", True)
 
     @getattr(filter, "on_agent_done", lambda **kw: lambda fn: fn)()
     async def life_agent_done(self, event, run_context, response):
-        if self._life_runtime and event.get_extra("decision_life_counted", False):
+        # One reference per call: a settings save may swap the runtime meanwhile.
+        runtime = self._life_runtime
+        if runtime and event.get_extra("decision_life_counted", False):
             event.set_extra("decision_life_counted", False)
-            await self._life_runtime.defer_agent_release(event, run_context, response)
+            await runtime.defer_agent_release(event, run_context, response)
 
     @getattr(filter, "after_message_sent", lambda **kw: lambda fn: fn)()
     async def life_after_send(self, event):
-        if self._life_runtime:
-            if self._life_runtime.config["adaptive_settings"]["enable"] and getattr(
+        # One reference per call: a settings save may swap the runtime meanwhile.
+        runtime = self._life_runtime
+        if runtime:
+            if runtime.config["adaptive_settings"]["enable"] and getattr(
                 event, "__is_llm_reply", False
             ):
-                persona = await self._life_runtime.personas.resolve(str(event.unified_msg_origin))
-                self._life_runtime.contacts.normal_reply(
-                    event, persona.id, self._life_runtime._now()
+                persona = await runtime.personas.resolve(str(event.unified_msg_origin))
+                runtime.contacts.normal_reply(
+                    event, persona.id, runtime._now()
                 )
-        if self._life_runtime and not event.get_extra("decision_life_proactive", False):
-            await self._life_runtime.mark_active_conversation(event)
+        if runtime and not event.get_extra("decision_life_proactive", False):
+            await runtime.mark_active_conversation(event)
 
     @filter.on_llm_response()
     async def life_track_response(self, event, response):
-        if self._life_runtime:
-            await self._life_runtime.temporal.guard_response(event, response)
-            await self._life_runtime.track_delayed_llm_response(event, response)
+        # One reference per call: a settings save may swap the runtime meanwhile.
+        runtime = self._life_runtime
+        if runtime:
+            await runtime.temporal.guard_response(event, response)
+            await runtime.track_delayed_llm_response(event, response)
             if not hasattr(filter, "on_agent_done"):
                 await self.life_agent_done(event, None, response)
 
@@ -4106,7 +4108,7 @@ class DecisionPlugin(Star):
                     "Decision Engine: this config cannot be saved, so the JEV Provider "
                     "selection only lasts until the plugin reloads."
                 )
-            if callable(save_config):
+            else:
                 try:
                     save_config()
                 except Exception as exc:
@@ -4141,16 +4143,6 @@ class DecisionPlugin(Star):
                         _safe_error(exc),
                     )
                     return error_response("Jev 模型提供商写入失败，原设置保持不变", status_code=500)
-                if self._pending_legacy_provider is not None:
-                    # An explicit native value supersedes the unmigrated copy.
-                    self._pending_legacy_provider = None
-                    try:
-                        self._save_detail_settings(self._detail_settings)
-                    except (OSError, TypeError, ValueError) as exc:
-                        logger.warning(
-                            "Decision Engine could not remove the dashboard copy of the JEV Provider: %s",
-                            _safe_error(exc),
-                        )
         self.proactive.reconfigure(
             self._int("proactive_history_max_messages", 12),
             self._int("proactive_max_sessions", 500),

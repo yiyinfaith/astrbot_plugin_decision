@@ -1521,15 +1521,18 @@ def test_startup_drops_dashboard_provider_copy_when_native_is_set(host):
     assert plugin._setting("decision_provider_id", "") == ""
 
 
-def test_failed_provider_migration_keeps_the_legacy_copy_for_a_retry(host):
+def test_failed_provider_migration_keeps_the_value_in_the_native_config(host):
     host.path.parent.mkdir(parents=True, exist_ok=True)
     host.path.write_text(json.dumps({"decision_provider_id": "provider-x"}), encoding="utf-8")
     host.config["decision_provider_id"] = ""
     host.config.save_config = Mock(side_effect=OSError("simulated native write failure"))
     plugin = host.module.DecisionPlugin(host.context, host.config)
+    # Used for this run and saved with the next native config save; the old
+    # copy is not kept, so it can never override a later clear.
     assert plugin._setting("decision_provider_id", "") == "provider-x"
+    assert host.config["decision_provider_id"] == "provider-x"
     persisted = json.loads(host.path.read_text(encoding="utf-8"))
-    assert persisted["decision_provider_id"] == "provider-x"
+    assert "decision_provider_id" not in persisted
 
 
 @pytest.mark.asyncio
