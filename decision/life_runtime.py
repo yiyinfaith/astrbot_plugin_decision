@@ -162,6 +162,10 @@ class LifeRuntime(VirtualLifeBase):
 
     def spawn(self, coroutine):
         task = asyncio.create_task(coroutine)
+        if self.closed:
+            # A late hook still holding this runtime must not start work on it.
+            task.cancel()
+            return task
         self.tasks.add(task)
 
         def done(finished):
@@ -255,6 +259,13 @@ class LifeRuntime(VirtualLifeBase):
         self._conversation_generations.clear()
         self._conversation_activity_at.clear()
         self._active_agent_counts.clear()
+        # Cancel deferred agent releases here: the base terminate() that would
+        # otherwise do it only runs for a loaded runtime, after this point.
+        release_tasks = tuple(self._agent_release_tasks)
+        for task in release_tasks:
+            task.cancel()
+        if release_tasks:
+            await asyncio.gather(*release_tasks, return_exceptions=True)
         self._agent_release_tasks.clear()
         self._window_retry_counts.clear()
         self._schedule_available_umos.clear()

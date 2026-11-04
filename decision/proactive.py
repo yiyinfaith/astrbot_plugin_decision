@@ -459,8 +459,8 @@ class ProactiveState:
         cooldown_seconds: float,
         window_seconds: float,
         max_replies: int,
-    ) -> bool:
-        """Reserve one reply slot, retaining the previous public API."""
+    ) -> int | None:
+        """Reserve one reply slot and return its token, or ``None`` when refused."""
 
         current = self._session(session)
         now = time.monotonic()
@@ -468,25 +468,25 @@ class ProactiveState:
         # values the same way instead of silently allowing one reply through
         # because of a defensive ``max(1, ...)`` clamp.
         if int(max_replies) <= 0:
-            return False
+            return None
         # One proactive reply at a time per session: the request runs outside
         # the session lock, so a concurrent message must not reserve another.
         self._expire_pending(current, now)
         if current.pending_reply:
-            return False
+            return None
         if now - current.last_reply < max(0.0, cooldown_seconds):
-            return False
+            return None
         while current.reply_times and now - current.reply_times[0] > max(1.0, window_seconds):
             current.reply_times.popleft()
         if len(current.reply_times) >= int(max_replies):
-            return False
+            return None
         current.reply_times.append(now)
         current.last_reply = now
         current.pending_reply = True
         current.pending_since = now
         current.reply_token = next(self._reply_tokens)
         self.last_reply[str(session)] = now
-        return True
+        return current.reply_token
 
     def _owns_reservation(self, current: Any, token: int | None) -> bool:
         """Whether ``token`` (when given) is the reservation still pending."""

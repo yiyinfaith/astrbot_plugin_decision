@@ -1636,3 +1636,44 @@ async def test_finished_proactive_request_never_settles_a_newer_reservation(host
     with pytest.raises(StopAsyncIteration):
         await handler.__anext__()
     assert plugin.proactive.pending_reply_token(session) == newer
+
+
+@pytest.mark.asyncio
+async def test_explicit_summon_goes_to_the_native_agent_without_the_proactive_budget(
+    host, monkeypatch
+):
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    host.config["proactive_reply_enabled"] = True
+    plugin._detail_settings["proactive_scope_blacklist"] = True
+    plugin.provider = object()
+    plugin._ready = True
+    evaluate = AsyncMock()
+    monkeypatch.setattr(plugin, "_evaluate", evaluate)
+    # A quote-reply to the bot: explicit, but not a direct prefix.
+    monkeypatch.setattr(plugin, "_message_address_flags", lambda event: (False, True, False, False))
+    session = "qq:GroupMessage:group-1"
+    event = SimpleNamespace(
+        unified_msg_origin=session,
+        is_at_or_wake_command=False,
+        get_message_type=lambda: 1,
+        get_group_id=lambda: "group-1",
+        get_message_str=lambda: "你刚才说的是什么意思",
+        get_sender_id=lambda: "user-1",
+        get_sender_name=lambda: "用户",
+        get_self_id=lambda: "bot-1",
+        get_messages=lambda: [],
+        get_extra=lambda key, default=None: default,
+        get_message_outline=lambda: "你刚才说的是什么意思",
+        request_llm=lambda **kwargs: "provider-request",
+        should_call_llm=lambda value: None,
+    )
+
+    yielded = [item async for item in plugin.proactive_reply(event)]
+
+    assert yielded == []
+    assert event.is_at_or_wake_command is True
+    evaluate.assert_not_awaited()
+    assert not plugin.proactive.has_pending_reply(session)
+    assert plugin.proactive.allow_reply(
+        session, cooldown_seconds=60, window_seconds=600, max_replies=1
+    )

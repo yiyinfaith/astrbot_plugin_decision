@@ -1418,6 +1418,8 @@ class VirtualLifeBase:
         _run_context,
         _response: LLMResponse | None,
     ) -> None:
+        if getattr(self, "closed", False):
+            return
         umo = event.unified_msg_origin
         task = asyncio.create_task(self._release_agent_after_history_save(umo))
         self._agent_release_tasks.add(task)

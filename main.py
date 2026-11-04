@@ -131,6 +131,9 @@ DEFAULT_POLICY = (
 # lives only in AstrBot's native plugin config.  The dashboard edits it there
 # with a dropdown populated from AstrBot's live Decision Providers.
 NATIVE_PROVIDER_KEY = "decision_provider_id"
+# Errors _save_detail_settings can raise: disk errors, plus multimodal
+# normalisation and JSON serialisation of a bad value.
+SETTINGS_WRITE_ERRORS = (OSError, TypeError, ValueError)
 DETAIL_DEFAULTS: dict[str, Any] = {
     "message_interjection_enabled": True,
     # Multi-modal understanding lives under 对话流增强 → 输入增强. It is a
@@ -203,7 +206,7 @@ class DecisionPlugin(Star):
         if legacy:
             try:
                 self._save_detail_settings({**legacy, **self._detail_settings})
-            except (OSError, TypeError, ValueError) as exc:
+            except SETTINGS_WRITE_ERRORS as exc:
                 # Do not remove framework-owned values until the durable
                 # migration succeeds.  Keeping them in memory preserves the
                 # user's policy for this run and allows a later retry.
@@ -648,7 +651,7 @@ class DecisionPlugin(Star):
                     )
         try:
             self._save_detail_settings(self._detail_settings)
-        except (OSError, TypeError, ValueError) as exc:
+        except SETTINGS_WRITE_ERRORS as exc:
             logger.warning(
                 "Decision Engine could not remove the dashboard copy of the JEV Provider: %s",
                 _safe_error(exc),
@@ -783,12 +786,10 @@ class DecisionPlugin(Star):
             except Exception as exc:
                 logger.warning("Decision Engine 多模态关闭失败：%s", _safe_error(exc))
             self._multimodal = None
-        if self._life_runtime is not None:
-            try:
-                await self._life_runtime.terminate()
-            except Exception as exc:
-                logger.warning("Decision Engine 虚拟生活关闭失败：%s", _safe_error(exc))
-            self._life_runtime = None
+        # Under the lock: a runtime still being built is torn down once ready
+        # instead of being assigned after shutdown.
+        async with self._life_lock:
+            await self._stop_life_runtime_locked()
         if self._personal_network is not None:
             try:
                 await self._personal_network.terminate()
@@ -2148,104 +2149,102 @@ class DecisionPlugin(Star):
                 min_participants=self._int("min_participant_count", 2),
                 observation_timeout=self._float("observation_timeout_seconds", 600.0),
             )
-            # A proactive reply is already in flight: allow_reply would reject
-            # any result, so do not spend a Jev request on this message.  An
-            # explicit summon is still answered, by AstrBot's native Agent.
-            if self.proactive.has_pending_reply(session):
-                if forced_summon:
-                    event.is_at_or_wake_command = True
-                    self.proactive.set_status(session, ProactiveStatus.SUMMONED)
-                return
             if forced_summon:
-                should_reply = True
-                scores: dict[str, float] = {}
-                aggregate = 1.0
+                # Skip the Jev judgement and let AstrBot's native Agent answer,
+                # like a direct prefix: an explicit summon is neither limited
+                # by nor counted against the proactive cooldown and window.
+                event.is_at_or_wake_command = True
+                self.proactive.set_status(session, ProactiveStatus.SUMMONED)
                 logger.warning(
-                    "Decision Engine 因为明确 @ 或回复机器人且启用强制回复，所以主动对话。"
+                    "Decision Engine 因为明确 @ 或回复机器人且启用强制回复，所以交给原生 Agent 回复。"
                 )
-            else:
-                questions = {
-                    "is_addressing_bot": {
-                        "type": "noul",
-                        "instructions": "Is the current message meaningfully addressing the bot?",
-                    },
-                    "should_interject": {
-                        "type": "noul",
-                        "instructions": "Would a brief, helpful bot reply now be natural rather than disruptive?",
-                    },
-                    "conversation_relevance": {
-                        "type": "noul",
-                        "instructions": "Would the bot add relevant value to this conversation right now?",
-                    },
-                    "timing": {
-                        "type": "noul",
-                        "instructions": "Is this a good moment for one concise bot reply?",
-                    },
-                    "continuity": {
-                        "type": "noul",
-                        "instructions": "Would replying continue the current conversation naturally?",
-                    },
-                }
-                state = self._fit_active_state(
-                    history=history,
-                    sender_name=sender_name,
-                    sender_id=sender_id,
-                    text=text,
-                    status=status,
-                    summoned=summoned,
-                    dialogue=dialogue,
-                    dialogue_enabled=flow_enabled,
-                    questions=questions,
-                )
-                try:
-                    result = await self._evaluate(state=state, questions=questions)
-                except Exception as exc:
-                    self.proactive.mark_analysis(
-                        session,
-                        success=False,
-                        # Retry backoff controls the gap between transport
-                        # attempts inside one Jev request.  Once all attempts
-                        # fail, use the proactive analysis interval instead
-                        # of zero so an API outage cannot trigger one new
-                        # request for every incoming message.
-                        no_reply_cooldown=self._float("no_reply_cooldown_seconds", 3.0),
-                    )
-                    logger.warning(
-                        "Decision Engine proactive check closed after failure: %s", _safe_error(exc)
-                    )
-                    return
-                names = tuple(questions)
-                scores = parse_noul_scores(result.answers, names)
-                weights = {
-                    "is_addressing_bot": 1.4,
-                    "should_interject": 1.4,
-                    "conversation_relevance": 1.2,
-                    "timing": 0.8,
-                    "continuity": 0.8,
-                }
-                aggregate = aggregate_scores(scores, weights)
-                addressing = scores.get("is_addressing_bot", 0.0)
-                interject = scores.get("should_interject", 0.0)
-                should_reply = bool(
-                    len(scores) == len(names)
-                    and (
-                        aggregate
-                        >= bounded_float(self._setting("proactive_score_threshold", 0.68), 0.68)
-                        or (
-                            addressing
-                            >= bounded_float(self._setting("addressing_threshold", 0.7), 0.7)
-                            and interject
-                            >= bounded_float(self._setting("interject_threshold", 0.85), 0.85)
-                        )
-                    )
+                return
+            # A proactive reply is already in flight: allow_reply would reject
+            # any result, so do not spend a Jev request on this message.
+            if self.proactive.has_pending_reply(session):
+                return
+            questions = {
+                "is_addressing_bot": {
+                    "type": "noul",
+                    "instructions": "Is the current message meaningfully addressing the bot?",
+                },
+                "should_interject": {
+                    "type": "noul",
+                    "instructions": "Would a brief, helpful bot reply now be natural rather than disruptive?",
+                },
+                "conversation_relevance": {
+                    "type": "noul",
+                    "instructions": "Would the bot add relevant value to this conversation right now?",
+                },
+                "timing": {
+                    "type": "noul",
+                    "instructions": "Is this a good moment for one concise bot reply?",
+                },
+                "continuity": {
+                    "type": "noul",
+                    "instructions": "Would replying continue the current conversation naturally?",
+                },
+            }
+            state = self._fit_active_state(
+                history=history,
+                sender_name=sender_name,
+                sender_id=sender_id,
+                text=text,
+                status=status,
+                summoned=summoned,
+                dialogue=dialogue,
+                dialogue_enabled=flow_enabled,
+                questions=questions,
+            )
+            try:
+                result = await self._evaluate(state=state, questions=questions)
+            except Exception as exc:
+                self.proactive.mark_analysis(
+                    session,
+                    success=False,
+                    # Retry backoff controls the gap between transport
+                    # attempts inside one Jev request.  Once all attempts
+                    # fail, use the proactive analysis interval instead
+                    # of zero so an API outage cannot trigger one new
+                    # request for every incoming message.
+                    no_reply_cooldown=self._float("no_reply_cooldown_seconds", 3.0),
                 )
                 logger.warning(
-                    "Decision Engine 因为 Jev 综合分 %.3f（指向 %.3f，介入 %.3f），所以%s。",
-                    aggregate,
-                    addressing,
-                    interject,
-                    "主动对话" if should_reply else "不主动对话",
+                    "Decision Engine proactive check closed after failure: %s", _safe_error(exc)
                 )
+                return
+            names = tuple(questions)
+            scores = parse_noul_scores(result.answers, names)
+            weights = {
+                "is_addressing_bot": 1.4,
+                "should_interject": 1.4,
+                "conversation_relevance": 1.2,
+                "timing": 0.8,
+                "continuity": 0.8,
+            }
+            aggregate = aggregate_scores(scores, weights)
+            addressing = scores.get("is_addressing_bot", 0.0)
+            interject = scores.get("should_interject", 0.0)
+            should_reply = bool(
+                len(scores) == len(names)
+                and (
+                    aggregate
+                    >= bounded_float(self._setting("proactive_score_threshold", 0.68), 0.68)
+                    or (
+                        addressing
+                        >= bounded_float(self._setting("addressing_threshold", 0.7), 0.7)
+                        and interject
+                        >= bounded_float(self._setting("interject_threshold", 0.85), 0.85)
+                    )
+                )
+            )
+            logger.warning(
+                "Decision Engine 因为 Jev 综合分 %.3f（指向 %.3f，介入 %.3f），所以%s。",
+                aggregate,
+                addressing,
+                interject,
+                "主动对话" if should_reply else "不主动对话",
+            )
             self.proactive.mark_analysis(
                 session,
                 success=True,
@@ -2254,15 +2253,15 @@ class DecisionPlugin(Star):
             if not should_reply:
                 self.proactive.set_status(session, ProactiveStatus.OBSERVATION)
                 return
-            if not self.proactive.allow_reply(
+            reply_token = self.proactive.allow_reply(
                 session,
                 cooldown_seconds=self._float("cooldown_seconds", 60),
                 window_seconds=self._float("reply_window_seconds", 600),
                 max_replies=self._int("max_replies_per_window", 2),
-            ):
+            )
+            if reply_token is None:
                 logger.warning("Decision Engine 因为主动回复冷却或窗口次数限制，所以不主动对话。")
                 return
-            reply_token = self.proactive.pending_reply_token(session)
 
             try:
                 cid = await self.context.conversation_manager.get_curr_conversation_id(session)
@@ -2647,44 +2646,49 @@ class DecisionPlugin(Star):
     async def _get_life_runtime(self):
         async with self._life_lock:
             if self._life_runtime is None:
-                from .decision.life_runtime import LifeRuntime
-
-                settings = normalize_life(dict(self._setting("life", {}) or {}))
-                runtime = LifeRuntime(self, settings)
-                try:
-                    await runtime.initialize()
-                except BaseException:
-                    # Clean up, but never let a close error replace the real
-                    # failure (or a CancelledError).
-                    try:
-                        await runtime.terminate()
-                    except Exception as exc:
-                        logger.warning(
-                            "Decision Engine 主动发起后台清理失败：%s", _safe_error(exc)
-                        )
-                    raise
-                self._life_runtime = runtime
+                await self._start_life_runtime_locked()
             return self._life_runtime
 
+    async def _start_life_runtime_locked(self) -> None:
+        """Build the life runtime from the saved settings; caller holds _life_lock."""
+
+        from .decision.life_runtime import LifeRuntime
+
+        settings = normalize_life(dict(self._setting("life", {}) or {}))
+        runtime = LifeRuntime(self, settings)
+        try:
+            await runtime.initialize()
+        except BaseException:
+            # Clean up, but never let a close error replace the real failure
+            # (or a CancelledError).
+            try:
+                await runtime.terminate()
+            except Exception as exc:
+                logger.warning("Decision Engine 主动发起后台清理失败：%s", _safe_error(exc))
+            raise
+        self._life_runtime = runtime
+
+    async def _stop_life_runtime_locked(self) -> None:
+        """Tear down the current life runtime; caller holds _life_lock."""
+
+        # Forget it first, so a failing terminate() still lets a new one start.
+        runtime, self._life_runtime = self._life_runtime, None
+        if runtime is not None:
+            try:
+                await runtime.terminate()
+            except Exception as exc:
+                # terminate() always stops the scheduler and tasks first, so
+                # starting a new runtime afterwards is still safe.
+                logger.warning("Decision Engine 主动发起后台关闭时出错：%s", _safe_error(exc))
+
     async def _configure_life_runtime(self):
-        if self._life_runtime:
-            async with self._life_lock:
-                # Re-check under the lock: a concurrent caller may already have
-                # taken it.  Forget the old runtime before terminate(), so that
-                # a failure there still lets a later save start a fresh one.
-                runtime, self._life_runtime = self._life_runtime, None
-                if runtime is not None:
-                    try:
-                        await runtime.terminate()
-                    except Exception as exc:
-                        # terminate() always stops the scheduler and tasks
-                        # first, so starting the new runtime is still safe.
-                        logger.warning(
-                            "Decision Engine 旧主动发起后台关闭时出错：%s", _safe_error(exc)
-                        )
+        # One critical section, so a runtime still being built from older
+        # settings is replaced instead of being returned as the new one.
         # 主动发起 is enabled by its own per-kind switches (私聊主动 / 群聊主动),
         # so there is no separate master switch to consult here.
-        await self._get_life_runtime()
+        async with self._life_lock:
+            await self._stop_life_runtime_locked()
+            await self._start_life_runtime_locked()
 
     def _get_life_media(self):
         if self._life_media is None:
@@ -3195,7 +3199,7 @@ class DecisionPlugin(Star):
             return error_response("ui_liquid_glass 必须是布尔值", status_code=400)
         try:
             self._save_detail_settings({**self._detail_settings, "ui_liquid_glass": value})
-        except (OSError, TypeError, ValueError) as exc:
+        except SETTINGS_WRITE_ERRORS as exc:
             logger.error("Decision Engine could not save the view preference: %s", _safe_error(exc))
             return error_response(f"保存失败：{_safe_error(exc)}", status_code=500)
         return json_response({"saved": True, "ui_liquid_glass": value})
@@ -4092,7 +4096,7 @@ class DecisionPlugin(Star):
         settings_file_existed = self._settings_path.exists()
         try:
             self._save_detail_settings(detail_values)
-        except (OSError, TypeError, ValueError) as exc:
+        except SETTINGS_WRITE_ERRORS as exc:
             logger.error("Decision Engine WebUI settings save failed: %s", _safe_error(exc))
             return error_response("配置写入失败，原设置保持不变", status_code=500)
         if decision_provider_id is not None:
@@ -4133,7 +4137,7 @@ class DecisionPlugin(Star):
                         else:
                             self._detail_settings = previous_detail_settings
                             self._settings_path.unlink(missing_ok=True)
-                    except (OSError, TypeError, ValueError) as rollback_exc:
+                    except SETTINGS_WRITE_ERRORS as rollback_exc:
                         logger.error(
                             "Decision Engine could not roll back JEV Provider settings: %s",
                             _safe_error(rollback_exc),

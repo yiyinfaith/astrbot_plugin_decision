@@ -52,6 +52,9 @@ MAX_AVATAR_BYTES = 2 * 1024 * 1024
 # A small compressed file can still describe a huge bitmap; refuse it before
 # thumbnail() decodes it (Pillow only raises above twice its own default limit).
 MAX_AVATAR_PIXELS = 25_000_000
+# Everything a bad avatar can raise while being decoded, written or recorded.
+# (UnidentifiedImageError is an OSError.)
+AVATAR_ERRORS = (ValueError, OSError, Image.DecompressionBombError, sqlite3.Error)
 MAX_IMPORT_BYTES = 25 * 1024 * 1024
 MAX_GENERATION_RAW_CHARS = 500_000
 GENERATION_JOB_TTL_SECONDS = 15 * 60
@@ -1264,13 +1267,7 @@ class PersonalNetworkService:
                 persona_id = await asyncio.to_thread(self._find_character_persona, character_id)
             encoded = await self._store_avatar(persona_id, character_id, raw)
             return json_response({"saved": True, "avatar_data": self._webp_data_url(encoded)})
-        except (
-            ValueError,
-            UnidentifiedImageError,
-            Image.DecompressionBombError,
-            OSError,
-            sqlite3.Error,
-        ) as exc:
+        except AVATAR_ERRORS as exc:
             return error_response(str(exc))
 
     async def _store_avatar(self, persona_id: str, character_id: str, raw: bytes) -> bytes:
@@ -1290,8 +1287,12 @@ class PersonalNetworkService:
             )
         except Exception:
             # Not on cancellation: the worker thread may still commit the new
-            # filename, which must then keep pointing at a real file.
-            await asyncio.to_thread(target.unlink, missing_ok=True)
+            # filename, which must then keep pointing at a real file.  A
+            # failing cleanup must not hide the original error.
+            try:
+                await asyncio.to_thread(target.unlink, missing_ok=True)
+            except OSError as exc:
+                logger.warning("人际网络新头像清理失败：%s", exc)
             raise
         try:
             await asyncio.to_thread(self._unlink_avatar, previous)
@@ -1646,13 +1647,7 @@ class PersonalNetworkService:
                 raw = self._decode_avatar_data(avatar_data)
                 try:
                     await self._store_avatar(persona_id, character["id"], raw)
-                except (
-                    ValueError,
-                    UnidentifiedImageError,
-                    Image.DecompressionBombError,
-                    OSError,
-                    sqlite3.Error,
-                ) as exc:
+                except AVATAR_ERRORS as exc:
                     # The network itself is already imported; one bad avatar
                     # must not report the whole import as failed.
                     logger.warning("人际网络导入头像失败，已跳过：%s", exc)
