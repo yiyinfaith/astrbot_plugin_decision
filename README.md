@@ -9,7 +9,9 @@ AstrBot 的 JEV 决策插件：在请求交给主 LLM 前，用 AstrBot 原生 D
 1. 在插件市场搜索 `jev决策综合插件` 安装，或在 AstrBot 目录执行 `git clone https://github.com/yiyinfaith/astrbot_plugin_decision.git data/plugins/astrbot_plugin_decision`。
 2. 在 **AstrBot WebUI → 模型提供方** 配置 Decision/Jev Provider。地址、Key、模型、超时都在 AstrBot 管理，插件只选择 Provider。
 3. 在 **插件 → 配置** 打开需要的三个总开关：「Tool/MCP/Skill/SubAgent 决策」「主动对话」「对话流增强」。
-4. 打开插件详情页 WebUI 调整详细规则，点击「保存全部设置」后立即生效；原生配置页的修改需热重载插件。
+4. 打开插件详情页的「jev决策综合插件设置」页面调整详细规则，点击「保存全部设置」后立即生效；原生配置页的修改需热重载插件。
+
+页面默认使用与 AstrBot 一致的简洁样式并跟随亮/暗主题；右上角「液态玻璃」开关可切换为 WebGL 液态玻璃特效（默认关闭，较耗性能，低配设备建议保持关闭）。
 
 ## 功能一览
 
@@ -253,7 +255,7 @@ pip install paddleocr paddlepaddle                                          # �
 ## 来源与许可
 
 - [Virtual Life](https://github.com/FloranceYeh/astrbot_plugin_virtual_life) v1.12.2（`a3dbbb7`）：整合核心、模板与配置，保留 GPL-3.0 许可证及[修改说明](decision/virtual_life/NOTICE.md)。
-- [Personal Network](https://github.com/FloranceYeh/astrbot_plugin_personal_network) v1.1.1（作者 Florance）：整合存储、生成与管理页；内置 Cytoscape.js 3.33.1 按 MIT 许可分发（`pages/dashboard/vendor/cytoscape.LICENSE`）。
+- [Personal Network](https://github.com/FloranceYeh/astrbot_plugin_personal_network) v1.1.1（作者 Florance）：整合存储、生成与管理页；内置 Cytoscape.js 3.33.1 按 MIT 许可分发（`views/dashboard/vendor/cytoscape.LICENSE`）。
 - [Conversa](https://github.com/Luna-channel/astrbot_plugin_Conversa)：参考 CronMessageEvent / 原生 Agent 与离线保护思路。
 - [Private Companion](https://github.com/menglimi/astrbot_plugin_private_companion)：参考候选过期、发送前复查、参考图结合当日穿搭的思路。
 
