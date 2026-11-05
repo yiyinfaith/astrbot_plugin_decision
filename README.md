@@ -271,10 +271,10 @@ pip install paddleocr paddlepaddle                                          # �
 
 使用问题、Bug 反馈和功能建议欢迎加群交流：
 
-| 吟枢苑✨插件交流群 | 吟枢苑✨吟窝（娱乐群） |
-| :---: | :---: |
-| 群号：529924533 | 群号：1059351824 |
-| <img src="https://raw.githubusercontent.com/yiyinfaith/astrbot_plugin_aigen/main/assets/qq-group-plugin.jpg" alt="插件交流群二维码" width="240" /> | <img src="https://raw.githubusercontent.com/yiyinfaith/astrbot_plugin_aigen/main/assets/qq-group-chat.jpg" alt="娱乐群二维码" width="240" /> |
+| 吟枢苑✨吟窝（插件反馈群） |
+| :---: |
+| 群号：1059351824 |
+| <img src="https://raw.githubusercontent.com/yiyinfaith/astrbot_plugin_aigen/main/assets/qq-group-chat.jpg" alt="插件反馈群二维码" width="240" /> |
 
 ## 来源与许可
 
