@@ -226,6 +226,13 @@ const app = createApp({
           conversation_flow_window: 8,
           conversation_flow_scope: '',
           conversation_flow_scope_blacklist: true,
+          optimize_tool_history_context: false,
+          disable_group_at_bot_wake: false,
+          disable_group_at_bot_wake_all_groups: false,
+          disable_group_at_bot_wake_group_ids: '',
+          disable_group_reply_to_bot_wake: false,
+          disable_group_reply_to_bot_wake_all_groups: false,
+          disable_group_reply_to_bot_wake_group_ids: '',
           multimodal: {models: []},
           output_enhancement_enabled: false,
           output_scope: '',
@@ -898,6 +905,8 @@ const app = createApp({
         for (const key of Object.keys(defaults)) if (typeof defaults[key] === 'number') proactive[key] = numberOr(proactive[key], defaults[key]);
         const dialogue = JSON.parse(JSON.stringify(this.form.dialogue_enhancement));
         dialogue.conversation_flow_scope = this.scopeList(dialogue.conversation_flow_scope);
+        dialogue.disable_group_at_bot_wake_group_ids = this.scopeList(dialogue.disable_group_at_bot_wake_group_ids);
+        dialogue.disable_group_reply_to_bot_wake_group_ids = this.scopeList(dialogue.disable_group_reply_to_bot_wake_group_ids);
         dialogue.output_scope = this.scopeList(dialogue.output_scope);
         const body = {life: JSON.parse(JSON.stringify(this.lifeConfig)), message_interjection_enabled: this.messageInterjection, always_keep_tools: Array.from(this.selectedKeep, String), always_keep_recommend_tools: Array.from(this.selectedRecommend, String), always_keep_mcp: Array.from(this.selectedKeepMcp, String), always_keep_recommend_mcp: Array.from(this.selectedRecommendMcp, String), always_keep_skills: Array.from(this.selectedKeepSkills, String), always_keep_recommend_skills: Array.from(this.selectedRecommendSkills, String), always_keep_subagents: Array.from(this.selectedKeepSubagents, String), always_keep_recommend_subagents: Array.from(this.selectedRecommendSubagents, String), jev_pre_prompt: String(this.form.jev_pre_prompt ?? ''), main_llm_post_prompt: String(this.form.main_llm_post_prompt ?? ''), tool_decision_enabled: this.form.tool_decision_enabled === true, mcp_decision_enabled: this.form.mcp_decision_enabled === true, skill_decision_enabled: this.form.skill_decision_enabled === true, subagent_decision_enabled: this.form.subagent_decision_enabled === true, tool_filter_enabled: this.form.tool_filter_enabled === true, mcp_filter_enabled: this.form.mcp_filter_enabled === true, skill_filter_enabled: this.form.skill_filter_enabled === true, subagent_filter_enabled: this.form.subagent_filter_enabled === true, tools_scope: this.scopeList(this.form.tools_scope), tools_scope_blacklist: this.form.tools_scope_blacklist === true, tool_noul_threshold: numberOr(this.form.tool_noul_threshold, TOOL_THRESHOLD_DEFAULT), proactive, dialogue_enhancement: dialogue};
         // Only send the Provider when it was picked here, so a page opened
@@ -952,7 +961,7 @@ const app = createApp({
         this.form.tool_decision_enabled = settings.tool_decision_enabled !== false; this.form.mcp_decision_enabled = settings.mcp_decision_enabled !== false; this.form.skill_decision_enabled = settings.skill_decision_enabled !== false; this.form.subagent_decision_enabled = settings.subagent_decision_enabled !== false; this.form.tool_filter_enabled = settings.tool_filter_enabled !== false; this.form.mcp_filter_enabled = settings.mcp_filter_enabled !== false; this.form.skill_filter_enabled = settings.skill_filter_enabled !== false; this.form.subagent_filter_enabled = settings.subagent_filter_enabled === true; this.form.tools_scope = (Array.isArray(settings.tools_scope) ? settings.tools_scope : []).map(String).join('\n'); this.form.tools_scope_blacklist = settings.tools_scope_blacklist !== false; this.form.tool_noul_threshold = Number.isFinite(Number(settings.tool_noul_threshold)) ? Number(settings.tool_noul_threshold) : TOOL_THRESHOLD_DEFAULT;
         this.form.jev_pre_prompt = hasOwn(settings, 'jev_pre_prompt') ? String(settings.jev_pre_prompt ?? '') : DEFAULT_JEV_PROMPT; this.form.main_llm_post_prompt = hasOwn(settings, 'main_llm_post_prompt') ? String(settings.main_llm_post_prompt ?? '') : DEFAULT_MAIN_PROMPT;
         this.form.proactive = {...defaults, ...(settings.proactive || {})}; this.form.proactive.proactive_whitelist = (settings.proactive?.proactive_whitelist || []).join('\n'); this.form.proactive.direct_reply_prefixes = (settings.proactive?.direct_reply_prefixes || ['/', '@']).join(', ');
-        const incoming = settings.dialogue_enhancement || {}; this.form.dialogue_enhancement = {...this.form.dialogue_enhancement, ...incoming}; this.form.dialogue_enhancement.conversation_flow_scope = (incoming.conversation_flow_scope || []).join('\n'); this.form.dialogue_enhancement.output_scope = (incoming.output_scope || []).join('\n'); if (incoming.output_pipeline) this.form.dialogue_enhancement.output_pipeline = incoming.output_pipeline;
+        const incoming = settings.dialogue_enhancement || {}; this.form.dialogue_enhancement = {...this.form.dialogue_enhancement, ...incoming}; this.form.dialogue_enhancement.conversation_flow_scope = (incoming.conversation_flow_scope || []).join('\n'); this.form.dialogue_enhancement.disable_group_at_bot_wake_group_ids = (incoming.disable_group_at_bot_wake_group_ids || []).join('\n'); this.form.dialogue_enhancement.disable_group_reply_to_bot_wake_group_ids = (incoming.disable_group_reply_to_bot_wake_group_ids || []).join('\n'); this.form.dialogue_enhancement.output_scope = (incoming.output_scope || []).join('\n'); if (incoming.output_pipeline) this.form.dialogue_enhancement.output_pipeline = incoming.output_pipeline;
         this.toolsEnabledValue = settings.tools_subagents_decision_enabled !== false; this.proactiveEnabledValue = settings.proactive_reply_enabled === true; this.flowEnabledValue = settings.conversation_flow_enabled !== false; this.loaded = true; this.statusText = `已加载 ${this.tools.length} 个能力`; this.syncThresholdGlass();
         this.applySavedGlass(settings.ui_liquid_glass);
         await this.refreshOptions();

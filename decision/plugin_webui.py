@@ -44,6 +44,35 @@ class WebUIMixin:
             ],
             "output_scope_blacklist": self._bool("output_scope_blacklist", True),
             "output_pipeline": merged,
+            "optimize_tool_history_context": self._bool(
+                "optimize_tool_history_context", False
+            ),
+            "disable_group_at_bot_wake": self._bool(
+                "disable_group_at_bot_wake", False
+            ),
+            "disable_group_at_bot_wake_all_groups": self._bool(
+                "disable_group_at_bot_wake_all_groups", False
+            ),
+            "disable_group_at_bot_wake_group_ids": [
+                str(item)
+                for item in (
+                    self._setting("disable_group_at_bot_wake_group_ids", []) or []
+                )
+                if str(item).strip()
+            ],
+            "disable_group_reply_to_bot_wake": self._bool(
+                "disable_group_reply_to_bot_wake", False
+            ),
+            "disable_group_reply_to_bot_wake_all_groups": self._bool(
+                "disable_group_reply_to_bot_wake_all_groups", False
+            ),
+            "disable_group_reply_to_bot_wake_group_ids": [
+                str(item)
+                for item in (
+                    self._setting("disable_group_reply_to_bot_wake_group_ids", []) or []
+                )
+                if str(item).strip()
+            ],
             "multimodal": self._multimodal_page_settings(),
         }
 
@@ -868,6 +897,30 @@ class WebUIMixin:
         ):
             if key in dialogue_payload:
                 proactive_payload[key] = dialogue_payload[key]
+        input_bool_keys = (
+            "optimize_tool_history_context",
+            "disable_group_at_bot_wake",
+            "disable_group_at_bot_wake_all_groups",
+            "disable_group_reply_to_bot_wake",
+            "disable_group_reply_to_bot_wake_all_groups",
+        )
+        for key in input_bool_keys:
+            if key in dialogue_payload and not isinstance(dialogue_payload[key], bool):
+                return error_response(f"{key} must be a boolean", status_code=400)
+        input_group_keys = (
+            "disable_group_at_bot_wake_group_ids",
+            "disable_group_reply_to_bot_wake_group_ids",
+        )
+        cleaned_input_groups: dict[str, list[str]] = {}
+        for key in input_group_keys:
+            if key not in dialogue_payload:
+                continue
+            value = dialogue_payload[key]
+            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                return error_response(f"{key} must be a string list", status_code=400)
+            cleaned_input_groups[key] = list(
+                dict.fromkeys(item.strip() for item in value if item.strip())
+            )[:500]
         pending_multimodal: dict[str, Any] | None = None
         multimodal_payload = dialogue_payload.get("multimodal")
         if multimodal_payload is not None:
@@ -1070,6 +1123,10 @@ class WebUIMixin:
         if tool_noul_threshold is not None:
             detail_values["tool_noul_threshold"] = min(1.0, max(0.0, float(tool_noul_threshold)))
         detail_values.update(cleaned_proactive)
+        for key in input_bool_keys:
+            if key in dialogue_payload:
+                detail_values[key] = dialogue_payload[key]
+        detail_values.update(cleaned_input_groups)
         if output_enabled is not None:
             detail_values["output_enhancement_enabled"] = output_enabled
         if output_scope is not None:
@@ -1172,6 +1229,7 @@ class WebUIMixin:
             except Exception as exc:  # pragma: no cover - host API differences
                 logger.warning("Decision Engine 多模态工具状态刷新失败：%s", _safe_error(exc))
         await self._configure_output_runtime()
+        self._configure_input_enhancements()
         # Restarting the life runtime cancels running WebUI jobs and drops
         # queued delayed replies, so only do it when its settings changed.
         if life_values is not None and (

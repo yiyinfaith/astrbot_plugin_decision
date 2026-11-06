@@ -142,6 +142,14 @@ NATIVE_PROVIDER_KEY = "decision_provider_id"
 SETTINGS_WRITE_ERRORS = (OSError, TypeError, ValueError)
 DETAIL_DEFAULTS: dict[str, Any] = {
     "message_interjection_enabled": True,
+    # 对话流增强 -> 输入增强：历史工具结果与群聊 Bot 唤醒控制。
+    "optimize_tool_history_context": False,
+    "disable_group_at_bot_wake": False,
+    "disable_group_at_bot_wake_all_groups": False,
+    "disable_group_at_bot_wake_group_ids": [],
+    "disable_group_reply_to_bot_wake": False,
+    "disable_group_reply_to_bot_wake_all_groups": False,
+    "disable_group_reply_to_bot_wake_group_ids": [],
     # Multi-modal understanding lives under 对话流增强 → 输入增强. It is a
     # first-class detail section so load, save and reload all see it.
     "multimodal": {},

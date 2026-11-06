@@ -26,6 +26,8 @@ from .decision.plugin_shared import (
     _safe_error,
 )
 from .decision.plugin_webui import WebUIMixin
+from .decision.input_enhancement.group_wake_suppression import GroupWakeSuppressionModule
+from .decision.input_enhancement.tool_history_context import ToolHistoryContextModule
 
 
 class DecisionFunctionTool(FunctionTool):
@@ -83,6 +85,26 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
         self._life_runtime: Any | None = None
         self._multimodal: Any | None = None
         self._multimodal_tools: list[Any] = []
+        self._tool_history_context = ToolHistoryContextModule(logger=logger)
+        self._group_wake_suppression = GroupWakeSuppressionModule(
+            logger=logger,
+            disable_at_bot_wake=self._bool("disable_group_at_bot_wake", False),
+            disable_at_bot_wake_all_groups=self._bool(
+                "disable_group_at_bot_wake_all_groups", False
+            ),
+            disable_at_bot_wake_group_ids=self._setting(
+                "disable_group_at_bot_wake_group_ids", []
+            ),
+            disable_reply_to_bot_wake=self._bool(
+                "disable_group_reply_to_bot_wake", False
+            ),
+            disable_reply_to_bot_wake_all_groups=self._bool(
+                "disable_group_reply_to_bot_wake_all_groups", False
+            ),
+            disable_reply_to_bot_wake_group_ids=self._setting(
+                "disable_group_reply_to_bot_wake_group_ids", []
+            ),
+        )
         self._life_media: Any | None = None
         self._personal_network: Any | None = None
         self._life_lock = asyncio.Lock()
@@ -578,6 +600,7 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
             await self._ensure_multimodal()
         except Exception as exc:
             logger.warning("Decision Engine 多模态初始化失败：%s", _safe_error(exc))
+        self._configure_input_enhancements()
         # 主动发起 is optional: a failing life store must not take down the
         # fail-open Tool/MCP/Skill routing.  A later settings save retries it.
         try:
@@ -586,6 +609,41 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
             logger.error("Decision Engine 主动发起后台启动失败：%s", _safe_error(exc))
         # Provider credentials are intentionally never inspected here. They
         # belong exclusively to AstrBot's native provider manager.
+
+    def _configure_input_enhancements(self) -> None:
+        """Apply the three input-enhancement switches without restarting the host."""
+
+        flow_enabled = self._bool("conversation_flow_enabled", True)
+        if flow_enabled and self._bool("optimize_tool_history_context", False):
+            self._tool_history_context.install()
+        else:
+            self._tool_history_context.terminate()
+
+        self._group_wake_suppression.configure(
+            disable_at_bot_wake=self._bool("disable_group_at_bot_wake", False),
+            disable_at_bot_wake_all_groups=self._bool(
+                "disable_group_at_bot_wake_all_groups", False
+            ),
+            disable_at_bot_wake_group_ids=self._setting(
+                "disable_group_at_bot_wake_group_ids", []
+            ),
+            disable_reply_to_bot_wake=self._bool(
+                "disable_group_reply_to_bot_wake", False
+            ),
+            disable_reply_to_bot_wake_all_groups=self._bool(
+                "disable_group_reply_to_bot_wake_all_groups", False
+            ),
+            disable_reply_to_bot_wake_group_ids=self._setting(
+                "disable_group_reply_to_bot_wake_group_ids", []
+            ),
+        )
+        if flow_enabled and (
+            self._bool("disable_group_at_bot_wake", False)
+            or self._bool("disable_group_reply_to_bot_wake", False)
+        ):
+            self._group_wake_suppression.install()
+        else:
+            self._group_wake_suppression.terminate()
 
     async def _configure_output_runtime(self) -> None:
         """Enable the vendored output pipeline only when explicitly selected."""
@@ -623,6 +681,8 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
 
     async def terminate(self) -> None:
         usage_meter.METER.save()
+        self._tool_history_context.terminate()
+        self._group_wake_suppression.terminate()
         # Cancel WebUI jobs first: they hold the runtime and would otherwise keep
         # mutating a runtime that is about to be torn down.
         pending = [task for task in self._life_tasks if not task.done()]
@@ -923,6 +983,11 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
     @filter.on_llm_request(priority=900)
     async def multimodal_prepare_request(self, event: AstrMessageEvent, req: ProviderRequest):
         """Make GIFs provider-safe and inject the media digest."""
+
+        if self._bool("conversation_flow_enabled", True) and self._bool(
+            "optimize_tool_history_context", False
+        ):
+            self._tool_history_context.sanitize_request(req)
 
         settings = self._multimodal_settings()
         if not settings.get("mm_enabled"):
