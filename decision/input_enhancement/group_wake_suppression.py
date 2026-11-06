@@ -30,20 +30,20 @@ class GroupWakeSuppressionModule:
         *,
         logger: Any,
         disable_at_bot_wake: Any = False,
-        disable_at_bot_wake_all_groups: Any = False,
+        disable_at_bot_wake_scope_blacklist: Any = True,
         disable_at_bot_wake_group_ids: Any = None,
         disable_reply_to_bot_wake: Any = False,
-        disable_reply_to_bot_wake_all_groups: Any = False,
+        disable_reply_to_bot_wake_scope_blacklist: Any = True,
         disable_reply_to_bot_wake_group_ids: Any = None,
     ) -> None:
         self.logger = logger
         self._installed = False
         self.configure(
             disable_at_bot_wake=disable_at_bot_wake,
-            disable_at_bot_wake_all_groups=disable_at_bot_wake_all_groups,
+            disable_at_bot_wake_scope_blacklist=disable_at_bot_wake_scope_blacklist,
             disable_at_bot_wake_group_ids=disable_at_bot_wake_group_ids,
             disable_reply_to_bot_wake=disable_reply_to_bot_wake,
-            disable_reply_to_bot_wake_all_groups=disable_reply_to_bot_wake_all_groups,
+            disable_reply_to_bot_wake_scope_blacklist=disable_reply_to_bot_wake_scope_blacklist,
             disable_reply_to_bot_wake_group_ids=disable_reply_to_bot_wake_group_ids,
         )
 
@@ -51,22 +51,22 @@ class GroupWakeSuppressionModule:
         self,
         *,
         disable_at_bot_wake: Any,
-        disable_at_bot_wake_all_groups: Any,
+        disable_at_bot_wake_scope_blacklist: Any = True,
         disable_at_bot_wake_group_ids: Any,
         disable_reply_to_bot_wake: Any,
-        disable_reply_to_bot_wake_all_groups: Any,
+        disable_reply_to_bot_wake_scope_blacklist: Any = True,
         disable_reply_to_bot_wake_group_ids: Any,
     ) -> None:
         self._disable_at_bot_wake = bool(disable_at_bot_wake)
-        self._disable_at_bot_wake_all_groups = bool(
-            disable_at_bot_wake_all_groups,
+        self._disable_at_bot_wake_scope_blacklist = bool(
+            disable_at_bot_wake_scope_blacklist
         )
         self._disable_at_bot_wake_group_ids = normalize_group_ids(
             disable_at_bot_wake_group_ids,
         )
         self._disable_reply_to_bot_wake = bool(disable_reply_to_bot_wake)
-        self._disable_reply_to_bot_wake_all_groups = bool(
-            disable_reply_to_bot_wake_all_groups,
+        self._disable_reply_to_bot_wake_scope_blacklist = bool(
+            disable_reply_to_bot_wake_scope_blacklist
         )
         self._disable_reply_to_bot_wake_group_ids = normalize_group_ids(
             disable_reply_to_bot_wake_group_ids,
@@ -77,13 +77,13 @@ class GroupWakeSuppressionModule:
         return (
             self._disable_at_bot_wake
             and (
-                self._disable_at_bot_wake_all_groups
+                self._disable_at_bot_wake_scope_blacklist
                 or bool(self._disable_at_bot_wake_group_ids)
             )
         ) or (
             self._disable_reply_to_bot_wake
             and (
-                self._disable_reply_to_bot_wake_all_groups
+                self._disable_reply_to_bot_wake_scope_blacklist
                 or bool(self._disable_reply_to_bot_wake_group_ids)
             )
         )
@@ -254,16 +254,18 @@ class GroupWakeSuppressionModule:
             self._log("debug", "Decision Engine 应用群聊唤醒控制失败，保留 AstrBot 原行为: %s", exc)
 
     def _is_at_disabled_for_group(self, group_id: str) -> bool:
-        return self._disable_at_bot_wake and (
-            self._disable_at_bot_wake_all_groups
-            or group_id in self._disable_at_bot_wake_group_ids
-        )
+        if not self._disable_at_bot_wake:
+            return False
+        if self._disable_at_bot_wake_scope_blacklist:
+            return group_id not in self._disable_at_bot_wake_group_ids
+        return group_id in self._disable_at_bot_wake_group_ids
 
     def _is_reply_disabled_for_group(self, group_id: str) -> bool:
-        return self._disable_reply_to_bot_wake and (
-            self._disable_reply_to_bot_wake_all_groups
-            or group_id in self._disable_reply_to_bot_wake_group_ids
-        )
+        if not self._disable_reply_to_bot_wake:
+            return False
+        if self._disable_reply_to_bot_wake_scope_blacklist:
+            return group_id not in self._disable_reply_to_bot_wake_group_ids
+        return group_id in self._disable_reply_to_bot_wake_group_ids
 
     def _load_waking_check_stage(self) -> type | None:
         try:

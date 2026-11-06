@@ -89,8 +89,8 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
         self._group_wake_suppression = GroupWakeSuppressionModule(
             logger=logger,
             disable_at_bot_wake=self._bool("disable_group_at_bot_wake", False),
-            disable_at_bot_wake_all_groups=self._bool(
-                "disable_group_at_bot_wake_all_groups", False
+            disable_at_bot_wake_scope_blacklist=self._bool(
+                "disable_group_at_bot_wake_scope_blacklist", True
             ),
             disable_at_bot_wake_group_ids=self._setting(
                 "disable_group_at_bot_wake_group_ids", []
@@ -98,8 +98,8 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
             disable_reply_to_bot_wake=self._bool(
                 "disable_group_reply_to_bot_wake", False
             ),
-            disable_reply_to_bot_wake_all_groups=self._bool(
-                "disable_group_reply_to_bot_wake_all_groups", False
+            disable_reply_to_bot_wake_scope_blacklist=self._bool(
+                "disable_group_reply_to_bot_wake_scope_blacklist", True
             ),
             disable_reply_to_bot_wake_group_ids=self._setting(
                 "disable_group_reply_to_bot_wake_group_ids", []
@@ -621,8 +621,8 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
 
         self._group_wake_suppression.configure(
             disable_at_bot_wake=self._bool("disable_group_at_bot_wake", False),
-            disable_at_bot_wake_all_groups=self._bool(
-                "disable_group_at_bot_wake_all_groups", False
+            disable_at_bot_wake_scope_blacklist=self._bool(
+                "disable_group_at_bot_wake_scope_blacklist", True
             ),
             disable_at_bot_wake_group_ids=self._setting(
                 "disable_group_at_bot_wake_group_ids", []
@@ -630,8 +630,8 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
             disable_reply_to_bot_wake=self._bool(
                 "disable_group_reply_to_bot_wake", False
             ),
-            disable_reply_to_bot_wake_all_groups=self._bool(
-                "disable_group_reply_to_bot_wake_all_groups", False
+            disable_reply_to_bot_wake_scope_blacklist=self._bool(
+                "disable_group_reply_to_bot_wake_scope_blacklist", True
             ),
             disable_reply_to_bot_wake_group_ids=self._setting(
                 "disable_group_reply_to_bot_wake_group_ids", []

@@ -144,11 +144,13 @@ DETAIL_DEFAULTS: dict[str, Any] = {
     "message_interjection_enabled": True,
     # 对话流增强 -> 输入增强：历史工具结果与群聊 Bot 唤醒控制。
     "optimize_tool_history_context": False,
+    # 群聊唤醒控制沿用其他范围设置的语义：黑名单为空时全部应用，
+    # 白名单为空时全部不应用。
+    "disable_group_at_bot_wake_scope_blacklist": True,
     "disable_group_at_bot_wake": False,
-    "disable_group_at_bot_wake_all_groups": False,
     "disable_group_at_bot_wake_group_ids": [],
+    "disable_group_reply_to_bot_wake_scope_blacklist": True,
     "disable_group_reply_to_bot_wake": False,
-    "disable_group_reply_to_bot_wake_all_groups": False,
     "disable_group_reply_to_bot_wake_group_ids": [],
     # Multi-modal understanding lives under 对话流增强 → 输入增强. It is a
     # first-class detail section so load, save and reload all see it.

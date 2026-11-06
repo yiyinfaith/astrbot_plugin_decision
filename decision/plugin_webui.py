@@ -47,11 +47,11 @@ class WebUIMixin:
             "optimize_tool_history_context": self._bool(
                 "optimize_tool_history_context", False
             ),
+            "disable_group_at_bot_wake_scope_blacklist": self._bool(
+                "disable_group_at_bot_wake_scope_blacklist", True
+            ),
             "disable_group_at_bot_wake": self._bool(
                 "disable_group_at_bot_wake", False
-            ),
-            "disable_group_at_bot_wake_all_groups": self._bool(
-                "disable_group_at_bot_wake_all_groups", False
             ),
             "disable_group_at_bot_wake_group_ids": [
                 str(item)
@@ -63,8 +63,8 @@ class WebUIMixin:
             "disable_group_reply_to_bot_wake": self._bool(
                 "disable_group_reply_to_bot_wake", False
             ),
-            "disable_group_reply_to_bot_wake_all_groups": self._bool(
-                "disable_group_reply_to_bot_wake_all_groups", False
+            "disable_group_reply_to_bot_wake_scope_blacklist": self._bool(
+                "disable_group_reply_to_bot_wake_scope_blacklist", True
             ),
             "disable_group_reply_to_bot_wake_group_ids": [
                 str(item)
@@ -900,9 +900,9 @@ class WebUIMixin:
         input_bool_keys = (
             "optimize_tool_history_context",
             "disable_group_at_bot_wake",
-            "disable_group_at_bot_wake_all_groups",
+            "disable_group_at_bot_wake_scope_blacklist",
             "disable_group_reply_to_bot_wake",
-            "disable_group_reply_to_bot_wake_all_groups",
+            "disable_group_reply_to_bot_wake_scope_blacklist",
         )
         for key in input_bool_keys:
             if key in dialogue_payload and not isinstance(dialogue_payload[key], bool):
