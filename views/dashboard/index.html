@@ -5,12 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="./network-view.css?v=0.4.9" />
+    <link rel="stylesheet" href="./network-view.css?v=0.4.11" />
     <!-- style.css is the default AstrBot-style theme; app.js swaps it for liquid.css when the liquid-glass switch is on. -->
-    <link id="default-theme" rel="stylesheet" href="./style.css?v=0.4.9" />
-    <title>jev决策综合插件设置</title>
+    <link id="default-theme" rel="stylesheet" href="./style.css?v=0.4.11" />
+    <title>判断决策综合插件设置</title>
     <script src="./vendor/vue.global.prod.js"></script>
-    <script src="./life-workspace.js?v=0.4.9"></script>
+    <script src="./life-workspace.js?v=0.4.11"></script>
   </head>
   <body>
     <div id="app" v-cloak class="app-shell">
@@ -18,14 +18,14 @@
         <liquid-glass v-if="liquidGlass" class="glass-backdrop" v-show="glassReady" mode="siri-wave" variant="wave" speed="0.85" scale="1.18" dpr="1" aria-hidden="true"></liquid-glass>
         <div class="hero-content">
           <div class="hero-top">
-            <div class="eyebrow">jev决策综合插件</div>
+            <div class="eyebrow">判断决策综合插件</div>
             <!-- A plain switch in both themes, so the effect can always be turned off. -->
             <label v-if="loaded" class="liquid-switch">
               <span>液态玻璃</span>
               <input type="checkbox" role="switch" class="plain-switch" :checked="liquidGlass" :disabled="switchingGlass" aria-label="液态玻璃效果" @change="toggleLiquidGlass($event.target)">
             </label>
           </div>
-          <h1>jev决策综合插件设置</h1>
+          <h1>判断决策综合插件设置</h1>
           <p>用 Jev 判断当前需要的 Tool、MCP、Skill 与 SubAgent，为每一次主动回复留出恰当的时机。</p>
           <div class="hero-meta">
             <span class="status-pill"><i class="status-dot" :class="{off: !toolsEnabled}"></i>Tool/MCP/Skill/SubAgent {{ toolsEnabled ? '已启用' : '已停用' }}</span>
@@ -110,7 +110,7 @@
               <nav class="life-workspace-tabs" aria-label="主动发起功能板块"><button v-for="panel in lifePanels" :key="panel.id" type="button" :class="{selected:lifePanel===panel.id,advanced:panel.id==='advanced'}" :aria-pressed="lifePanel===panel.id" @click="lifePanel=panel.id">{{ panel.label }}</button></nav>
               <p class="life-panel-purpose">{{ lifePanels.find(p=>p.id===lifePanel)?.description }}</p>
               <div v-if="lifePanel==='advanced'" class="field"><label>搜索高级设置</label><input v-model="lifeAdvancedSearch" type="search" aria-label="搜索高级设置" placeholder="例如：模型、提示词、超时、传统规则"></div>
-              <p class="hint" v-if="lifePanel==='advanced'">全部原有参数保留；自适应开启时，传统随机预算和连续未回应停发不再作为普通主动的硬限制。隐藏或切换板块不会清空设置。</p>
+              <p class="hint" v-if="lifePanel==='advanced'">这里是不常用的精细参数，默认值已经够用；自适应开启时，传统随机预算和连续未回应停发不再作为普通主动的硬限制。隐藏或切换板块不会清空设置。</p>
             </div>
 
 
@@ -152,7 +152,7 @@
 <div class="glass-card" v-show="lifePanel === 'life'"><div class="card-heading"><div><div class="section-kicker">Long-term continuity</div><h2>长期生活计划与一次性要求</h2><p>长期阶段支持草稿、批准、拒绝、重生成和 JSON 导入；日程要求只在指定日期首次成功生成后消费。</p></div></div><div class="life-actions"><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('generate_timeline')">生成追加草稿</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('regenerate_timeline')">生成替换草稿</button><button class="button ghost" :disabled="lifeBusy" @click="lifeAction('import_timeline')">从要求框导入 JSON</button><button class="button secondary" :disabled="lifeBusy || !lifeInspection.draft" @click="lifeAction('approve_timeline')">批准草稿</button><button class="button ghost" :disabled="lifeBusy || !lifeInspection.draft" @click="lifeAction('reject_timeline')">拒绝 / 按意见重写</button></div><div class="field"><label>未来日期或区间</label><input type="text" v-model="lifeDateRange" placeholder="2026-12-01..2026-12-03"></div><button class="button secondary" :disabled="lifeBusy" @click="lifeAction('add_requirement')">添加一次性日程要求</button><details v-if="lifeInspection.timeline || lifeInspection.draft"><summary>查看已批准阶段与待批准草稿</summary><pre class="life-json">{{ JSON.stringify({timeline:lifeInspection.timeline,draft:lifeInspection.draft,requirements:lifeInspection.requirements},null,2) }}</pre></details></div>
             <div class="glass-card" v-show="lifePanel === 'status'" v-if="lifeInspection.contact_control">
               <div class="card-heading"><div><div class="section-kicker">Contact &amp; Time</div><h2>当前会话的联系频率与时间承诺</h2><p>按所选会话和当前人格隔离。选择会话后自动读取；真实来信回复不占主动额度。</p></div></div>
-              <div class="two-col"><div class="life-persona">目标间隔 {{ Math.round(lifeInspection.contact_control.interval) }} 分钟</div><div class="life-persona">{{ lifeInspection.contact_control.paused_until === -1 ? '主动联系已暂停，等待用户恢复' : (lifeInspection.contact_control.paused_until > Date.now()/1000 ? '主动联系暂时暂停' : '主动联系未暂停') }}</div><div class="life-persona" v-if="lifeInspection.contact_control.relationship">关系阶段：{{ lifeInspection.contact_control.relationship.stage }}</div><div class="life-persona" v-if="lifeInspection.contact_control.response_rhythm">回复节奏：{{ ({fast:'较快',normal:'通常',slow:'较慢',unknown:'样本不足'})[lifeInspection.contact_control.response_rhythm.bucket] || '样本不足' }}</div></div>
+              <div class="two-col"><div class="life-persona">今日目标间隔 {{ Math.round(lifeInspection.contact_control.today_interval ?? lifeInspection.contact_control.interval) }} 分钟</div><div class="life-persona">{{ lifeInspection.contact_control.paused_until === -1 ? '主动联系已暂停，等待用户恢复' : (lifeInspection.contact_control.paused_until > Date.now()/1000 ? '主动联系暂时暂停' : '主动联系未暂停') }}</div><div class="life-persona" v-if="lifeInspection.contact_control.relationship">关系阶段：{{ lifeInspection.contact_control.relationship.stage }}</div><div class="life-persona" v-if="lifeInspection.contact_control.response_rhythm">回复节奏：{{ ({fast:'较快',normal:'通常',slow:'较慢',unknown:'样本不足'})[lifeInspection.contact_control.response_rhythm.bucket] || '样本不足' }}</div></div>
               <p class="hint">今日普通主动（含已预留）：{{ lifeInspection.contact_control.today.ordinary }}；明确约定（含已预留）：{{ lifeInspection.contact_control.today.agreed }}；未回应：{{ lifeInspection.contact_control.unanswered }}。明确偏好：{{ lifeInspection.contact_control.feedback || '尚未设置' }}。关系阶段只用于调整分寸，不会突破频率上限。</p>
               <div v-for="task in lifeInspection.future_contacts || []" :key="task.id" class="switch-row"><div class="switch-copy"><strong>{{ task.note }}</strong><small>{{ task.run_at }} · {{ task.status }} · {{ task.progress }}</small><small v-if="task.blocked_reason || task.error">{{ task.blocked_reason || task.error }}</small><small>任务 ID：{{ task.id }}</small></div></div>
               <p v-if="lifeInspection.pending_thought" class="hint">待择机分享：{{ lifeInspection.pending_thought.text }}。分享受间隔、额度、偏好和免打扰限制，已过期的想法不会发送。<button class="button ghost" :disabled="lifeControlBusy" @click="lifeControl('dismiss_idea',{idea_id:lifeInspection.pending_thought.id})">不再向本会话分享这条</button></p>
@@ -687,6 +687,6 @@
       <p class="footer-note">全局服务参数仍由 AstrBot 原生配置页管理；本页保存的详细策略写入 AstrBot 数据目录。修改后请点击“保存全部设置”。</p>
       <div class="save-bar"><span class="save-status" :class="saveState">{{ statusText }}</span><button class="button primary" :disabled="loading || saving || !loaded" @click="save">{{ saving ? '保存中…' : '保存全部设置' }}</button></div>
     </div>
-    <script src="./app.js?v=0.4.9"></script>
+    <script src="./app.js?v=0.4.11"></script>
   </body>
 </html>

@@ -316,6 +316,7 @@ html #network-shell { --bg: var(--theme-bg); --surface: var(--theme-surface); --
 }
 
 /* Multimodal understanding, grouped by media kind */
+.nested-settings { margin: 4px 0 12px 12px; padding-left: 12px; border-left: 2px solid var(--border); }
 .mm-group { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
 .mm-group > h3 { margin-bottom: 4px; color: var(--primary); font-size: 15px; }
 .mm-group h4 { margin: 18px 0 0; color: var(--muted); font-size: 13px; font-weight: 600; }

@@ -3,6 +3,7 @@
 # ruff: noqa: F403, F405
 from __future__ import annotations
 
+from .input_enhancement.group_wake_suppression import WAKE_SUPPRESSED_EXTRA
 from .plugin_shared import *
 from .plugin_shared import _ON_DECORATING_RESULT, _safe_error  # noqa: F401
 
@@ -693,7 +694,13 @@ class RoutingMixin:
 
         prefixes = normalize_prefixes(self._setting("direct_reply_prefixes", ["/", "@"]))
         at_self, _, at_all, parse_failed = self._message_address_flags(event)
-        if not parse_failed and not at_all and "@" in prefixes and at_self:
+        if (
+            not parse_failed
+            and not at_all
+            and "@" in prefixes
+            and at_self
+            and not self._wake_suppressed(event)
+        ):
             return True
         try:
             outline = event.get_message_outline()
@@ -701,9 +708,20 @@ class RoutingMixin:
             outline = event.get_message_str()
         return text_matches_prefix(str(outline or ""), prefixes)
 
+    @staticmethod
+    def _wake_suppressed(event: AstrMessageEvent) -> bool:
+        """This group has turned off the wake-up this @ or reply would cause."""
+
+        return bool(event.get_extra(WAKE_SUPPRESSED_EXTRA, False))
+
     def _proactive_summoned(self, event: AstrMessageEvent) -> bool:
         at_self, reply_self, at_all, parse_failed = self._message_address_flags(event)
-        if not parse_failed and not at_all and (at_self or reply_self):
+        if (
+            not parse_failed
+            and not at_all
+            and (at_self or reply_self)
+            and not self._wake_suppressed(event)
+        ):
             return True
         try:
             text = str(event.get_message_outline() or event.get_message_str() or "")
@@ -1269,7 +1287,12 @@ class RoutingMixin:
         sender_id = str(event.get_sender_id() or "")
         sender_name = str(event.get_sender_name() or sender_id or "user")
         at_self, reply_self, at_all, parse_failed = self._message_address_flags(event)
-        explicit_summon = not parse_failed and not at_all and (at_self or reply_self)
+        explicit_summon = (
+            not parse_failed
+            and not at_all
+            and (at_self or reply_self)
+            and not self._wake_suppressed(event)
+        )
         summoned = explicit_summon or self._proactive_summoned(event)
         async with self.proactive.lock_for(session):
             history, dialogue = self._record_proactive_input(

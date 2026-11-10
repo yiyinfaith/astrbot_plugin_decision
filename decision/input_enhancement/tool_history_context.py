@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import inspect
+import json
+from collections.abc import Callable
 from copy import copy
 from dataclasses import replace
 from typing import Any
@@ -11,15 +14,8 @@ from .patching import (
     same_callable,
     unwrap_inactive_wrapper,
 )
-from .image_history_context import (
-    IMAGE_HISTORY_PLACEHOLDER,
-    load_internal_stage_cls,
-    parse_history_value,
-    parse_save_history_call,
-    serialize_history_like,
-)
 
-
+IMAGE_HISTORY_PLACEHOLDER = "[历史图片：已省略原始图像，仅保留占位符]"
 TOOL_HISTORY_PLACEHOLDER = "[历史工具结果：已省略原始内容，最终结论见后续助手回复]"
 
 
@@ -35,8 +31,9 @@ class ToolHistoryContextModule:
     _save_history_wrapper: Any = None
     _active_module: ToolHistoryContextModule | None = None
 
-    def __init__(self, logger: Any):
+    def __init__(self, logger: Any, applies: Callable[[Any], bool] | None = None):
         self.logger = logger
+        self._applies = applies
         self._installed = False
         self._missing_stage_warned = False
         self._missing_method_warned = False
@@ -78,7 +75,7 @@ class ToolHistoryContextModule:
                 active_module = module_cls._active_module
                 if not is_wrapper_active(decision_save_to_history):
                     active_module = None
-                if active_module is not None:
+                if active_module is not None and active_module.applies_to_call(args, kwargs):
                     try:
                         args, kwargs = active_module.optimize_save_history_call(
                             original_save_to_history,
@@ -121,6 +118,17 @@ class ToolHistoryContextModule:
         cls._original_save_to_history = None
         cls._save_history_wrapper = None
         cls._active_module = None
+
+    def applies_to_call(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> bool:
+        """Honour the session scope; ``_save_to_history(self, event, ...)``."""
+
+        event = kwargs.get("event", args[1] if len(args) > 1 else None)
+        if event is None or self._applies is None:
+            return True
+        try:
+            return bool(self._applies(event))
+        except Exception:  # noqa: BLE001
+            return False
 
     def sanitize_request(self, req: Any) -> None:
         if req is None:
@@ -293,27 +301,6 @@ def find_completed_tool_result_groups(messages: list[Any]) -> list[list[int]]:
             reset_pending()
 
     return groups
-
-
-def sanitize_message(message: Any) -> tuple[Any, bool]:
-    if isinstance(message, dict):
-        if message.get("role") != "tool":
-            return message, False
-        if message.get("content") == TOOL_HISTORY_PLACEHOLDER:
-            return message, False
-        sanitized = dict(message)
-        sanitized["content"] = TOOL_HISTORY_PLACEHOLDER
-        return sanitized, True
-
-    if getattr(message, "role", None) != "tool":
-        return message, False
-    if getattr(message, "content", None) == TOOL_HISTORY_PLACEHOLDER:
-        return message, False
-
-    sanitized = clone_message_with_content(message, TOOL_HISTORY_PLACEHOLDER)
-    if sanitized is None:
-        return message, False
-    return sanitized, True
 
 
 def clone_message_with_content(message: Any, content: str) -> Any | None:
@@ -506,3 +493,96 @@ def is_tool_image_user_message(message: Any) -> bool:
             if text == IMAGE_HISTORY_PLACEHOLDER:
                 has_image = True
     return has_marker and has_image
+
+
+def parse_history_value(value: Any) -> list[Any] | None:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except Exception:  # noqa: BLE001
+            return None
+        if isinstance(parsed, list):
+            return parsed
+    return None
+
+
+def serialize_history_like(original: Any, contexts: list[Any]) -> Any:
+    if isinstance(original, str):
+        return json.dumps(contexts, ensure_ascii=False)
+    return contexts
+
+
+def parse_save_history_call(
+    original_method: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> tuple[Any, Any] | None:
+    if "all_messages" in kwargs:
+        def set_kwarg(value: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
+            updated_kwargs = dict(kwargs)
+            updated_kwargs["all_messages"] = value
+            return args, updated_kwargs
+
+        return kwargs["all_messages"], set_kwarg
+
+    if len(args) > 4:
+        def set_positional(value: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
+            updated_args = list(args)
+            updated_args[4] = value
+            return tuple(updated_args), kwargs
+
+        return args[4], set_positional
+
+    try:
+        signature = inspect.signature(original_method)
+        bound = signature.bind_partial(*args, **kwargs)
+    except Exception:  # noqa: BLE001
+        return None
+
+    if "all_messages" not in bound.arguments:
+        return None
+
+    def set_bound(value: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        bound.arguments["all_messages"] = value
+        return rebuild_call_from_bound(signature, bound, args, kwargs)
+
+    return bound.arguments["all_messages"], set_bound
+
+
+def rebuild_call_from_bound(
+    signature: inspect.Signature,
+    bound: inspect.BoundArguments,
+    original_args: tuple[Any, ...],
+    original_kwargs: dict[str, Any],
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    param_names = list(signature.parameters)
+    args = list(original_args)
+    kwargs = dict(original_kwargs)
+
+    for name, value in bound.arguments.items():
+        if name in kwargs:
+            kwargs[name] = value
+            continue
+        try:
+            index = param_names.index(name)
+        except ValueError:
+            continue
+        if index < len(args):
+            args[index] = value
+        else:
+            kwargs[name] = value
+
+    return tuple(args), kwargs
+
+
+def load_internal_stage_cls() -> type | None:
+    try:
+        from astrbot.core.pipeline.process_stage.method.agent_sub_stages.internal import (
+            InternalAgentSubStage,
+        )
+
+        return InternalAgentSubStage
+    except Exception:  # noqa: BLE001
+        return None

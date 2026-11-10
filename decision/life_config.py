@@ -11,6 +11,30 @@ from pathlib import Path
 from typing import Any
 
 
+# Engineering knobs whose defaults suit every install. The page does not show
+# them; a value already saved keeps working.
+INTERNAL_SETTINGS = {
+    "integration_settings": ("offline_retry_minutes", "candidate_ttl_minutes", "max_concurrent"),
+    "adaptive_settings": (
+        "response_window_minutes",
+        "adjustment_cooldown_minutes",
+        "positive_factor",
+        "negative_factor",
+        "feedback_factor",
+    ),
+    "humanization_settings": (
+        "relationship_decay_days",
+        "rhythm_history_days",
+        "active_hours_min_samples",
+        "active_hours_low_ratio",
+        "active_hours_half_life_days",
+    ),
+    "weather_settings": ("cache_minutes",),
+    "continuity_settings": ("analysis_interval_seconds",),
+    "temporal_settings": ("prepare_seconds", "claim_timeout_seconds", "request_timeout_seconds"),
+}
+
+
 @lru_cache(maxsize=1)
 def life_schema() -> dict[str, Any]:
     schema = json.loads(
@@ -61,6 +85,9 @@ def life_schema() -> dict[str, Any]:
     from .life_control_config import control_schema
 
     schema.update(control_schema())
+    for group, keys in INTERNAL_SETTINGS.items():
+        for key in keys:
+            schema[group]["items"][key]["internal"] = True
     # The merged page owns a fixed, user-facing order: the master switch and the
     # private/group scope come first, then the day-to-day life cards, then the
     # remaining advanced groups.

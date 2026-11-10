@@ -46,7 +46,7 @@ for(const [group,node] of Object.entries(schema)) {
  for(const panel of api.panels) for(const key of api.keysFor(group,panel.id,schema)) counts[key]=(counts[key]||0)+1;
  // Audience scope controls have dedicated cards in Contact.
  if(['friend_settings','group_settings'].includes(group)) for(const k of ['enable','session_blacklist','session_list','daily_hard_max']) counts[k]=(counts[k]||0)+1;
- for(const k of Object.keys(node.items)) {if(!counts[k]) missing.push(group+'.'+k);if(counts[k]>1) duplicates.push(group+'.'+k);}
+ for(const [k,item] of Object.entries(node.items)) {if(!counts[k] && !item.internal) missing.push(group+'.'+k);if(counts[k]>1) duplicates.push(group+'.'+k);if(counts[k] && item.internal) duplicates.push('internal:'+group+'.'+k);}
  for(const p of api.panels) api.schemaFor(schema,group,p.id);
 }
 console.log(JSON.stringify({missing,duplicates,unchanged:before===JSON.stringify(schema),panels:api.panels.map(p=>p.id)}));
@@ -57,6 +57,15 @@ console.log(JSON.stringify({missing,duplicates,unchanged:before===JSON.stringify
         "unchanged": True,
         "panels": ["contact", "life", "reminders", "media", "status", "advanced"],
     }
+
+
+def test_everyday_panels_stay_short():
+    result = run_js("""
+let total=0;
+for(const group of Object.keys(schema)) for(const panel of api.panels) if(panel.id!=='advanced') total+=api.keysFor(group,panel.id,schema).length;
+console.log(JSON.stringify({total}));
+""")
+    assert result["total"] <= 40
 
 
 def test_advanced_search_and_common_unit_display_keep_original_values():

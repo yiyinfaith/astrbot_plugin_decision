@@ -15,6 +15,7 @@ from .patching import (
 
 EMPTY_MENTION_HANDLER_MODULE = "astrbot.builtin_stars.astrbot.main"
 EMPTY_MENTION_HANDLER_NAME = "handle_empty_mention"
+WAKE_SUPPRESSED_EXTRA = "decision_group_wake_suppressed"
 
 
 class GroupWakeSuppressionModule:
@@ -246,7 +247,11 @@ class GroupWakeSuppressionModule:
 
             try:
                 event.is_at_or_wake_command = False
+                # Decision's own direct-reply and forced-summon paths would
+                # otherwise wake this event right back up.
+                event.set_extra(WAKE_SUPPRESSED_EXTRA, True)
             except Exception:  # noqa: BLE001
+                event.is_at_or_wake_command = True
                 if previous_handlers is not None:
                     restore_activated_handlers(event, previous_handlers)
                 return

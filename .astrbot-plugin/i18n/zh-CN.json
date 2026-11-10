@@ -1,7 +1,7 @@
 {
   "views": {
     "dashboard": {
-      "title": "jev决策综合插件设置",
+      "title": "判断决策综合插件设置",
       "description": "配置 Tool/MCP/Skill/SubAgent 决策、主动对话、虚拟生活、人际网络与对话流增强。"
     }
   }

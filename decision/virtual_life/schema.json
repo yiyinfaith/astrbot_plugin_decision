@@ -355,6 +355,7 @@
         ]
       },
       "notify_min_seconds": {
+        "internal": true,
         "description": "提示的最短延迟",
         "type": "int",
         "hint": "延迟低于这个秒数时直接晚点回复，不先说一句。",

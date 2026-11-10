@@ -49,6 +49,11 @@ GATE_LABELS = {
     "availability probability rejected": "按当前忙闲程度掷骰未触发",
     USUALLY_AWAY: "对方此时通常不在线，顺延到常在线的时间",
 }
+GATE_NOTE_SECONDS = 3 * 3600
+WOKEN_NOTE_SECONDS = 8 * 3600
+CHAT_WEATHER_TIMEOUT = 6.0
+WEATHER_LOOKUP_LIMIT = 30.0
+WEATHER_FAILURE_BACKOFF = 300.0
 JEV_LABELS = {"initiate": "是否自然", "relevant": "话题价值", "timing": "时机"}
 ANGLE_CRITERIA = {
     "planned": "Follow the planned intent of this candidate.",
@@ -62,6 +67,14 @@ ANGLE_PROMPTS = {
     "life": "原定意图只作参考：从你此刻的活动、心情或看到的事情自然说起。",
 }
 OPENING_LABELS = {"short": "只发一句短话", "two_stage": "两段式"}
+EXPRESSION_RULES = (
+    "不要把日程和状态当流水账汇报；不要机械地问“吃了吗”“睡了吗”“在干嘛”，除非聊天里正好接得上；"
+    "聊天记录没有依据时，不要说对方“又”“总是”“老是”怎样。"
+)
+WOKEN_NOTE = (
+    "[按日程你此刻本该在睡觉，是被这条消息吵醒的。正常回答对方，"
+    "可以自然带一点刚醒的感觉，不要提到日程或程序]"
+)
 OPENING_PROMPTS = {
     "short": "这次只发一句很短的话（不超过 15 个字），也可以只是语气词或表情，不要长篇大论。",
     "two_stage": (
@@ -206,6 +219,11 @@ class LifeRuntime(VirtualLifeBase):
         self.weather = WeatherService(self)
         # Trigger and intent of the candidate being judged, for its records.
         self._audit_context: dict[str, tuple[str, str]] = {}
+        self._gate_notes: dict[tuple[str, str, str], float] = {}
+        self._weather_task: asyncio.Task | None = None
+        self._weather_retry_at = 0.0
+        # When each persona was last woken, so one night reads as one wake-up.
+        self._woken: dict[str, float] = {}
         self.plan_generator.weather_resolver = self._schedule_weather
 
     async def _schedule_weather(self, target_date) -> str:
@@ -230,11 +248,37 @@ class LifeRuntime(VirtualLifeBase):
             not settings["chat_enable"] or not WEATHER_WORDS.search(str(message or ""))
         ):
             return ""
-        try:
-            return await self.weather.now_text(now)
-        except Exception as exc:
-            logger.info("Decision 天气获取失败：%s", str(exc)[:120])
+        # A chat reply waits on this, so the wait is short. The lookup itself
+        # carries on and fills the cache for the next message that asks.
+        task = self._weather_task
+        if task is None or task.done():
+            if time.monotonic() < self._weather_retry_at:
+                return ""
+            task = self._weather_task = self.spawn(
+                asyncio.wait_for(self.weather.now_text(now), WEATHER_LOOKUP_LIMIT)
+            )
+            task.add_done_callback(self._weather_lookup_done)
+        elif purpose == "chat":
             return ""
+        try:
+            return await asyncio.wait_for(
+                asyncio.shield(task),
+                CHAT_WEATHER_TIMEOUT if purpose == "chat" else WEATHER_LOOKUP_LIMIT,
+            )
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+            return ""  # The runtime is being replaced; this reply carries on without it.
+        except Exception:  # The outcome is recorded by _weather_lookup_done.
+            return ""
+
+    def _weather_lookup_done(self, task) -> None:
+        if task.cancelled() or task.exception() is None:
+            return
+        self._weather_retry_at = time.monotonic() + WEATHER_FAILURE_BACKOFF
+        self.weather.last_error = (str(task.exception()) or "查询超时")[:200]
+        logger.info("Decision 天气获取失败：%s", self.weather.last_error)
 
     def spawn(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -356,6 +400,8 @@ class LifeRuntime(VirtualLifeBase):
         self._schedule_tasks.clear()
         self._completed_delivery_keys.clear()
         self._contact_attempts.clear()
+        self._gate_notes.clear()
+        self._woken.clear()
         self._delivery_contact_ids.clear()
         self._delivery_persona_ids.clear()
         self.audit.clear()
@@ -404,13 +450,15 @@ class LifeRuntime(VirtualLifeBase):
                                     >= 900
                                 ):
                                     self._contact_attempts[key] = time.monotonic()
-                                    await self._attempt_unsolicited(
+                                    _, reason = await self._attempt_unsolicited(
                                         umo,
                                         persona,
                                         plan,
                                         "根据联系偏好自然联系；若有合适的暂存想法可择机分享",
                                         "adaptive",
                                     )
+                                    if reason == USUALLY_AWAY:
+                                        self._wait_until_around(key, now)
                         except asyncio.CancelledError:
                             raise
                         except Exception as exc:
@@ -420,6 +468,17 @@ class LifeRuntime(VirtualLifeBase):
             except Exception as exc:
                 logger.warning("Decision 联系账本恢复失败：%s", type(exc).__name__)
             await asyncio.sleep(30)
+
+    def _wait_until_around(self, key, now) -> None:
+        """Hold the adaptive tick until the person is usually online again.
+
+        Retrying every tick would re-roll the postponement until it passed.
+        """
+
+        umo, persona_id = key
+        next_at = self.contacts.next_active_at(umo, persona_id, now, within_hours=24)
+        wait = (next_at - now).total_seconds() if next_at else 86400
+        self._contact_attempts[key] = time.monotonic() + wait + random.randint(180, 1200) - 900
 
     def _trim_session_state(self, keep: int = 2000) -> None:
         """Bound the umo-keyed caches so a long-lived bot cannot grow forever.
@@ -729,27 +788,53 @@ class LifeRuntime(VirtualLifeBase):
         finally:
             audit_context.pop(umo, None)
         if not sent and reason not in AUDITED_REASONS:
-            self.record_audit(
-                umo,
-                False,
-                GATE_LABELS.get(reason, reason),
-                stage="程序规则",
-                trigger=trigger,
-                intent=intent,
-                log=False,
-            )
+            label = GATE_LABELS.get(reason, reason)
+            if trigger == "manual" or self._new_gate_note(umo, label, trigger):
+                self.record_audit(
+                    umo,
+                    False,
+                    label,
+                    stage="程序规则",
+                    trigger=trigger,
+                    intent=intent,
+                    log=False,
+                )
+        elif sent:
+            # A refusal after this send is news again.
+            self._gate_notes = {k: v for k, v in self._gate_notes.items() if k[0] != umo}
         return sent, reason
 
+    def _new_gate_note(self, umo, label, trigger) -> bool:
+        """A rule that keeps refusing each retry is one record, not dozens."""
+
+        key = (umo, label, trigger)
+        now = time.monotonic()
+        if now - self._gate_notes.get(key, -GATE_NOTE_SECONDS) < GATE_NOTE_SECONDS:
+            return False
+        if len(self._gate_notes) > 2000:
+            self._gate_notes.clear()
+        self._gate_notes[key] = now
+        return True
+
     async def _attempt_candidate(self, umo, persona, plan, intent, trigger, *, attempt_key=""):
+        try:
+            return await self._try_candidate(
+                umo, persona, plan, intent, trigger, attempt_key=attempt_key
+            )
+        finally:
+            # A sleep wake-up may ignore quiet hours for this one attempt only;
+            # every exit path must clear it or later candidates inherit it.
+            if trigger == "sleep":
+                self._sleep_sessions().discard(umo)
+
+    async def _try_candidate(self, umo, persona, plan, intent, trigger, *, attempt_key=""):
         if not self.enabled:
             return False, "disabled"
         # Manual, scheduled and window triggers use the same policy. A sleep
         # schedule always lands in quiet hours, so its explicit opt-in is needed.
-        if trigger == "sleep" and bool(
+        skip_quiet = trigger == "sleep" and bool(
             self.config["delivery_settings"].get("sleep_skips_quiet", False)
-        ):
-            self._sleep_sessions().add(umo)
-        skip_quiet = self._quiet_exempt(umo)
+        )
         if not skip_quiet and self._quiet():
             self._schedule_idle(umo, run_at=self._now() + timedelta(minutes=30))
             return False, "quiet hours"
@@ -759,18 +844,19 @@ class LifeRuntime(VirtualLifeBase):
             return False, "platform offline"
         try:
             async with self.delivery_locks.setdefault(umo, asyncio.Lock()), self.delivery_slots:
+                # Set under the lock, so a candidate being delivered right now
+                # cannot pick up an exemption that belongs to this one.
+                if skip_quiet:
+                    self._sleep_sessions().add(umo)
                 if (
                     not plan.has_schedule
                     or not self.config["schedule_settings"]["daily_schedule_generation_enable"]
                 ):
-                    self._sleep_sessions().discard(umo)
                     return False, "schedule unavailable"
                 if self._agent_is_active(umo):
-                    self._sleep_sessions().discard(umo)
                     return False, "agent task active"
                 now = self._now()
                 if trigger == "window" and not self._window_is_idle_enough(umo, now):
-                    self._sleep_sessions().discard(umo)
                     return False, "conversation is not idle enough"
                 state = self.policy.ensure_state(umo, persona.id, plan, now)
                 delivery_key = (
@@ -780,7 +866,6 @@ class LifeRuntime(VirtualLifeBase):
                     str(attempt_key or state.last_proactive_at or "initial"),
                 )
                 if trigger != "manual" and delivery_key in self._completed_delivery_keys:
-                    self._sleep_sessions().discard(umo)
                     return False, "duplicate trigger"
                 adaptive = self.config["adaptive_settings"]["enable"]
                 if adaptive:
@@ -804,7 +889,6 @@ class LifeRuntime(VirtualLifeBase):
                 if trigger in {"window", "idle", "adaptive"} and self._usually_away(
                     umo, persona.id, now
                 ):
-                    self._sleep_sessions().discard(umo)
                     return False, USUALLY_AWAY
                 decision = self.policy.evaluate(
                     umo=umo,
@@ -815,7 +899,6 @@ class LifeRuntime(VirtualLifeBase):
                     attempt_key=attempt_key,
                 )
                 if not adaptive and not decision.allowed:
-                    self._sleep_sessions().discard(umo)
                     return False, decision.reason
                 try:
                     self._delivery_contact_ids[umo] = self.ledger.new_id()
@@ -838,7 +921,6 @@ class LifeRuntime(VirtualLifeBase):
                             for key, _ in oldest:
                                 self._completed_delivery_keys.pop(key, None)
                 finally:
-                    self._sleep_sessions().discard(umo)
                     self._delivery_contact_ids.pop(umo, None)
                     self._delivery_persona_ids.pop(umo, None)
                 return delivered, "sent" if delivered else "Jev 未通过或候选已失效"
@@ -950,7 +1032,10 @@ class LifeRuntime(VirtualLifeBase):
             "history": history,
         }
         contact = self.contacts.summary(umo, persona.id, now)
-        state["contact_control"] = contact
+        state["contact_control"] = {
+            **self.contacts.brief(contact, now),
+            **self.contacts.social(contact),
+        }
         weather = await self._weather_text(now, "proactive")
         if weather:
             state["weather"] = weather
@@ -1061,14 +1146,16 @@ class LifeRuntime(VirtualLifeBase):
             prompt += "\n[本次开场方式]\n" + OPENING_PROMPTS[opening]
         if weather and "{weather}" not in delivery["proactive_prompt"]:
             prompt += "\n[当前天气，可自然提起但不必每次都提]\n" + weather
-        prompt += "\n[程序记录的联系状态，必须遵守]\n" + json.dumps(contact, ensure_ascii=False)
-        if human.get("relationship_memory_enable", True) and contact.get("relationship"):
-            prompt += "\n[关系阶段仅用于调整分寸，不得编造关系事实]\n" + json.dumps(
-                contact["relationship"], ensure_ascii=False
-            )
-        if human.get("response_rhythm_enable", True) and contact.get("response_rhythm"):
-            prompt += "\n[用户回复节奏，仅用于调整消息长度和时机]\n" + json.dumps(
-                contact["response_rhythm"], ensure_ascii=False
+        if human.get("enable", True):
+            prompt += "\n[表达边界]\n" + EXPRESSION_RULES
+        prompt += "\n[程序记录的联系状态，必须遵守]\n" + json.dumps(
+            self.contacts.brief(contact, now), ensure_ascii=False
+        )
+        social = self.contacts.social(contact)
+        if social:
+            prompt += (
+                "\n[关系阶段和用户回复节奏，仅用于调整分寸、消息长度和时机，不得编造关系事实]\n"
+                + json.dumps(social, ensure_ascii=False)
             )
         if ":GroupMessage:" in umo and human.get("group_addressing_enable", True):
             prompt += (
@@ -1217,8 +1304,14 @@ class LifeRuntime(VirtualLifeBase):
             hook = self.hook_context(umo, persona.id, event)
             if hook:
                 req.extra_user_content_parts.append(temporary_text(hook))
-        weather = await self._weather_text(self._now(), "chat", event.get_message_str())
-        if weather and not event.get_extra("decision_life_proactive", False):
+        weather = (
+            await self._weather_text(self._now(), "chat", event.get_message_str())
+            if self.enabled
+            and self.policy.is_enabled(str(event.unified_msg_origin))
+            and not event.get_extra("decision_life_proactive", False)
+            else ""
+        )
+        if weather:
             req.extra_user_content_parts.append(
                 temporary_text("[当前天气，仅在聊到天气时参考，前后保持一致]\n" + weather)
             )
@@ -1261,8 +1354,10 @@ class LifeRuntime(VirtualLifeBase):
             persona = await self.personas.resolve(umo)
             text = "[程序时间与联系账本：数据事实优先，禁止猜测进度]\n"
             text += self.temporal.describe(umo, persona.id, self._now())
+            contact = self.contacts.summary(umo, persona.id, self._now())
             text += "\n联系状态：" + json.dumps(
-                self.contacts.summary(umo, persona.id, self._now()), ensure_ascii=False
+                {**self.contacts.brief(contact, self._now()), **self.contacts.social(contact)},
+                ensure_ascii=False,
             )
             text += "\n用户要求调整频率时使用 adjust_contact_frequency；创建未来联系或承诺某时开始/完成前，必须先用 future_contact 持久化。start=到时开始，virtual_finish=虚拟活动到时可完成，external_finish=外部任务必须另有完成确认。普通回复不消耗主动额度。不要用原生 future_task 绕过这些规则。"
             if event.get_extra("decision_contact_feedback", ""):
@@ -1277,6 +1372,8 @@ class LifeRuntime(VirtualLifeBase):
         self._apply_reply_delay_batch(event, req)
         if self.reply_delay_policy.enabled:
             event.set_extra("virtual_life_ordinary_llm_request", True)
+        if await self._woken_up(event):
+            req.extra_user_content_parts.append(temporary_text(WOKEN_NOTE))
         if not self.smart_context_injector.enabled:
             return
         persona = await self.personas.resolve(event.unified_msg_origin)
@@ -1298,6 +1395,41 @@ class LifeRuntime(VirtualLifeBase):
         )[0]
         if text:
             req.extra_user_content_parts.append(temporary_text(text))
+
+    async def _woken_up(self, event) -> bool:
+        """True for the first message that reaches a persona the schedule has asleep.
+
+        The reply still goes out immediately; only its wording acknowledges it.
+        A reply held back until the wake-up, or one the bot chose to volunteer
+        in a group, was not woken by anyone.
+        """
+
+        umo = str(event.unified_msg_origin)
+        if (
+            event.get_extra("decision_life_proactive", False)
+            or event.get_extra("decision_proactive_reply")
+            or getattr(
+                getattr(event.get_extra("virtual_life_reply_delay_batch"), "decision", None),
+                "sleeping",
+                False,
+            )
+            or not self.config["humanization_settings"]["enable"]
+            or not self.policy.is_enabled(umo)
+        ):
+            return False
+        persona = await self.personas.resolve(umo)
+        now = self._now()
+        plan = self.visible_plan(self.storage.get_plan(now.date().isoformat(), persona.id))
+        if not plan or plan.status != "ok":
+            return False
+        current = timeline_item_at(plan, now)
+        if not current or current.state != "sleep":
+            return False
+        moment = time.monotonic()
+        if moment - self._woken.get(persona.id, -WOKEN_NOTE_SECONDS) < WOKEN_NOTE_SECONDS:
+            return False
+        self._woken[persona.id] = moment
+        return True
 
     def status(self, umo=None):
         try:

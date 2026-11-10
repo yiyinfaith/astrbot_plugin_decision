@@ -1144,6 +1144,186 @@ def test_sleep_wakeup_can_skip_quiet_hours(native):
         runtime._sleep_umos.discard(UMO)
 
 
+@pytest.mark.asyncio
+async def test_sleep_exemption_does_not_outlive_a_rejected_attempt(native):
+    runtime = native.runtime
+    runtime.config["adaptive_settings"]["enable"] = True
+    runtime.config["delivery_settings"]["sleep_skips_quiet"] = True
+    with runtime.ledger.transaction() as db:
+        data = runtime.contacts.profile(db, UMO, "alice", runtime._now())
+        data["paused_until"] = -1
+        runtime.ledger.save_profile(db, UMO, "alice", data)
+    sent, reason = await runtime._attempt_unsolicited(
+        UMO, native.persona, native.plan, "起夜时想起对方", "sleep"
+    )
+    assert not sent and reason == "用户已暂停主动联系"
+    assert UMO not in runtime._sleep_umos
+    assert runtime._quiet_exempt(UMO) is False
+
+
+@pytest.mark.asyncio
+async def test_a_repeating_refusal_is_recorded_once(native):
+    runtime = native.runtime
+    runtime.config["adaptive_settings"]["enable"] = True
+    with runtime.ledger.transaction() as db:
+        data = runtime.contacts.profile(db, UMO, "alice", runtime._now())
+        data["paused_until"] = -1
+        runtime.ledger.save_profile(db, UMO, "alice", data)
+    for _ in range(3):
+        await runtime._attempt_unsolicited(UMO, native.persona, native.plan, "想聊聊", "adaptive")
+    assert len(runtime.ledger.audits(UMO, limit=60)) == 1
+    for _ in range(2):
+        await runtime._attempt_unsolicited(UMO, native.persona, native.plan, "想聊聊", "manual")
+    assert len(runtime.ledger.audits(UMO, limit=60)) == 3, "an explicit request is always shown"
+
+
+def test_adaptive_tick_waits_for_the_next_usual_hour(native, monkeypatch):
+    runtime = native.runtime
+    now = runtime._now()
+    looked_ahead = []
+
+    def next_at(*args, **kwargs):
+        looked_ahead.append(kwargs.get("within_hours"))
+        return now + timedelta(hours=2)
+
+    monkeypatch.setattr(runtime.contacts, "next_active_at", next_at)
+    key = (UMO, "alice")
+    runtime._wait_until_around(key, now)
+    remaining = runtime._contact_attempts[key] + 900 - time.monotonic()
+    assert 7200 < remaining <= 7200 + 1201
+    assert looked_ahead == [24]
+    monkeypatch.setattr(runtime.contacts, "next_active_at", lambda *a, **k: None)
+    runtime._wait_until_around(key, now)
+    remaining = runtime._contact_attempts[key] + 900 - time.monotonic()
+    assert 86400 < remaining <= 86400 + 1201
+
+
+@pytest.mark.asyncio
+async def test_a_message_during_sleep_reads_as_being_woken(native):
+    runtime = native.runtime
+    assert await runtime._woken_up(native.event) is False
+    asleep = replace(
+        native.plan,
+        timeline=(TimelineItem(id="night", start="00:00", end="24:00", activity="睡觉", state="sleep"),),
+    )
+    runtime.storage.plans[runtime.storage.plan_key(asleep.date, "alice")] = asleep
+    assert await runtime._woken_up(native.event) is True
+    assert await runtime._woken_up(native.event) is False, "one night is one wake-up"
+    runtime._woken.clear()
+    native.event.set_extra("decision_proactive_reply", "token")
+    assert await runtime._woken_up(native.event) is False, "a volunteered reply wakes nobody"
+    native.event.set_extra("decision_proactive_reply", None)
+    held = SimpleNamespace(decision=SimpleNamespace(sleeping=True))
+    native.event.set_extra("virtual_life_reply_delay_batch", held)
+    assert await runtime._woken_up(native.event) is False, "it already waited for the wake-up"
+    native.event.set_extra("virtual_life_reply_delay_batch", None)
+    runtime.config["humanization_settings"]["enable"] = False
+    assert await runtime._woken_up(native.event) is False
+    runtime.config["humanization_settings"]["enable"] = True
+    runtime.config["friend_settings"]["session_list"] = []
+    assert await runtime._woken_up(native.event) is False
+
+
+@pytest.mark.asyncio
+async def test_slow_chat_weather_does_not_hold_the_reply_and_still_fills_in(native, monkeypatch):
+    runtime = native.runtime
+    runtime.config["weather_settings"].update(mode="random")
+    monkeypatch.setattr("decision.life_runtime.CHAT_WEATHER_TIMEOUT", 0.01)
+    release, calls = asyncio.Event(), []
+
+    async def slow(now):
+        calls.append(now)
+        await release.wait()
+        return "晴"
+
+    monkeypatch.setattr(runtime.weather, "now_text", slow)
+    assert await runtime._weather_text(runtime._now(), "chat", "今天天气") == ""
+    assert await runtime._weather_text(runtime._now(), "chat", "今天天气") == ""
+    assert len(calls) == 1, "no second lookup while one is running"
+    release.set()
+    await runtime._weather_task
+    assert runtime._weather_retry_at == 0.0, "slow is not failed"
+    assert await runtime._weather_text(runtime._now(), "chat", "今天天气") == "晴"
+
+
+@pytest.mark.asyncio
+async def test_failing_weather_backs_off(native, monkeypatch):
+    runtime = native.runtime
+    runtime.config["weather_settings"].update(mode="random")
+    calls = []
+
+    async def broken(now):
+        calls.append(now)
+        raise RuntimeError("接口不可用")
+
+    monkeypatch.setattr(runtime.weather, "now_text", broken)
+    assert await runtime._weather_text(runtime._now(), "chat", "今天天气") == ""
+    await asyncio.sleep(0)
+    assert await runtime._weather_text(runtime._now(), "chat", "今天天气") == ""
+    assert len(calls) == 1
+    assert runtime.weather.last_error == "接口不可用"
+
+
+@pytest.mark.asyncio
+async def test_replacing_the_runtime_does_not_abort_a_reply_waiting_on_weather(native, monkeypatch):
+    runtime = native.runtime
+    runtime.config["weather_settings"].update(mode="random")
+
+    async def stalled(now):
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(runtime.weather, "now_text", stalled)
+    waiting = asyncio.create_task(runtime._weather_text(runtime._now(), "proactive"))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    runtime._weather_task.cancel()
+    assert await waiting == ""
+
+
+@pytest.mark.asyncio
+async def test_a_non_sleep_attempt_never_picks_up_the_exemption(native):
+    runtime = native.runtime
+    runtime.config["delivery_settings"]["sleep_skips_quiet"] = True
+    runtime.config["integration_settings"].update(quiet_start="00:00", quiet_end="23:59")
+    runtime._sleep_umos.add(UMO)
+    sent, reason = await runtime._attempt_unsolicited(
+        UMO, native.persona, native.plan, "想聊聊", "idle"
+    )
+    assert not sent and reason == "quiet hours"
+    assert UMO in runtime._sleep_umos, "only the sleep attempt that set it may clear it"
+    runtime._sleep_umos.discard(UMO)
+
+
+@pytest.mark.asyncio
+async def test_proactive_prompt_is_lean_and_keeps_expression_rules(native):
+    runtime = native.runtime
+    native.owner._evaluate.return_value = SimpleNamespace(
+        answers={q: {"noul": 0.9} for q in ("initiate", "relevant", "timing")}
+    )
+    sent, _ = await runtime._attempt_unsolicited(
+        UMO, native.persona, native.plan, "有意义的读书分享", "idle"
+    )
+    assert sent
+    text = str(native.provider.requests)
+    assert "表达边界" in text
+    assert "relationship_updated_at" not in text and "recent_intents" not in text
+
+
+@pytest.mark.asyncio
+async def test_chat_weather_stays_inside_the_listed_sessions(native):
+    runtime = native.runtime
+    runtime.config["weather_settings"].update(mode="random")
+    native.event.message_str = "今天天气怎么样"
+    native.event.get_message_str = lambda: "今天天气怎么样"
+    req = SimpleNamespace(extra_user_content_parts=[], contexts=[], system_prompt="")
+    await runtime.inject_cached_state(native.event, req)
+    assert any("当前天气" in str(part) for part in req.extra_user_content_parts)
+    runtime.config["friend_settings"]["session_list"] = []
+    req = SimpleNamespace(extra_user_content_parts=[], contexts=[], system_prompt="")
+    await runtime.inject_cached_state(native.event, req)
+    assert not any("当前天气" in str(part) for part in req.extra_user_content_parts)
+
+
 def test_trim_session_state_bounds_the_per_session_caches(native):
     runtime = native.runtime
     now = runtime._now()

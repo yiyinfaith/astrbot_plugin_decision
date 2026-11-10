@@ -85,7 +85,9 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
         self._life_runtime: Any | None = None
         self._multimodal: Any | None = None
         self._multimodal_tools: list[Any] = []
-        self._tool_history_context = ToolHistoryContextModule(logger=logger)
+        self._tool_history_context = ToolHistoryContextModule(
+            logger=logger, applies=self._tool_history_applies
+        )
         self._group_wake_suppression = GroupWakeSuppressionModule(
             logger=logger,
             disable_at_bot_wake=self._bool("disable_group_at_bot_wake", False),
@@ -610,6 +612,18 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
         # Provider credentials are intentionally never inspected here. They
         # belong exclusively to AstrBot's native provider manager.
 
+    def _tool_history_applies(self, event: AstrMessageEvent) -> bool:
+        return (
+            self._bool("conversation_flow_enabled", True)
+            and self._bool("optimize_tool_history_context", False)
+            and self._scope_allows(
+                event,
+                "conversation_flow_scope",
+                "conversation_flow_scope_blacklist",
+                default_blacklist=True,
+            )
+        )
+
     def _configure_input_enhancements(self) -> None:
         """Apply the three input-enhancement switches without restarting the host."""
 
@@ -984,9 +998,7 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
     async def multimodal_prepare_request(self, event: AstrMessageEvent, req: ProviderRequest):
         """Make GIFs provider-safe and inject the media digest."""
 
-        if self._bool("conversation_flow_enabled", True) and self._bool(
-            "optimize_tool_history_context", False
-        ):
+        if self._tool_history_applies(event):
             self._tool_history_context.sanitize_request(req)
 
         settings = self._multimodal_settings()

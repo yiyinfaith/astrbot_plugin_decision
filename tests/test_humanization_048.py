@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from decision import usage_meter
-from decision.life_config import life_defaults, normalize_life
+from decision.life_config import life_defaults, life_schema, normalize_life
 from decision.life_contacts import ContactControl
 from decision.life_ledger import LifeLedger
 from decision.life_weather import WEATHER_WORDS, WeatherService, random_day
@@ -392,7 +393,7 @@ def test_dashboard_exposes_presets_usage_and_new_fields():
     root = Path(__file__).resolve().parents[1] / "views" / "dashboard"
     app = (root / "app.js").read_text(encoding="utf-8")
     html = (root / "index.html").read_text(encoding="utf-8")
-    workspace = (root / "life-workspace.js").read_text(encoding="utf-8")
+    workspace = json.dumps(life_schema(), ensure_ascii=False)
     for preset in ("restrained", "normal", "clingy"):
         assert preset in app
     assert "applyLifePreset(id)" in html and "usage-table" in html and "lifeAuditRows" in html

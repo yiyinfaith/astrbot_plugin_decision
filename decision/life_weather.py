@@ -7,6 +7,7 @@ that plugin's own configuration and is never copied here.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import random
 import re
@@ -15,6 +16,8 @@ from datetime import date, datetime
 from typing import Any
 
 WEATHER_PLUGIN = "astrbot_plugin_omni"
+# The forecast only adds detail; a slow one must not cost the current weather.
+FORECAST_DETAIL_TIMEOUT = 4.0
 WEATHER_WORDS = re.compile(
     r"天气|下雨|下雪|雨伞|带伞|晴天|阴天|多云|气温|温度|几度|降温|升温|好冷|好热|太冷|太热"
     r"|冷不冷|热不热|穿什么|穿多少|雾霾|台风|刮风|风好大|闷热"
@@ -257,7 +260,7 @@ class WeatherService:
             text += f"（体感 {feels}℃）"
         text += _extras(now)
         try:
-            days = await self._forecast(city)
+            days = await asyncio.wait_for(self._forecast(city), FORECAST_DETAIL_TIMEOUT)
         except Exception:
             days = None
         if isinstance(days, list) and days:

@@ -205,8 +205,70 @@ class ContactControl:
                 "umo": umo,
                 "persona": persona,
                 "today": self.counts(db, umo, persona, now),
+                "today_interval": self._day_interval(umo, persona, data, now),
                 "bounds_minutes": self.bounds(umo),
             }
+
+    @staticmethod
+    def brief(summary, now):
+        """What a model needs from the ledger, in minutes rather than bookkeeping."""
+
+        moment = now.timestamp()
+        data = {
+            key: summary[key]
+            for key in ("interval", "unanswered", "feedback", "today", "bounds_minutes")
+            if summary.get(key) not in (None, "")
+        }
+        if "today_interval" in summary:
+            data["interval"] = round(summary["today_interval"])
+        if summary.get("active_hours"):
+            data["active_hours"] = summary["active_hours"]
+        engagement = summary.get("engagement") or {}
+        age = moment - float(engagement.get("at", 0) or 0)
+        if engagement.get("kind") and age < 86400:
+            data["engagement"] = {
+                **{
+                    k: engagement[k]
+                    for k in ("kind", "quote", "scope", "sender")
+                    if k in engagement
+                },
+                "minutes_ago": round(age / 60),
+            }
+        paused = float(summary.get("paused_until", 0) or 0)
+        if paused == -1:
+            data["paused"] = "until_resumed"
+        elif paused > moment:
+            data["paused_minutes"] = round((paused - moment) / 60)
+        defer = float(summary.get("defer_until", 0) or 0)
+        if defer > moment:
+            data["busy_minutes"] = round((defer - moment) / 60)
+        busy = {
+            member: round((float(until) - moment) / 60)
+            for member, until in (summary.get("member_busy") or {}).items()
+            if float(until) > moment
+        }
+        if busy:
+            data["member_busy_minutes"] = busy
+        for key, field in (
+            ("minutes_since_sent", "last_sent"),
+            ("minutes_since_incoming", "last_incoming"),
+        ):
+            if summary.get(field):
+                data[key] = max(0, round((moment - float(summary[field])) / 60))
+        return data
+
+    def social(self, summary):
+        """Relationship and rhythm, only while their switches allow using them."""
+
+        human = self.humanization
+        if not human.get("enable", True):
+            return {}
+        data = {}
+        if human.get("relationship_memory_enable", True):
+            data["relationship"] = summary["relationship"]["stage"]
+        if human.get("response_rhythm_enable", True):
+            data["response_rhythm"] = summary["response_rhythm"]["bucket"]
+        return data
 
     @staticmethod
     def day_bounds(now):
@@ -375,7 +437,7 @@ class ContactControl:
         if frequency and not agreed:
             adaptive = self.settings["enable"]
             interval = (
-                data["interval"]
+                self._day_interval(umo, persona, data, now)
                 if adaptive
                 else self.runtime.policy.settings_for(umo).get("cooldown_minutes", 0)
             )
@@ -383,6 +445,24 @@ class ContactControl:
             if now.timestamp() < anchor + interval * 60:
                 return False, "自适应主动间隔未到"
         return True, "allowed"
+
+    def _day_interval(self, umo, persona, data, now):
+        """Today's target gap. A frequency the person asked for is left exact."""
+
+        interval = data["interval"]
+        if data.get("frequency_requested") or data.get("feedback") in {"more", "less", "set"}:
+            return interval
+        low, high = self.bounds(umo)
+        floor = max(low, data["baseline"] * 0.8)
+        return max(floor, min(high, interval * self._day_factor(persona, now)))
+
+    def _day_factor(self, persona, now):
+        """Some days the persona reaches out a little more, some days a little less."""
+
+        if not self.humanization.get("enable", True):
+            return 1.0
+        digest = hashlib.sha256(f"day-rhythm:{now.date()}:{persona}".encode()).digest()
+        return 0.75 + 0.6 * digest[0] / 255
 
     def observe(self, event, persona, now, *, targeted, quality_pending=False):
         umo = str(event.unified_msg_origin)
@@ -549,6 +629,7 @@ class ContactControl:
                 )
             )
             data["baseline"] = data["interval"] = min(high, max(low, value))
+            data["frequency_requested"] = True
         data["feedback"], data["feedback_at"] = action, now.timestamp()
 
     def preference(self, event, persona, action="status", interval_minutes=0, pause_until=0):

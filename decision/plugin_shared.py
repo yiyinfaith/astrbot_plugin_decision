@@ -70,7 +70,7 @@ from .skills import filter_skills_prompt
 from .tokens import estimate_request_tokens, fit_request_state
 
 PLUGIN_NAME = "astrbot_plugin_decision"
-PLUGIN_DISPLAY_NAME = "jev决策综合插件"
+PLUGIN_DISPLAY_NAME = "判断决策综合插件"
 _ON_DECORATING_RESULT = getattr(filter, "on_decorating_result", None)
 DEFAULT_TOOL_NOUL_THRESHOLD = 0.65
 # Event extra marking the request issued by the proactive (message interjection) path.

@@ -375,6 +375,7 @@ textarea { min-height: 180px; resize: vertical; line-height: 1.55; font: 12px/1.
 .native-tab.selected { color: #fff; border-color: #aebaff85; background: linear-gradient(125deg, #2460c5, #6752b6); }
 .billing-picker-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 @media (max-width: 560px) { .native-tabs, .billing-picker-row { grid-template-columns: 1fr; } }
+.nested-settings { margin: 4px 0 12px 12px; padding-left: 12px; border-left: 2px solid rgba(170,205,255,.16); }
 .mm-group { margin-top: 22px; padding-top: 18px; border-top: 1px solid rgba(170,205,255,.16); }
 .mm-group > h3 { margin: 0 0 4px; color: #9ec5ff; font-size: 15px; }
 .mm-group h4 { margin: 18px 0 0; color: #a9b6d4; font-size: 13px; }

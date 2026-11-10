@@ -936,8 +936,8 @@ def test_public_schema_contains_only_global_settings_and_master_switches():
 
 def test_builtin_jev_tool_is_default_keep_only_in_settings_page():
     page = dashboard_source()
-    assert "<title>jev决策综合插件设置</title>" in page
-    assert "<h1>jev决策综合插件设置</h1>" in page
+    assert "<title>判断决策综合插件设置</title>" in page
+    assert "<h1>判断决策综合插件设置</h1>" in page
     assert "始终推荐给主 LLM" in page
     assert "tool.builtin" in page
     assert "builtin" in page
