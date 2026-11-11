@@ -720,6 +720,42 @@ async def test_proactive_provider_request_marks_event_as_consumed(host, monkeypa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("handled", ["sent", "stopped"])
+async def test_proactive_reply_skips_messages_already_handled_by_another_plugin(host, monkeypatch, handled):
+    """例如表情包插件先发了图：接话不再评估，也不调用 LLM。"""
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    host.config["proactive_reply_enabled"] = True
+    plugin._detail_settings["proactive_scope_blacklist"] = True
+    plugin.provider = object()
+    plugin._ready = True
+    evaluate = AsyncMock()
+    monkeypatch.setattr(plugin, "_evaluate", evaluate)
+    event = SimpleNamespace(
+        unified_msg_origin="qq:GroupMessage:group-1",
+        is_at_or_wake_command=False,
+        call_llm=False,
+        _has_send_oper=handled == "sent",
+        is_stopped=lambda: handled == "stopped",
+        get_message_type=lambda: 1,
+        get_message_str=lambda: "今天 喜报 来了",
+        get_sender_id=lambda: "user-1",
+        get_sender_name=lambda: "用户",
+        get_self_id=lambda: "bot-1",
+        get_messages=lambda: [],
+        get_extra=lambda key, default=None: default,
+        get_message_outline=lambda: "今天 喜报 来了",
+        request_llm=lambda **kwargs: ("provider-request", kwargs),
+        should_call_llm=lambda value: setattr(event, "call_llm", value),
+    )
+
+    yielded = [item async for item in plugin.proactive_reply(event)]
+
+    assert yielded == []
+    evaluate.assert_not_awaited()
+    assert event.is_at_or_wake_command is False and event.call_llm is False
+
+
+@pytest.mark.asyncio
 async def test_proactive_request_is_yielded_after_the_session_lock_is_released(host, monkeypatch):
     """AstrBot runs a yielded request before resuming the handler, so holding the
     session lock there would make every other message in the session wait for

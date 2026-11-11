@@ -839,6 +839,10 @@ class RoutingMixin:
         )
 
     def _should_skip_proactive(self, event: AstrMessageEvent) -> bool:
+        # 排在前面的插件已经回复或停止了这条消息（如表情包），不再接话。
+        is_stopped = getattr(event, "is_stopped", None)
+        if getattr(event, "_has_send_oper", False) or (callable(is_stopped) and is_stopped()):
+            return True
         message_type = event.get_message_type()
         if message_type not in {MessageType.GROUP_MESSAGE, MessageType.FRIEND_MESSAGE}:
             return True

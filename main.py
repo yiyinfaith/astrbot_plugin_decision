@@ -764,7 +764,7 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
         # optional advisory section without disabling Tool filtering.
         return str(configured)
 
-    @filter.on_llm_request(priority=1000)
+    @filter.on_llm_request(priority=120)
     async def filter_tools_before_llm(
         self,
         event: AstrMessageEvent,
@@ -775,7 +775,7 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
 
     @filter.event_message_type(
         EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE,
-        priority=1000,
+        priority=110,
     )
     async def proactive_reply(self, event: AstrMessageEvent):
         """Use Jev to decide whether AstrBot's normal Agent should interject."""
@@ -784,7 +784,7 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
 
     @filter.event_message_type(
         EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE,
-        priority=1000,
+        priority=110,
     )
     async def output_enhancement_message(self, event: AstrMessageEvent) -> None:
         """Collect the small amount of input state required by OutputPro."""
@@ -916,7 +916,7 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
             yield event.plain_result("用法：/decision status | /decision test | /decision tools")
         event.stop_event()
 
-    @filter.on_llm_request(priority=1300)
+    @filter.on_llm_request(priority=150)
     async def life_control_tool_state(self, event, req):
         runtime = self._life_runtime
         tools = getattr(req, "func_tool", None)
@@ -949,7 +949,7 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
         tools.tools = [tool for tool in tools.tools if getattr(tool, "name", "") not in hide]
 
     @filter.event_message_type(
-        EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE, priority=1100
+        EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE, priority=140
     )
     async def life_observe_message(self, event: AstrMessageEvent):
         # One reference per call: a settings save may swap the runtime meanwhile.
@@ -970,7 +970,7 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
             await runtime.record_incoming(event)
 
     @filter.event_message_type(
-        EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE, priority=1001
+        EventMessageType.GROUP_MESSAGE | EventMessageType.PRIVATE_MESSAGE, priority=130
     )
     async def multimodal_observe_message(self, event: AstrMessageEvent):
         """Index media and start background understanding for any message.
@@ -994,7 +994,7 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
         except Exception as exc:
             logger.debug("Decision Engine 多模态观察跳过：%s", _safe_error(exc))
 
-    @filter.on_llm_request(priority=900)
+    @filter.on_llm_request(priority=110)
     async def multimodal_prepare_request(self, event: AstrMessageEvent, req: ProviderRequest):
         """Make GIFs provider-safe and inject the media digest."""
 
@@ -1017,7 +1017,7 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
         except Exception as exc:
             logger.warning("Decision Engine 注入多模态结果失败：%s", _safe_error(exc))
 
-    @filter.on_llm_request(priority=1100)
+    @filter.on_llm_request(priority=130)
     async def life_inject_state(self, event: AstrMessageEvent, req: ProviderRequest):
         # One reference per call: a settings save may swap the runtime meanwhile.
         runtime = self._life_runtime
@@ -1031,7 +1031,7 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
                 event.set_extra("decision_life_counted", True)
             await runtime.inject_cached_state(event, req)
 
-    @getattr(filter, "on_waiting_llm_request", lambda **kw: lambda fn: fn)(priority=1100)
+    @getattr(filter, "on_waiting_llm_request", lambda **kw: lambda fn: fn)(priority=130)
     async def life_waiting_request(self, event: AstrMessageEvent):
         # One reference per call: a settings save may swap the runtime meanwhile.
         runtime = self._life_runtime
@@ -1095,7 +1095,7 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
         if self._network_enabled():
             await self._network().on_astrbot_loaded()
 
-    @filter.on_llm_request(priority=1200)
+    @filter.on_llm_request(priority=140)
     async def network_inject_context(self, event: AstrMessageEvent, req: ProviderRequest):
         """Gate the network tools and inject relationship context.
 
