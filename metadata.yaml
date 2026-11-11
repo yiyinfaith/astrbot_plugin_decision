@@ -6,7 +6,7 @@ author: 一吟Faith
 version: 0.4.12
 repo: https://github.com/yiyinfaith/astrbot_plugin_decision
 logo: logo.png
-category: utilities
+category: 工具
 astrbot_version: ">=4.29.4,<5"
 support_platforms:
   - aiocqhttp
