@@ -5,12 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="./network-view.css?v=0.4.12" />
+    <link rel="stylesheet" href="./network-view.css?v=0.4.13" />
     <!-- style.css is the default AstrBot-style theme; app.js swaps it for liquid.css when the liquid-glass switch is on. -->
-    <link id="default-theme" rel="stylesheet" href="./style.css?v=0.4.12" />
+    <link id="default-theme" rel="stylesheet" href="./style.css?v=0.4.13" />
     <title>判断决策综合插件设置</title>
     <script src="./vendor/vue.global.prod.js"></script>
-    <script src="./life-workspace.js?v=0.4.12"></script>
+    <script src="./life-workspace.js?v=0.4.13"></script>
   </head>
   <body>
     <div id="app" v-cloak class="app-shell">
@@ -687,6 +687,6 @@
       <p class="footer-note">全局服务参数仍由 AstrBot 原生配置页管理；本页保存的详细策略写入 AstrBot 数据目录。修改后请点击“保存全部设置”。</p>
       <div class="save-bar"><span class="save-status" :class="saveState">{{ statusText }}</span><button class="button primary" :disabled="loading || saving || !loaded" @click="save">{{ saving ? '保存中…' : '保存全部设置' }}</button></div>
     </div>
-    <script src="./app.js?v=0.4.12"></script>
+    <script src="./app.js?v=0.4.13"></script>
   </body>
 </html>

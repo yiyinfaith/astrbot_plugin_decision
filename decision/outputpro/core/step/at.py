@@ -103,9 +103,42 @@ class AtStep(BaseStep):
         )
 
     # -------------------------
+    # 清除所有 at（真 At 与开头的假 at 文本）
+    # -------------------------
+    def _strip_ats(self, chain) -> str:
+        new_chain = []
+        removed_at = ""
+
+        for c in chain:
+            if isinstance(c, At):
+                removed_at = f"@{c.name or c.qq}"
+                continue
+
+            if isinstance(c, Plain):
+                m = self.at_head_regex.search(c.text)
+                if m:
+                    at_str = next(g for g in m.groups() if g is not None)
+                    removed_at = f"@{at_str}"
+                    c.text = self.at_head_regex.sub("", c.text, count=1).strip()
+                if not c.text.replace("\u200b", "").strip():
+                    continue
+
+            new_chain.append(c)
+
+        chain[:] = new_chain
+        return removed_at
+
+    # -------------------------
     # 主入口
     # -------------------------
     async def handle(self, ctx: OutContext) -> StepResult:
+        # ===== 0. 私聊不支持 @：去掉所有 at，不再插入 =====
+        if not ctx.gid:
+            if self._has_at(ctx.chain):
+                removed = self._strip_ats(ctx.chain)
+                return StepResult(msg=f"私聊不支持艾特，已移除{removed}")
+            return StepResult()
+
         # ===== 1. 假艾特解析 =====
         idx, qq, nickname = self._parse_fake_at(ctx)
         self._apply_fake_at(ctx.chain, idx, qq, nickname)
@@ -132,27 +165,6 @@ class AtStep(BaseStep):
 
         # 未命中 → 清除所有 at
         elif not hit and has_at:
-            new_chain = []
-            removed_at = ""
-
-            for c in ctx.chain:
-                if isinstance(c, At):
-                    removed_at = f"@{c.name}"
-                    continue
-
-                if isinstance(c, Plain):
-                    m = self.at_head_regex.search(c.text)
-                    if m:
-                        at_str = next(g for g in m.groups() if g is not None)
-                        removed_at = f"@{at_str}"
-
-                    c.text = self.at_head_regex.sub("", c.text, count=1).strip()
-                    if not c.text:
-                        continue
-
-                new_chain.append(c)
-
-            ctx.chain[:] = new_chain
-            return StepResult(msg=removed_at)
+            return StepResult(msg=self._strip_ats(ctx.chain))
 
         return StepResult()

@@ -38,7 +38,8 @@ class ReplyStep(BaseStep):
                 pushed = len(queue) - idx - 1
                 if pushed >= self.cfg.threshold:
                     ctx.chain.insert(0, Reply(id=msg_id))
-                    if self.cfg.include_at and isinstance(ctx.event, AiocqhttpMessageEvent):
+                    # 私聊不支持 @（QQ 会以 retcode 1400 拒收整条消息），只在群聊附带 @
+                    if self.cfg.include_at and ctx.gid and isinstance(ctx.event, AiocqhttpMessageEvent):
                         ctx.chain.insert(1, At(qq=ctx.event.get_sender_id()))
                         # 在 At 后添加带零宽空格包裹的空格，确保与后续内容有间距
                         ctx.chain.insert(2, Plain(text="\u200b \u200b"))

@@ -13,7 +13,7 @@ async function waitForBridge(timeoutMs = 5000) {
 }
 // The liquid-glass theme is optional. While it is off, neither the WebGL
 // library nor liquid.css is loaded and the page uses style.css.
-const ASSET_VERSION = '0.4.12';
+const ASSET_VERSION = '0.4.13';
 let glassLibraryLoading = null;
 let liquidSheetLoading = null;
 function supportsWebGL2() {
