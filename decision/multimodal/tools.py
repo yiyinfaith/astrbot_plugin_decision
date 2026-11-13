@@ -1,6 +1,6 @@
 """The LLM tools that let the model ask for media understanding on demand.
 
-They are registered through the plugin's normal tool path, so the existing JEV
+They are registered through the plugin's normal tool path, so the existing decision
 tool filtering, scope lists and enable/disable switches all apply unchanged.
 """
 

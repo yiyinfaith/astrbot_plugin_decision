@@ -105,7 +105,7 @@ def infer_dialogue_target(
     reply_starters: Iterable[str] = DEFAULT_REPLY_STARTERS,
     now: float | None = None,
 ) -> DialogueInference:
-    """Infer who a group message is addressing without an extra Jev call.
+    """Infer who a group message is addressing without an extra decision call.
 
     The rules intentionally mirror only the useful, conservative part of
     ContextAware: explicit address signals win; contextual guesses never
@@ -195,7 +195,7 @@ class ProactiveSession:
 
 @dataclass(frozen=True, slots=True)
 class ProactiveDecision:
-    """Normalized result of one Jev proactive judgment."""
+    """Normalized result of one proactive decision judgment."""
 
     should_reply: bool
     scores: dict[str, float]

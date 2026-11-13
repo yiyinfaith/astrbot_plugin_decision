@@ -58,7 +58,7 @@ async def test_native_adapter_routes_all_decision_types_through_astrbot(monkeypa
         }
 
     provider = AstrBotDecisionProvider(
-        SimpleNamespace(decision=SimpleNamespace(ask=ask)), provider_id="jev-7"
+        SimpleNamespace(decision=SimpleNamespace(ask=ask)), provider_id="decision-7"
     )
     result = await provider.evaluate(
         state="conversation context",
@@ -84,7 +84,7 @@ async def test_native_adapter_routes_all_decision_types_through_astrbot(monkeypa
     assert type(native_questions["choice"]) is ChoiceQuestion
     assert type(native_questions["score"]) is ScoreQuestion
     assert state == "conversation context"
-    assert selected_provider == "jev-7"
+    assert selected_provider == "decision-7"
     assert result.answers["yes"] == {"type": "noul", "noul": 0.91}
     assert result.answers["choice"]["choice"] == "keep"
     assert result.answers["score"]["score"] == 1.5
@@ -141,7 +141,7 @@ def test_provider_catalog_lists_only_native_decision_providers():
     context = SimpleNamespace(
         provider_manager=SimpleNamespace(
             decision_provider_insts=[
-                NativeProvider("decision-1", "jev-fast", "system_one_decision")
+                NativeProvider("decision-1", "decision-fast", "system_one_decision")
             ],
             provider_insts=[NativeProvider("chat-1", "chat-model", "openai")],
         )
@@ -149,8 +149,8 @@ def test_provider_catalog_lists_only_native_decision_providers():
     assert decision_provider_catalog(context) == [
         {
             "id": "decision-1",
-            "name": "decision-1 · jev-fast · system_one_decision",
-            "model": "jev-fast",
+            "name": "decision-1 · decision-fast · system_one_decision",
+            "model": "decision-fast",
             "type": "system_one_decision",
         }
     ]

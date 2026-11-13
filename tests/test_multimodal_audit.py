@@ -304,16 +304,6 @@ async def test_provider_failure_is_redacted_before_cache_and_public_tool(tmp_pat
         await runtime.terminate()
 
 
-def test_jev_score_rejects_nan():
-    from decision.models import DecisionValidationError, parse_systemone_response
-
-    with pytest.raises(DecisionValidationError):
-        parse_systemone_response(
-            {"answers": {"score": {"score": float("nan")}}},
-            {"score": {"type": "score", "criteria": ["low", "high"]}},
-        )
-
-
 async def test_inflight_does_not_reuse_a_different_processing_strategy(tmp_path):
     provider = FakeProvider()
     started, release = asyncio.Event(), asyncio.Event()

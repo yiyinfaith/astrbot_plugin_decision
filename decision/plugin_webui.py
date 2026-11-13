@@ -143,7 +143,7 @@ class WebUIMixin:
                 0,
                 {
                     "name": DECISION_TOOL_NAME,
-                    "description": "调用 AstrBot 原生 JEV Decision Provider 对当前场景执行一次结构化判断；不会执行其他工具。",
+                    "description": "调用 AstrBot 原生决策 Provider 对当前场景执行一次结构化判断；不会执行其他工具。",
                     "handoff": False,
                     "mcp": False,
                     "skill": False,
@@ -730,6 +730,7 @@ class WebUIMixin:
         return json_response(
             {
                 "decision_provider_id": str(self._setting("decision_provider_id", "") or ""),
+                FALLBACK_PROVIDER_KEY: self._fallback_provider_ids(),
                 "decision_providers": decision_provider_catalog(self.context),
                 "always_keep_tools": always_keep,
                 "message_interjection_enabled": self._bool("message_interjection_enabled", True),
@@ -741,7 +742,7 @@ class WebUIMixin:
                 "always_keep_recommend_mcp": always_keep_recommend_mcp,
                 "always_keep_skills": always_keep_skills,
                 "always_keep_recommend_skills": always_keep_recommend_skills,
-                "jev_pre_prompt": self._policy(),
+                "decision_pre_prompt": self._policy(),
                 "main_llm_post_prompt": self._main_llm_post_prompt(),
                 "tool_filter_enabled": self._bool("tool_filter_enabled", True),
                 "mcp_filter_enabled": self._bool("mcp_filter_enabled", True),
@@ -829,8 +830,9 @@ class WebUIMixin:
             return error_response(
                 "always_keep_recommend_subagents must be a string list", status_code=400
             )
-        jev_pre_prompt = payload.get("jev_pre_prompt")
+        decision_pre_prompt = payload.get("decision_pre_prompt")
         decision_provider_id = payload.get("decision_provider_id")
+        fallback_provider_ids = payload.get(FALLBACK_PROVIDER_KEY)
         main_llm_post_prompt = payload.get("main_llm_post_prompt")
         tool_filter_enabled = payload.get("tool_filter_enabled")
         mcp_filter_enabled = payload.get("mcp_filter_enabled")
@@ -843,12 +845,22 @@ class WebUIMixin:
         tools_scope = payload.get("tools_scope")
         tools_scope_blacklist = payload.get("tools_scope_blacklist")
         tool_noul_threshold = payload.get("tool_noul_threshold")
-        if jev_pre_prompt is not None and not isinstance(jev_pre_prompt, str):
-            return error_response("jev_pre_prompt must be a string", status_code=400)
+        if decision_pre_prompt is not None and not isinstance(decision_pre_prompt, str):
+            return error_response("decision_pre_prompt must be a string", status_code=400)
         if decision_provider_id is not None and (
             not isinstance(decision_provider_id, str) or len(decision_provider_id) > 300
         ):
             return error_response("decision_provider_id must be a string", status_code=400)
+        if fallback_provider_ids is not None and (
+            not isinstance(fallback_provider_ids, list)
+            or len(fallback_provider_ids) > MAX_FALLBACK_PROVIDERS
+            or any(not isinstance(item, str) or len(item) > 300 for item in fallback_provider_ids)
+        ):
+            return error_response(
+                f"{FALLBACK_PROVIDER_KEY} must be a list of at most "
+                f"{MAX_FALLBACK_PROVIDERS} provider IDs",
+                status_code=400,
+            )
         if main_llm_post_prompt is not None and not isinstance(main_llm_post_prompt, str):
             return error_response("main_llm_post_prompt must be a string", status_code=400)
         if tool_filter_enabled is not None and not isinstance(tool_filter_enabled, bool):
@@ -1100,13 +1112,17 @@ class WebUIMixin:
             )[:500]
         if tools_scope_blacklist is not None:
             detail_values["tools_scope_blacklist"] = tools_scope_blacklist
-        if jev_pre_prompt is not None:
-            detail_values["jev_pre_prompt"] = jev_pre_prompt[:50000]
+        if decision_pre_prompt is not None:
+            detail_values["decision_pre_prompt"] = decision_pre_prompt[:50000]
+        # Both Provider fields live only in AstrBot's native config.
+        native_updates: dict[str, Any] = {}
+        available_decision_providers = (
+            {row["id"] for row in decision_provider_catalog(self.context)}
+            if decision_provider_id is not None or fallback_provider_ids is not None
+            else set()
+        )
         if decision_provider_id is not None:
             selected_provider = decision_provider_id.strip()
-            available_decision_providers = {
-                row["id"] for row in decision_provider_catalog(self.context)
-            }
             current_provider = str(self._setting("decision_provider_id", "") or "")
             if selected_provider and selected_provider not in available_decision_providers:
                 # Keep a removed provider ID only when it is already saved;
@@ -1114,10 +1130,25 @@ class WebUIMixin:
                 # the stale selection in the UI for explicit correction.
                 if selected_provider != current_provider:
                     return error_response(
-                        "所选模型提供商不是 AstrBot 当前可用的 JEV Provider",
+                        "所选模型提供商不是 AstrBot 当前可用的决策 Provider",
                         status_code=400,
                     )
-            provider_to_write = selected_provider
+            native_updates["decision_provider_id"] = selected_provider
+        if fallback_provider_ids is not None:
+            selected_fallbacks = normalize_provider_ids(fallback_provider_ids)
+            saved_fallbacks = set(self._fallback_provider_ids())
+            unknown = [
+                provider_id
+                for provider_id in selected_fallbacks
+                if provider_id not in available_decision_providers
+                and provider_id not in saved_fallbacks
+            ]
+            if unknown:
+                return error_response(
+                    f"回退决策模型 {unknown[0]} 不是 AstrBot 当前可用的决策 Provider",
+                    status_code=400,
+                )
+            native_updates[FALLBACK_PROVIDER_KEY] = selected_fallbacks
         if main_llm_post_prompt is not None:
             detail_values["main_llm_post_prompt"] = main_llm_post_prompt[:50000]
         if tool_noul_threshold is not None:
@@ -1167,17 +1198,20 @@ class WebUIMixin:
         except SETTINGS_WRITE_ERRORS as exc:
             logger.error("Decision Engine WebUI settings save failed: %s", _safe_error(exc))
             return error_response("配置写入失败，原设置保持不变", status_code=500)
-        if decision_provider_id is not None:
-            # Persist the selected Provider through AstrBot's own config
-            # object when available. This keeps the native field and the
+        if native_updates:
+            # Persist the selected Providers through AstrBot's own config
+            # object when available. This keeps the native fields and the
             # dashboard selection synchronized without touching credentials.
-            previous_native_present = "decision_provider_id" in self.config
-            previous_native_value = self.config.get("decision_provider_id")
-            self.config["decision_provider_id"] = provider_to_write
+            previous_native = {
+                key: (key in self.config, copy.deepcopy(self.config.get(key)))
+                for key in native_updates
+            }
+            for key, value in native_updates.items():
+                self.config[key] = value
             save_config = getattr(self.config, "save_config", None)
             if not callable(save_config):
                 logger.warning(
-                    "Decision Engine: this config cannot be saved, so the JEV Provider "
+                    "Decision Engine: this config cannot be saved, so the decision Provider "
                     "selection only lasts until the plugin reloads."
                 )
             else:
@@ -1188,15 +1222,16 @@ class WebUIMixin:
                     # write failure must roll both stores back.  Otherwise a
                     # failed response would leave the dashboard and AstrBot
                     # disagreeing about the selected Provider.
-                    if previous_native_present:
-                        self.config["decision_provider_id"] = previous_native_value
-                    else:
-                        self.config.pop("decision_provider_id", None)
+                    for key, (present, value) in previous_native.items():
+                        if present:
+                            self.config[key] = value
+                        else:
+                            self.config.pop(key, None)
                     try:
                         save_config()
                     except Exception as rollback_exc:
                         logger.error(
-                            "Decision Engine could not roll back AstrBot's JEV Provider config: %s",
+                            "Decision Engine could not roll back AstrBot's decision Provider config: %s",
                             _safe_error(rollback_exc),
                         )
                     try:
@@ -1207,20 +1242,27 @@ class WebUIMixin:
                             self._settings_path.unlink(missing_ok=True)
                     except SETTINGS_WRITE_ERRORS as rollback_exc:
                         logger.error(
-                            "Decision Engine could not roll back JEV Provider settings: %s",
+                            "Decision Engine could not roll back decision Provider settings: %s",
                             _safe_error(rollback_exc),
                         )
                     logger.error(
-                        "Decision Engine JEV Provider selection could not be persisted: %s",
+                        "Decision Engine decision Provider selection could not be persisted: %s",
                         _safe_error(exc),
                     )
-                    return error_response("Jev 模型提供商写入失败，原设置保持不变", status_code=500)
+                    return error_response("决策模型提供商写入失败，原设置保持不变", status_code=500)
         self.proactive.reconfigure(
             self._int("proactive_history_max_messages", 12),
             self._int("proactive_max_sessions", 500),
         )
-        if self.provider is not None and decision_provider_id is not None:
-            self.provider.provider_id = str(self._setting("decision_provider_id", "") or "").strip()
+        if self.provider is not None and native_updates:
+            reconfigure = getattr(self.provider, "reconfigure", None)
+            if callable(reconfigure):
+                reconfigure(
+                    str(self._setting("decision_provider_id", "") or ""),
+                    self._fallback_provider_ids(),
+                )
+        if native_updates:
+            self._refresh_native_provider_schema()
         if pending_multimodal is not None and self._multimodal is not None:
             self._multimodal.refresh(self._multimodal_settings())
             self._sync_multimodal_tools(self._multimodal)
@@ -1249,6 +1291,7 @@ class WebUIMixin:
             {
                 "saved": True,
                 "decision_provider_id": str(self._setting("decision_provider_id", "") or ""),
+                FALLBACK_PROVIDER_KEY: self._fallback_provider_ids(),
                 "decision_providers": decision_provider_catalog(self.context),
                 "always_keep_tools": cleaned,
                 "always_keep_recommend_tools": cleaned_recommend,

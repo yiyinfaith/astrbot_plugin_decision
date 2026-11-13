@@ -1,8 +1,8 @@
 {
   "decision_provider_id": {
     "type": "string",
-    "description": "Jev 模型提供商",
-    "hint": "选择 AstrBot 已配置的 Decision/Jev Provider；留空使用 AstrBot 默认判断 Provider。插件 WebUI 会显示实时 Provider 列表。",
+    "description": "决策模型提供商",
+    "hint": "选择 AstrBot 已配置的决策 Provider；留空使用 AstrBot 默认判断 Provider。插件 WebUI 会显示实时 Provider 列表。",
     "options": [
       ""
     ],
@@ -10,6 +10,16 @@
       "使用 AstrBot 默认判断 Provider"
     ],
     "default": ""
+  },
+  "fallback_decision_provider_ids": {
+    "type": "list",
+    "description": "回退决策模型",
+    "hint": "决策模型请求失败（含重试）时，按列表顺序依次改用这些决策模型。原生配置页按选择先后排序，要调整顺序可移除后重新添加，或在插件 WebUI 中用上下箭头调整。",
+    "items": {
+      "type": "string"
+    },
+    "options": [],
+    "default": []
   },
   "retries": {
     "type": "int",
@@ -42,7 +52,7 @@
   "tools_subagents_decision_enabled": {
     "type": "bool",
     "description": "Tool/MCP/Skill/SubAgent 决策",
-    "hint": "控制 Tool、MCP、Skill 和 SubAgent 的 Jev 判断；不影响主动对话。",
+    "hint": "控制 Tool、MCP、Skill 和 SubAgent 的决策判断；不影响主动对话。",
     "default": true
   },
   "proactive_reply_enabled": {

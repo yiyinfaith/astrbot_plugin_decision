@@ -37,7 +37,13 @@ from .context import (
     tool_is_active,
     tool_summary,
 )
-from .life_config import life_schema, normalize_life, validate_umo
+from .life_config import (
+    LEGACY_INTEGRATION_KEYS,
+    life_schema,
+    normalize_life,
+    rename_legacy_integration,
+    validate_umo,
+)
 from .models import DecisionProviderError
 from .proactive import (
     DEFAULT_REPLY_STARTERS,
@@ -55,8 +61,10 @@ from .proactive import (
     text_matches_prefix,
 )
 from .providers.astrbot import (
+    MAX_FALLBACK_PROVIDERS,
     AstrBotDecisionProvider,
     decision_provider_catalog,
+    normalize_provider_ids,
 )
 from .routing import (
     DECISION_TOOL_NAME,
@@ -133,10 +141,12 @@ DEFAULT_POLICY = (
     "请严格根据当前场景、用户请求和候选能力逐项判断。\n"
     "不要生成最终回答，不要执行工具，不要发明候选名称。"
 )
-# The JEV Provider (decision_provider_id) is deliberately not a detail key: it
+# The decision Provider (decision_provider_id) is deliberately not a detail key: it
 # lives only in AstrBot's native plugin config.  The dashboard edits it there
 # with a dropdown populated from AstrBot's live Decision Providers.
 NATIVE_PROVIDER_KEY = "decision_provider_id"
+# Ordered fallback decision Providers, also native-only (same reasons).
+FALLBACK_PROVIDER_KEY = "fallback_decision_provider_ids"
 # Errors _save_detail_settings can raise: disk errors, plus multimodal
 # normalisation and JSON serialisation of a bad value.
 SETTINGS_WRITE_ERRORS = (OSError, TypeError, ValueError)
@@ -169,10 +179,10 @@ DETAIL_DEFAULTS: dict[str, Any] = {
     "subagent_filter_enabled": False,
     "mcp_filter_enabled": True,
     "skill_filter_enabled": True,
-    # Per-category Jev decision switches.  Filtering and judging are
+    # Per-category decision switches.  Filtering and judging are
     # deliberately independent: a category can be judged only to produce
     # recommendations while remaining fully visible to the main LLM, or can
-    # be filtered from the manually kept set without making a Jev request.
+    # be filtered from the manually kept set without making a decision request.
     "tool_decision_enabled": True,
     "subagent_decision_enabled": True,
     "mcp_decision_enabled": True,
@@ -184,13 +194,56 @@ DETAIL_DEFAULTS: dict[str, Any] = {
     "tools_scope": [],
     "tools_scope_blacklist": True,
     "tool_noul_threshold": DEFAULT_TOOL_NOUL_THRESHOLD,
-    "jev_pre_prompt": DEFAULT_POLICY,
+    "decision_pre_prompt": DEFAULT_POLICY,
     "main_llm_post_prompt": DEFAULT_MAIN_LLM_POST_PROMPT,
     # Display preference for the plugin view: the optional liquid-glass theme.
     "ui_liquid_glass": False,
     **OUTPUT_PAGE_DEFAULTS,
     **PROACTIVE_PAGE_DEFAULTS,
 }
+
+
+# Names used before 0.4.15 ("jev_" prefix); saved values are read under the new
+# names so an upgrade keeps the user's prompt and tool selections.
+LEGACY_DETAIL_KEYS = {"jev_pre_prompt": "decision_pre_prompt"}
+LEGACY_TOOL_NAMES = {"jev_decide": DECISION_TOOL_NAME}
+TOOL_NAME_LIST_KEYS = ("always_keep_tools", "always_keep_recommend_tools")
+
+
+def upgrade_legacy_detail(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return ``value`` with pre-0.4.15 keys and tool names renamed."""
+
+    result = dict(value)
+    for old, new in LEGACY_DETAIL_KEYS.items():
+        if old in result:
+            old_value = result.pop(old)
+            result.setdefault(new, old_value)
+    for key in TOOL_NAME_LIST_KEYS:
+        names = result.get(key)
+        if isinstance(names, list) and any(
+            isinstance(name, str) and name in LEGACY_TOOL_NAMES for name in names
+        ):
+            renamed_names = [
+                LEGACY_TOOL_NAMES.get(name, name) if isinstance(name, str) else name
+                for name in names
+            ]
+            # Drop a duplicate created by the rename, keep everything else as-is.
+            seen: set[str] = set()
+            result[key] = [
+                name
+                for name in renamed_names
+                if not isinstance(name, str) or not (name in seen or seen.add(name))
+            ]
+    life = result.get("life")
+    integration = life.get("integration_settings") if isinstance(life, Mapping) else None
+    if isinstance(integration, Mapping) and any(
+        key in integration for key in LEGACY_INTEGRATION_KEYS
+    ):
+        result["life"] = {
+            **life,
+            "integration_settings": rename_legacy_integration(dict(integration)),
+        }
+    return result
 
 
 def _safe_error(error: BaseException) -> str:

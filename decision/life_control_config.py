@@ -72,9 +72,9 @@ def control_schema():
                 ),
                 "floor_threshold": _field(
                     "float",
-                    "保底联系时的 Jev 阈值",
+                    "保底联系时的决策阈值",
                     0.4,
-                    "超过最长间隔后不再跳过 Jev，只把三项阈值降到这里；Jev 调用失败时 15 分钟后重试。",
+                    "超过最长间隔后不再跳过决策，只把三项阈值降到这里；决策调用失败时 15 分钟后重试。",
                 ),
                 "response_window_minutes": _field("int", "主动消息回应观察期（分）", 120),
                 "adjustment_cooldown_minutes": _field("int", "积极互动自动调整间隔（分）", 360),
@@ -149,7 +149,7 @@ def control_schema():
                     "bool",
                     "按当天聊天选择切入角度",
                     True,
-                    "在同一次 Jev 判断里选择沿用原定意图、接着今天聊过的内容或分享当下生活，不额外调用模型。",
+                    "在同一次决策判断里选择沿用原定意图、接着今天聊过的内容或分享当下生活，不额外调用模型。",
                 ),
                 "opening_style_enable": _field(
                     "bool",

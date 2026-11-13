@@ -1,4 +1,4 @@
-# JEV 综合审计追踪清单
+# 决策综合审计追踪清单
 
 更新时间：2026-10-25（Asia/Shanghai）
 
@@ -16,13 +16,13 @@
 | 自动理解异步、默认空白名单、不唤醒不回复 | `main.py` `multimodal_observe_message`；`config.py` 默认值；`runtime.py` `observe` | `tests/test_multimodal_integration.py`、`test_multimodal_core.py` | 本地事件链通过；无真实平台外发 |
 | 工具独立开关、定位当前/历史附件、自定义指令/精读 | `decision/multimodal/tools.py`、`runtime.py`、`cache.py` | `tests/test_multimodal_core.py` 工具/缓存/会话隔离 | 本地调用链通过 |
 | 会话隔离、SingleFlight、自动/工具双模式协作与增量缓存 | `cache.py`；`runtime.py` `observe`/`understand`/`inject` | `tests/test_multimodal_runtime.py` 自动关闭仍索引、通用指令复用、特定问题增量调用、并发合并、目标隔离、媒体版本 | 本地验证实际 Provider 调用次数；不同会话、媒体版本、文件 target、模型、策略和分析深度严格隔离 |
-| JEV 与主 LLM 临时注入，不污染永久历史 | `main.py` `_media_placeholder`/`multimodal_prepare_request`；`runtime.py` `_append_text`；`life_agent.py` 历史保存 | `tests/test_life_native.py`、`test_multimodal_integration.py` | 本地请求与历史断言通过 |
+| 决策模型与主 LLM 临时注入，不污染永久历史 | `main.py` `_media_placeholder`/`multimodal_prepare_request`；`runtime.py` `_append_text`；`life_agent.py` 历史保存 | `tests/test_life_native.py`、`test_multimodal_integration.py` | 本地请求与历史断言通过 |
 | SSRF、大小、超时、取消、临时文件清理 | `multimodal/media.py` `_public_resolution`/`_PinnedResolver`；`preprocess.py` `run_command`；runtime 清理 | 集成 SSRF 测试、固定 DNS 解析器测试、FFmpeg 取消测试、原生上传取消测试 | 请求发送前以已校验地址绑定连接，禁用代理和重定向；本地公网/私网/DNS rebinding/取消通过；未对外部 URL 做真实下载 |
-| 手动发起遵守会话类型开关、名单、免打扰、额度、冷却、Jev | `life_runtime.py` `_attempt_unsolicited`/`can_commit`；`virtual_life/core/proactive.py`；`engine.py` `/生活 立即` | `tests/test_life_native.py`、`test_life_sleep_quiet.py`、`test_proactive_policy.py` | 本地真实事件 double 通过；未向生产会话发送 |
+| 手动发起遵守会话类型开关、名单、免打扰、额度、冷却、决策 | `life_runtime.py` `_attempt_unsolicited`/`can_commit`；`virtual_life/core/proactive.py`；`engine.py` `/生活 立即` | `tests/test_life_native.py`、`test_life_sleep_quiet.py`、`test_proactive_policy.py` | 本地真实事件 double 通过；未向生产会话发送 |
 | 日程生成不阻塞消息钩子，任务合并/取消 | `life_runtime.py` `record_incoming`/`_queue_ensure_scheduled`/`terminate` | `test_record_incoming_does_not_wait_for_schedule_generation` | 本地慢模型事件链通过 |
 | 主动媒体只使用明确计费账户 | `life_media.py` `_billing_event`；`life_config.py`；schema/README | `test_life_billing_fallback.py`、`test_life_media_billing.py` | 未配置账户安全拒绝；Decision 仅把固定身份传给 AIGen；真实金额、价格表达式、余额和视频实际秒数由 AIGen `billed_call` 统一结算；未产生真实付费媒体 |
 | 主动媒体每日额度按实际媒体单位且不超限 | `life_media.py` reservation/reconciliation；AIGen `aigen_completed_media_units` 协作扩展 | `test_life_media_capture.py` 预占超限、批量实际单位、部分失败、重载取消 | 先按本次最大请求原子预占，完成后按 AIGen 报告的实际照片张数/视频段数/音频段数结算；旧 AIGen 或替身无扩展时安全回退到请求数 |
-| Jev、模型、媒体、发送、平台离线故障分域 | `life_agent.py` 异常类型；`life_runtime.py` `_attempt_unsolicited` | `test_jev_and_platform_failures_have_distinct_runtime_state` | 本地故障注入通过 |
+| 决策、模型、媒体、发送、平台离线故障分域 | `life_agent.py` 异常类型；`life_runtime.py` `_attempt_unsolicited` | `test_decision_and_platform_failures_have_distinct_runtime_state` | 本地故障注入通过 |
 | 睡眠免打扰豁免默认关闭、跨午夜状态 | `life_runtime.py` `_quiet_exempt`；`virtual_life/schema.json`；持久化模型 | `test_life_sleep_quiet.py`、`test_life_midnight_split.py` | 本地状态/默认值通过 |
 | 重复触发、部分分段失败、会话更新/人格变化失效 | `life_runtime.py` delivery key；`life_agent.py` guarded send/history | `tests/test_life_native.py` 重复、部分发送、人格变化；`test_life_persistence.py` | 本地事件链通过 |
 | 生命周期恢复、插件热更新清理、重复定时任务避免 | `life_runtime.py` `initialize`/`terminate`；`virtual_life/core/storage.py` 原子保存 | `test_initialize_restores_cache_schedules_and_stops_only_own_jobs` | 本地生命周期通过；VPS 使用 AstrBot 单插件 reload 接口返回 HTTP 200，之后只读检查确认单个 AstrBot screen/Python 进程与服务端口正常 |
@@ -103,7 +103,7 @@ New API 插件可行性：rc.46 `meta.routes` 支持自定义原生路由、任�
 - 长视频各轮保留用户问题和抽帧上限，传递同一音轨结论；实测发现静音音轨被模型编造声音后，加入数字静音检测与“声音未验证”约束，并实际重新验证。
 - Gemini GenerateContent 排除 thought；Interactions 依据官方 `steps/model_output.content` schema 只接受 completed 的最终输出，空的最终输出不回用中间答案；incomplete、客户端工具要求和未知状态明确失败并取消。Key 不写入错误响应体、日志和 URL。
 - 多模态调用显式使用宿主 `request_max_retries=1`（支持该参数的 Provider），由 `mm_retries` 统一控制尝试次数，避免宿主默认五次与插件重试相乘。
-- OutputPro 以 UMO 与运行实例隔离状态，热重载清理；私聊 OutContext 保持空 group_id，避免被撤回/分段步骤当成群消息；初始化失败与单步骤退出失败不阻碍其他资源清理。Jev 拒绝 NaN 分数。
+- OutputPro 以 UMO 与运行实例隔离状态，热重载清理；私聊 OutContext 保持空 group_id，避免被撤回/分段步骤当成群消息；初始化失败与单步骤退出失败不阻碍其他资源清理。决策拒绝 NaN 分数。
 - AIGen 协作修复：Gemini 等不接受上游 `n` 的生图路线仍能处理逻辑数量 1–10；按单张调用现有 `_generate -> billed_call`，只应用一次工具冷却，实际成功数量累加，失败停止后续提交。原生支持批量的路线继续一次请求。
 
 真实验收材料与结果：
@@ -121,7 +121,7 @@ New API 插件可行性：rc.46 `meta.routes` 支持自定义原生路由、任�
 | 双模式与缓存 | 自动关闭仍索引/工具可读；自动开启并发工具；通用换说法；缺失事实追问；重复追问；跨 UMO | 按实际 HTTP 计数检查；并发一次、通用复用零次、增量一次、重复零次；其他会话不能召回 |
 | SSRF 网络对照 | 自有监听器仅绑定 127.0.0.1；DNS 首次公网、随后内网 | 修复路径内网收到 0 请求；旧式校验后重解析对照收到 1 请求；下载无临时文件泄漏 |
 | Office 隔离 | 沙箱内尝试访问宿主 /root/yiyin 与 dashboard | 目录不可见、网络不通；取消后转换目录清理 |
-| Jev | 实际 jev-latest 同次 noul/choice/score | 1 次实际调用；noul 0.88、choice red、score 1.96。最初探针遗漏 instructions 的 400 是验收脚本错误，已纠正 |
+| 决策 | 实际 decision-latest 同次 noul/choice/score | 1 次实际调用；noul 0.88、choice red、score 1.96。最初探针遗漏 instructions 的 400 是验收脚本错误，已纠正 |
 | 原生日程/关系生成 | 周一高中人格、校服、不运动/不喝咖啡；一个同班好友 | 实际 Gemini 生成通过结构校验，日程满足角色约束，关系草稿通过严格验证 |
 | 原生 Agent | 真实 AstrBot Builder/Runner + 真实 Gemini，捕获平台发送 | 回答 NATIVE-AGENT-7429、注入人格并保存历史；未向平台外发 |
 | 生图协作 | Decision→真实 AIGen→gemini-3.1-flash-image→Gemini 理解，绿色方块/黄色星形 | 实际返回并解码验证 30042 字节 JPEG，实际媒体单位 1；再次真实理解识别绿色正方形与黄色五角星。财务验证使用生产账本私有副本，该模型未产生内部收费订单，没有改生产资金；不据此宣称生产扣费已验证 |
@@ -194,7 +194,7 @@ API 证据位于 VPS `/root/astrbot_backups/decision_full_audit_20261025/contact
 | 40 天清理破坏“不限时间的最近四条”规则 | `life_ledger.py` 每个 UMO＋人格至少保留最新四条实际发送记录，其余保留原清理期限；90 天后仍可去重，不跨人格 |
 | 管理操作成功但并发读取导致状态刷新被跳过 | 控制操作捕获目标 UMO，成功后直接 inspect 当前目标；Playwright 模拟已有读取进行中，验证仍请求一次 inspect，未写生产配置 |
 
-审计覆盖 Jev/Tool/MCP/Skill/SubAgent 路由及 fail-open、消息接话、主动候选和额度、人格日程与长期阶段、时间任务与恢复、AIGen 包装及数量/费用边界、关系网 SQLite、输入多模态下载和预处理/缓存/SingleFlight/Office 区域、输出增强生命周期、WebUI 保存和热更新入口。已有对应回归均在全量测试中运行；本轮没有改动无关模块或宿主源码。不存在由测试数量推导绝对无缺陷的保证。
+审计覆盖决策/Tool/MCP/Skill/SubAgent 路由及 fail-open、消息接话、主动候选和额度、人格日程与长期阶段、时间任务与恢复、AIGen 包装及数量/费用边界、关系网 SQLite、输入多模态下载和预处理/缓存/SingleFlight/Office 区域、输出增强生命周期、WebUI 保存和热更新入口。已有对应回归均在全量测试中运行；本轮没有改动无关模块或宿主源码。不存在由测试数量推导绝对无缺陷的保证。
 
 本轮新增 `tests/test_audit_041.py` 行为回归，检查真实 SQLite 状态、实际 Provider 替身调用次数、取消和隔离。用基线实现替换相关控制器后，新回归中的 **10 项明确失败**（另有 1 项容错场景原本通过）；修复后通过。新增原生发送集成验证无关铺垫、平台拒绝、成功承诺三种情况；平台未确认时 Provider 核验次数不增加。
 
@@ -213,7 +213,7 @@ API 证据位于 VPS `/root/astrbot_backups/decision_full_audit_20261025/contact
 | UMO＋人格状态隔离 | `virtual_life/core/storage.py` 增加复合会话键和旧 `sessions.json` 迁移；`proactive.py`、`life_runtime.py`、`engine.py` 所有预算、未回复和上次主动读取都使用当前人格。旧状态只迁移到其记录的人格，不合并到新人格。 |
 | 关系阶段 | `life_contacts.py` 在有证据的来信、互动质量和明确偏好上维护有界关系分数，按配置周期向中性衰减；只作为主动消息分寸提示，不改变硬规则。 |
 | 主动内容多样性 | `recent_intents` 记录实际成功主动的有限类别；相同普通类别在冷却期内被抑制，话题跟进、睡眠唤醒、明确提醒和手动请求不被错误阻断。 |
-| 群聊对象感 | `life_runtime.py` 把最近明确 @／回复对象传给 Jev，并在生成提示中禁止无对象点名、私聊信息入群和凭空猜测成员。 |
+| 群聊对象感 | `life_runtime.py` 把最近明确 @／回复对象传给决策模型，并在生成提示中禁止无对象点名、私聊信息入群和凭空猜测成员。 |
 | 回复节奏 | `life_contacts.py` 只保存粗粒度平均响应时间和样本数，超过配置历史周期自动重新采样；提示只调整消息长度和分寸，不改变频率边界。 |
 | WebUI | `humanization_settings` 加入“拟人化节奏”卡片；常用四个开关和同类冷却集中在“联系与打扰”，衰减/样本周期保留在高级搜索；状态页显示关系阶段和回复节奏。 |
 | 其他审计修正 | OCR 缺少 Tesseract 可执行程序时同时给出系统安装命令和 `pip install pytesseract`，避免诊断信息不完整。 |

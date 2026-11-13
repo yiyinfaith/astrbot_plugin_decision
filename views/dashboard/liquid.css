@@ -384,3 +384,9 @@ textarea { min-height: 180px; resize: vertical; line-height: 1.55; font: 12px/1.
 .life-section-title { display: flex; align-items: baseline; gap: 10px; margin: 8px 4px 0; color: #e8f2ff; font-size: 16px; }
 .life-section-title small { color: #a9b6d4; font-size: 12px; font-weight: 400; }
 .usage-table{width:100%;border-collapse:collapse;font-size:13px}.usage-table th,.usage-table td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--line)}.usage-table th{color:var(--muted);font-weight:600}.usage-table td:not(:first-child),.usage-table th:not(:first-child){text-align:right;font-variant-numeric:tabular-nums}.life-timeline .life-record.sent strong{color:var(--green)}
+.fallback-list { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 6px; }
+.fallback-list li { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 5px 6px 5px 10px; border: 1px solid rgba(177, 215, 255, .2); border-radius: 12px; background: rgba(16, 30, 52, .45); }
+.fallback-order { flex: none; min-width: 18px; color: #9fb6d6; font-size: 12px; font-weight: 700; text-align: center; }
+.fallback-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: #e6eefb; }
+.fallback-actions { display: inline-flex; flex: none; gap: 4px; }
+.fallback-actions .button { min-width: 30px; padding: 4px 9px; }

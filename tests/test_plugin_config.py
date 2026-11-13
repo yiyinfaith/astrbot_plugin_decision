@@ -114,7 +114,7 @@ def host(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_life_control_gates_native_and_raw_media_tools_before_jev(host):
+async def test_life_control_gates_native_and_raw_media_tools_before_decision(host):
     from decision.life_config import life_defaults
 
     plugin = host.module.DecisionPlugin(host.context, host.config)
@@ -242,6 +242,7 @@ def test_life_job_limit_evicts_a_finished_job_first(host):
 def test_native_schema_contains_only_globals_and_module_switches(host):
     assert set(host.schema) == {
         "decision_provider_id",
+        "fallback_decision_provider_ids",
         "retries",
         "retry_backoff_seconds",
         "model_context_tokens",
@@ -251,7 +252,7 @@ def test_native_schema_contains_only_globals_and_module_switches(host):
         "proactive_reply_enabled",
         "conversation_flow_enabled",
     }
-    # The JEV Provider lives only in the native config, so nothing overlaps.
+    # The decision Provider lives only in the native config, so nothing overlaps.
     assert (host.schema.keys() & host.module.DETAIL_DEFAULTS.keys()) == set()
 
 
@@ -260,11 +261,11 @@ async def test_save_reload_keeps_native_config_clean_and_webui_settings_intact(h
     original = copy.deepcopy(host.config)
     plugin = host.module.DecisionPlugin(host.context, host.config)
     host.body.update(
-        always_keep_tools=["jev_decide"],
+        always_keep_tools=["decision_judge"],
         always_keep_recommend_tools=[],
         always_keep_subagents=["agent_alpha"],
         always_keep_recommend_subagents=[],
-        jev_pre_prompt="custom policy",
+        decision_pre_prompt="custom policy",
         main_llm_post_prompt="",
         tool_decision_enabled=False,
         subagent_decision_enabled=True,
@@ -291,7 +292,7 @@ async def test_save_reload_keeps_native_config_clean_and_webui_settings_intact(h
     assert (persisted.keys() & host.schema.keys()) == set()
     reloaded = host.module.DecisionPlugin(host.context, host.config)
     settings = await reloaded.page_settings()
-    assert settings["jev_pre_prompt"] == "custom policy"
+    assert settings["decision_pre_prompt"] == "custom policy"
     assert settings["main_llm_post_prompt"] == ""
     assert settings["tool_decision_enabled"] is False
     assert settings["subagent_decision_enabled"] is True
@@ -299,7 +300,7 @@ async def test_save_reload_keeps_native_config_clean_and_webui_settings_intact(h
     assert settings["proactive"]["cooldown_seconds"] == 25.0
     assert settings["dialogue_enhancement"]["conversation_flow_analysis_enabled"] is False
     assert settings["proactive"]["conversation_flow_window"] == 30
-    assert settings["always_keep_tools"] == ["jev_decide"]
+    assert settings["always_keep_tools"] == ["decision_judge"]
     assert settings["always_keep_subagents"] == ["agent_alpha"]
     assert host.config == original
 
@@ -325,7 +326,7 @@ async def test_provider_save_failure_rolls_back_detail_and_native_selection(host
 @pytest.mark.asyncio
 async def test_removed_auto_switch_is_dropped_on_load_save_and_reload(host):
     stored = {
-        "jev_pre_prompt": "keep my policy",
+        "decision_pre_prompt": "keep my policy",
         "proactive_whitelist": ["keep-session"],
         "multimodal": {
             "mm_enabled": True,
@@ -348,7 +349,7 @@ async def test_removed_auto_switch_is_dropped_on_load_save_and_reload(host):
     assert result.get("saved") is True, result
     saved = json.loads(host.path.read_text(encoding="utf-8"))
     assert "mm_auto_enabled" not in saved["multimodal"]
-    assert saved["jev_pre_prompt"] == stored["jev_pre_prompt"]
+    assert saved["decision_pre_prompt"] == stored["decision_pre_prompt"]
     assert saved["proactive_whitelist"] == stored["proactive_whitelist"]
     for key, value in stored["multimodal"].items():
         if key != "mm_auto_enabled":
@@ -395,7 +396,7 @@ async def test_gateway_stream_compat_saves_without_replacing_model_or_other_poli
 @pytest.mark.asyncio
 async def test_failed_write_does_not_change_live_policy_history_or_previous_file(host, monkeypatch):
     plugin = host.module.DecisionPlugin(host.context, host.config)
-    host.body.update(always_keep_tools=["jev_decide"], tool_filter_enabled=False)
+    host.body.update(always_keep_tools=["decision_judge"], tool_filter_enabled=False)
     assert (await plugin.page_save_settings())["saved"] is True
     before_file = host.path.read_bytes()
     before_settings = copy.deepcopy(plugin._detail_settings)
@@ -422,14 +423,14 @@ async def test_detail_file_cannot_override_globals_or_module_switches(host):
     host.path.parent.mkdir(parents=True)
     host.path.write_text(
         json.dumps(
-            {"model": "wrong-model", "proactive_reply_enabled": True, "jev_pre_prompt": "my policy"}
+            {"model": "wrong-model", "proactive_reply_enabled": True, "decision_pre_prompt": "my policy"}
         ),
         encoding="utf-8",
     )
     plugin = host.module.DecisionPlugin(host.context, host.config)
     assert plugin._setting("model") is None
     settings = await plugin.page_settings()
-    assert settings["jev_pre_prompt"] == "my policy"
+    assert settings["decision_pre_prompt"] == "my policy"
     assert settings["proactive_reply_enabled"] is False
     host.config["proactive_reply_enabled"] = True
     assert (await plugin.page_settings())["proactive_reply_enabled"] is True
@@ -439,14 +440,14 @@ async def test_detail_file_cannot_override_globals_or_module_switches(host):
 def test_native_provider_selection_falls_back_only_when_native_value_is_empty(host):
     host.path.parent.mkdir(parents=True)
     host.path.write_text(
-        json.dumps({"decision_provider_id": "legacy-jev"}),
+        json.dumps({"decision_provider_id": "legacy-decision"}),
         encoding="utf-8",
     )
     plugin = host.module.DecisionPlugin(host.context, host.config)
-    assert plugin._setting("decision_provider_id") == "legacy-jev"
+    assert plugin._setting("decision_provider_id") == "legacy-decision"
 
-    host.config["decision_provider_id"] = "native-jev"
-    assert plugin._setting("decision_provider_id") == "native-jev"
+    host.config["decision_provider_id"] = "native-decision"
+    assert plugin._setting("decision_provider_id") == "native-decision"
 
     host.config["decision_provider_id"] = ""
     plugin._detail_settings["decision_provider_id"] = ""
@@ -457,31 +458,31 @@ def test_native_provider_schema_uses_live_decision_provider_ids(host):
     class NativeProvider:
         def meta(self):
             return SimpleNamespace(
-                id="production-jev",
-                model="jev-live",
+                id="production-decision",
+                model="decision-live",
                 type="system_one_decision",
             )
 
     host.config.schema = host.schema
     host.context.provider_manager = SimpleNamespace(decision_provider_insts=[NativeProvider()])
     host.module.DecisionPlugin(host.context, host.config)
-    assert host.schema["decision_provider_id"]["options"] == ["", "production-jev"]
+    assert host.schema["decision_provider_id"]["options"] == ["", "production-decision"]
     assert host.schema["decision_provider_id"]["labels"] == [
         "使用 AstrBot 默认判断 Provider",
-        "production-jev · jev-live · system_one_decision",
+        "production-decision · decision-live · system_one_decision",
     ]
 
 
 def test_legacy_live_detail_keys_are_preserved_then_removed_from_native_config(host):
-    host.config.update(jev_pre_prompt="legacy policy", proactive_whitelist=["group-1"])
+    host.config.update(decision_pre_prompt="legacy policy", proactive_whitelist=["group-1"])
     plugin = host.module.DecisionPlugin(host.context, host.config)
     assert set(host.config) == set(host.schema)
-    assert plugin._setting("jev_pre_prompt") == "legacy policy"
+    assert plugin._setting("decision_pre_prompt") == "legacy policy"
     assert json.loads(host.path.read_text(encoding="utf-8"))["proactive_whitelist"] == ["group-1"]
 
 
 def test_legacy_migration_keeps_native_values_when_disk_write_fails(host, monkeypatch):
-    host.config.update(jev_pre_prompt="legacy policy", proactive_whitelist=["group-1"])
+    host.config.update(decision_pre_prompt="legacy policy", proactive_whitelist=["group-1"])
 
     def deny_replace(*args):
         raise PermissionError("simulated migration failure")
@@ -489,9 +490,9 @@ def test_legacy_migration_keeps_native_values_when_disk_write_fails(host, monkey
     monkeypatch.setattr(host.module.os, "replace", deny_replace)
     plugin = host.module.DecisionPlugin(host.context, host.config)
 
-    assert host.config["jev_pre_prompt"] == "legacy policy"
+    assert host.config["decision_pre_prompt"] == "legacy policy"
     assert host.config["proactive_whitelist"] == ["group-1"]
-    assert plugin._setting("jev_pre_prompt") == "legacy policy"
+    assert plugin._setting("decision_pre_prompt") == "legacy policy"
 
 
 @pytest.mark.asyncio
@@ -499,16 +500,16 @@ async def test_mapping_tool_manager_is_supported_by_page_and_save(host):
     manager = host.context.get_llm_tool_manager()
     agent = manager.func_list[0]
     plugin = host.module.DecisionPlugin(host.context, host.config)
-    manager.func_list = {agent.name: agent, "jev_decide": plugin._decision_tool}
+    manager.func_list = {agent.name: agent, "decision_judge": plugin._decision_tool}
 
     listed = (await plugin.page_tools())["tools"]
     assert [tool["name"] for tool in listed if tool["handoff"]] == [agent.name]
-    decision = next(tool for tool in listed if tool["name"] == "jev_decide")
+    decision = next(tool for tool in listed if tool["name"] == "decision_judge")
     assert decision["builtin"] is False
     assert decision["origin_display"] == "判断决策综合插件"
 
     host.body.update(
-        always_keep_tools=["jev_decide"],
+        always_keep_tools=["decision_judge"],
         always_keep_subagents=[agent.name],
         always_keep_recommend_subagents=[agent.name],
     )
@@ -593,7 +594,7 @@ async def test_tools_scope_is_page_only_and_persists_with_empty_list_semantics(h
 
 
 @pytest.mark.asyncio
-async def test_tools_scope_bypass_keeps_request_untouched_and_skips_jev(host, monkeypatch):
+async def test_tools_scope_bypass_keeps_request_untouched_and_skips_decision(host, monkeypatch):
     manager = host.context.get_llm_tool_manager()
     ordinary = SimpleNamespace(name="ordinary_tool", description="ordinary", active=True)
     manager.func_list.append(ordinary)
@@ -606,7 +607,7 @@ async def test_tools_scope_bypass_keeps_request_untouched_and_skips_jev(host, mo
             "always_keep_tools_customized": True,
         }
     )
-    evaluate = AsyncMock(side_effect=AssertionError("out-of-scope must not call Jev"))
+    evaluate = AsyncMock(side_effect=AssertionError("out-of-scope must not call 决策"))
     monkeypatch.setattr(plugin, "_evaluate", evaluate)
     toolset = SimpleNamespace(
         tools=[ordinary], get_tool=lambda name: ordinary if name == ordinary.name else None
@@ -899,13 +900,13 @@ async def test_dynamic_subagent_is_listed_saved_and_restored_without_global_regi
     assert [tool["name"] for tool in agents] == [agent.name]
     assert agents[0]["origin_display"] == "AstrBot SubAgent"
     host.body.update(
-        always_keep_tools=["jev_decide", agent.name],
-        always_keep_subagents=[agent.name, "jev_decide"],
-        always_keep_recommend_subagents=[agent.name, "jev_decide"],
+        always_keep_tools=["decision_judge", agent.name],
+        always_keep_subagents=[agent.name, "decision_judge"],
+        always_keep_recommend_subagents=[agent.name, "decision_judge"],
     )
     result = await plugin.page_save_settings()
     assert result["saved"] is True
-    assert result["always_keep_tools"] == ["jev_decide"]
+    assert result["always_keep_tools"] == ["decision_judge"]
     assert result["always_keep_subagents"] == [agent.name]
     assert result["always_keep_recommend_subagents"] == [agent.name]
     reloaded = host.module.DecisionPlugin(host.context, host.config)
@@ -960,7 +961,7 @@ async def test_saved_dynamic_subagent_reaches_request_routing(host, monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_both_filters_off_skip_jev_keep_all_and_use_manual_recommendations(host, monkeypatch):
+async def test_both_filters_off_skip_decision_keep_all_and_use_manual_recommendations(host, monkeypatch):
     manager = host.context.get_llm_tool_manager()
     agent = manager.func_list[0]
     ordinary = SimpleNamespace(name="ordinary_tool", description="ordinary", active=True)
@@ -981,7 +982,7 @@ async def test_both_filters_off_skip_jev_keep_all_and_use_manual_recommendations
             "main_llm_post_prompt": "Tools={tools}; SubAgents={subagents}",
         }
     )
-    evaluate = AsyncMock(side_effect=AssertionError("Jev must not be called"))
+    evaluate = AsyncMock(side_effect=AssertionError("决策 must not be called"))
     monkeypatch.setattr(plugin, "_evaluate", evaluate)
     tools = [ordinary, agent, plugin._decision_tool]
     toolset = SimpleNamespace(tools=tools)
@@ -999,7 +1000,7 @@ async def test_both_filters_off_skip_jev_keep_all_and_use_manual_recommendations
 
 
 @pytest.mark.asyncio
-async def test_only_enabled_category_is_sent_to_jev(host, monkeypatch):
+async def test_only_enabled_category_is_sent_to_decision(host, monkeypatch):
     manager = host.context.get_llm_tool_manager()
     agent = manager.func_list[0]
     ordinary = SimpleNamespace(name="ordinary_tool", description="ordinary", active=True)
@@ -1101,7 +1102,7 @@ async def test_category_decision_and_filter_switch_matrix(
 
     candidate = ordinary if category == "tool" else agent
     candidate_name = candidate.name
-    # A filtered category keeps only manual/Jev selections.  An unfiltered
+    # A filtered category keeps only manual/决策 selections.  An unfiltered
     # category keeps every active candidate regardless of its decision switch.
     assert (candidate in req.func_tool.tools) is (not filter_enabled or decision_enabled)
     assert (candidate_name in req.system_prompt) is decision_enabled
@@ -1112,7 +1113,7 @@ async def test_category_decision_and_filter_switch_matrix(
 
 
 @pytest.mark.asyncio
-async def test_enabled_tools_and_subagents_share_one_jev_request(host, monkeypatch):
+async def test_enabled_tools_and_subagents_share_one_decision_request(host, monkeypatch):
     """Both candidate sets are sent together; batching is only for context overflow."""
 
     manager = host.context.get_llm_tool_manager()
@@ -1159,7 +1160,7 @@ async def test_enabled_tools_and_subagents_share_one_jev_request(host, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_mcp_is_listed_separately_and_joins_the_single_jev_request(host, monkeypatch):
+async def test_mcp_is_listed_separately_and_joins_the_single_decision_request(host, monkeypatch):
     manager = host.context.get_llm_tool_manager()
     mcp_tool = SimpleNamespace(
         name="filesystem_read",
@@ -1311,8 +1312,8 @@ async def test_skill_is_listed_saved_and_decided_in_the_same_request(host, monke
 
 
 @pytest.mark.asyncio
-async def test_jev_failure_keeps_manual_recommendations(host, monkeypatch):
-    """A fail-open Jev request must not suppress manual recommendations."""
+async def test_decision_failure_keeps_manual_recommendations(host, monkeypatch):
+    """A fail-open decision request must not suppress manual recommendations."""
 
     manager = host.context.get_llm_tool_manager()
     agent = manager.func_list[0]
@@ -1336,7 +1337,7 @@ async def test_jev_failure_keeps_manual_recommendations(host, monkeypatch):
     )
 
     async def fail(*, state, questions):
-        raise RuntimeError("simulated Jev failure")
+        raise RuntimeError("simulated 决策 failure")
 
     monkeypatch.setattr(plugin, "_evaluate", fail)
     tools = [ordinary, agent, plugin._decision_tool]
@@ -1355,7 +1356,7 @@ async def test_jev_failure_keeps_manual_recommendations(host, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_jev_failure_respects_unfiltered_tools_category(host, monkeypatch):
+async def test_decision_failure_respects_unfiltered_tools_category(host, monkeypatch):
     ordinary = SimpleNamespace(name="ordinary_tool", description="ordinary", active=True)
     manager = host.context.get_llm_tool_manager()
     manager.func_list.append(ordinary)
@@ -1369,7 +1370,7 @@ async def test_jev_failure_respects_unfiltered_tools_category(host, monkeypatch)
             "subagent_decision_enabled": False,
         }
     )
-    monkeypatch.setattr(plugin, "_evaluate", AsyncMock(side_effect=RuntimeError("jev down")))
+    monkeypatch.setattr(plugin, "_evaluate", AsyncMock(side_effect=RuntimeError("decision down")))
     tools = [ordinary, plugin._decision_tool]
     toolset = SimpleNamespace(tools=tools)
     toolset.get_tool = lambda name: next(
@@ -1383,14 +1384,14 @@ async def test_jev_failure_respects_unfiltered_tools_category(host, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_matched_command_bypasses_jev_routing(host, monkeypatch):
+async def test_matched_command_bypasses_decision_routing(host, monkeypatch):
     """A native or plugin command is handled directly by AstrBot's pipeline."""
 
     manager = host.context.get_llm_tool_manager()
     ordinary = SimpleNamespace(name="ordinary_tool", description="ordinary", active=True)
     manager.func_list.append(ordinary)
     plugin = host.module.DecisionPlugin(host.context, host.config)
-    evaluate = AsyncMock(side_effect=AssertionError("matched commands must not call Jev"))
+    evaluate = AsyncMock(side_effect=AssertionError("matched commands must not call 决策"))
     monkeypatch.setattr(plugin, "_evaluate", evaluate)
     tools = [ordinary, plugin._decision_tool]
     toolset = SimpleNamespace(tools=tools)
@@ -1417,7 +1418,7 @@ async def test_virtual_life_save_reload_only_in_data(host):
     life["appearance_settings"]["description"] = "white hair red eyes"
     life["friend_settings"]["session_list"] = ["qq:FriendMessage:123"]
     host.body.update(
-        life=life, message_interjection_enabled=False, always_keep_tools=["jev_decide"]
+        life=life, message_interjection_enabled=False, always_keep_tools=["decision_judge"]
     )
     assert (await plugin.page_save_settings())["saved"] is True
     reloaded = host.module.DecisionPlugin(host.context, host.config)
@@ -1426,7 +1427,7 @@ async def test_virtual_life_save_reload_only_in_data(host):
     assert not settings["message_interjection_enabled"]
     assert "life" not in host.config
     assert not host.path.is_relative_to(ROOT)
-    host.body["life"]["integration_settings"]["jev_threshold"] = 2
+    host.body["life"]["integration_settings"]["decision_threshold"] = 2
     before = host.path.read_bytes()
     assert (await plugin.page_save_settings())["status_code"] == 400
     assert host.path.read_bytes() == before
@@ -1552,14 +1553,14 @@ async def test_clearing_native_provider_is_not_undone_by_a_dashboard_copy(host):
 def test_startup_drops_dashboard_provider_copy_when_native_is_set(host):
     host.path.parent.mkdir(parents=True, exist_ok=True)
     host.path.write_text(
-        json.dumps({"decision_provider_id": "provider-x", "jev_pre_prompt": "keep"}),
+        json.dumps({"decision_provider_id": "provider-x", "decision_pre_prompt": "keep"}),
         encoding="utf-8",
     )
     host.config["decision_provider_id"] = "provider-x"
     plugin = host.module.DecisionPlugin(host.context, host.config)
     persisted = json.loads(host.path.read_text(encoding="utf-8"))
     assert "decision_provider_id" not in persisted
-    assert persisted["jev_pre_prompt"] == "keep"
+    assert persisted["decision_pre_prompt"] == "keep"
     host.config["decision_provider_id"] = ""
     assert plugin._setting("decision_provider_id", "") == ""
 
@@ -1589,7 +1590,7 @@ async def test_saving_unchanged_life_settings_keeps_the_running_life_runtime(hos
     restart = AsyncMock()
     monkeypatch.setattr(plugin, "_configure_life_runtime", restart)
 
-    host.body.update(always_keep_tools=["jev_decide"], life=copy.deepcopy(current))
+    host.body.update(always_keep_tools=["decision_judge"], life=copy.deepcopy(current))
     assert (await plugin.page_save_settings())["saved"] is True
     restart.assert_not_awaited()
 
@@ -1726,3 +1727,167 @@ async def test_explicit_summon_goes_to_the_native_agent_without_the_proactive_bu
     assert plugin.proactive.allow_reply(
         session, cooldown_seconds=60, window_seconds=600, max_replies=1
     )
+
+
+def _native_decision_providers(*ids):
+    class NativeProvider:
+        def __init__(self, provider_id):
+            self.provider_id = provider_id
+
+        def meta(self):
+            return SimpleNamespace(id=self.provider_id, model="m", type="system_one_decision")
+
+    return SimpleNamespace(decision_provider_insts=[NativeProvider(item) for item in ids])
+
+
+def test_fallback_schema_lists_live_providers_and_keeps_stale_saved_ones(host):
+    host.config.schema = host.schema
+    host.config["fallback_decision_provider_ids"] = ["gone", "b"]
+    host.context.provider_manager = _native_decision_providers("a", "b")
+    host.module.DecisionPlugin(host.context, host.config)
+    field = host.schema["fallback_decision_provider_ids"]
+    assert field["options"] == ["a", "b", "gone"]
+    assert field["labels"][-1] == "gone（不可用）"
+    assert len(field["subtitles"]) == 3
+    assert host.schema["decision_provider_id"]["options"] == ["", "a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_fallback_order_is_saved_to_the_native_config_and_applied(host):
+    host.config.save_config = Mock()
+    host.context.provider_manager = _native_decision_providers("a", "b", "c")
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    plugin.provider = host.module.AstrBotDecisionProvider(host.context)
+    plugin.provider._cooldown_until["a"] = float("inf")
+    host.body.update(always_keep_tools=[], fallback_decision_provider_ids=["c", " a ", "c"])
+    result = await plugin.page_save_settings()
+    assert result["saved"] is True
+    assert result["fallback_decision_provider_ids"] == ["c", "a"]
+    assert host.config["fallback_decision_provider_ids"] == ["c", "a"]
+    assert plugin.provider.fallback_provider_ids == ["c", "a"]
+    # A new selection starts without the failures of the old one.
+    assert plugin.provider._cooldown_until == {}
+    host.config.save_config.assert_called()
+    persisted = json.loads(host.path.read_text(encoding="utf-8"))
+    assert "fallback_decision_provider_ids" not in persisted
+    assert (await plugin.page_settings())["fallback_decision_provider_ids"] == ["c", "a"]
+
+
+@pytest.mark.asyncio
+async def test_fallback_rejects_unknown_providers_but_keeps_saved_stale_ones(host):
+    host.config.save_config = Mock()
+    host.config["fallback_decision_provider_ids"] = ["gone"]
+    host.context.provider_manager = _native_decision_providers("a")
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+
+    host.body.update(always_keep_tools=[], fallback_decision_provider_ids=["a", "typo"])
+    rejected = await plugin.page_save_settings()
+    assert rejected["status_code"] == 400 and "typo" in rejected["error"]
+    assert host.config["fallback_decision_provider_ids"] == ["gone"]
+
+    host.body.update(fallback_decision_provider_ids=["a", "gone"])
+    assert (await plugin.page_save_settings())["saved"] is True
+    assert host.config["fallback_decision_provider_ids"] == ["a", "gone"]
+
+    for bad in ("a", [1], ["x"] * 21):
+        host.body.update(fallback_decision_provider_ids=bad)
+        assert (await plugin.page_save_settings())["status_code"] == 400
+
+
+@pytest.mark.asyncio
+async def test_failed_native_write_rolls_back_both_provider_fields(host):
+    host.config["decision_provider_id"] = "a"
+    host.config["fallback_decision_provider_ids"] = ["b"]
+    host.config.save_config = Mock(side_effect=OSError("simulated native write failure"))
+    host.context.provider_manager = _native_decision_providers("a", "b", "c")
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    host.body.update(
+        always_keep_tools=[], decision_provider_id="c", fallback_decision_provider_ids=["a", "b"]
+    )
+    result = await plugin.page_save_settings()
+    assert result["status_code"] == 500
+    assert host.config["decision_provider_id"] == "a"
+    assert host.config["fallback_decision_provider_ids"] == ["b"]
+
+
+@pytest.mark.asyncio
+async def test_initialized_provider_uses_saved_fallbacks(host):
+    host.config["fallback_decision_provider_ids"] = ["b", "b", "a"]
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    plugin._configure_output_runtime = AsyncMock()
+    plugin._ensure_multimodal = AsyncMock()
+    plugin._configure_life_runtime = AsyncMock()
+    await plugin.initialize()
+    assert plugin.provider.fallback_provider_ids == ["b", "a"]
+    assert plugin.provider.fallback_logger == plugin._log_provider_fallback
+
+
+def test_pre_0415_prompt_and_tool_names_are_migrated(host):
+    host.path.parent.mkdir(parents=True, exist_ok=True)
+    host.path.write_text(
+        json.dumps(
+            {
+                "jev_pre_prompt": "旧的判断前提示词",
+                "always_keep_tools": ["web_search", "jev_decide"],
+                "always_keep_recommend_tools": ["jev_decide"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    assert plugin._setting("decision_pre_prompt") == "旧的判断前提示词"
+    assert plugin._setting("always_keep_tools") == ["web_search", "decision_judge"]
+    assert plugin._setting("always_keep_recommend_tools") == ["decision_judge"]
+    # Written back once, so the old names do not linger on disk.
+    persisted = json.loads(host.path.read_text(encoding="utf-8"))
+    assert "jev_pre_prompt" not in persisted
+    assert persisted["decision_pre_prompt"] == "旧的判断前提示词"
+    assert persisted["always_keep_tools"] == ["web_search", "decision_judge"]
+
+
+def test_pre_0415_life_thresholds_in_the_settings_file_are_renamed(host):
+    host.path.parent.mkdir(parents=True, exist_ok=True)
+    host.path.write_text(
+        json.dumps({"life": {"integration_settings": {"jev_threshold": 0.9, "quiet_start": "23:00"}}}),
+        encoding="utf-8",
+    )
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    integration = plugin._setting("life")["integration_settings"]
+    assert integration == {"decision_threshold": 0.9, "quiet_start": "23:00"}
+    persisted = json.loads(host.path.read_text(encoding="utf-8"))
+    assert persisted["life"]["integration_settings"]["decision_threshold"] == 0.9
+
+
+@pytest.mark.asyncio
+async def test_usage_counts_every_request_sent_for_one_decision(host, monkeypatch):
+    from decision.models import DecisionProviderError, DecisionResult
+
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    plugin._ready = True
+    recorded = []
+    monkeypatch.setattr(
+        host.module.usage_meter,
+        "record",
+        lambda label, **kw: recorded.append((kw.get("ok", True), kw.get("count", 1))),
+    )
+    plugin.provider = SimpleNamespace(
+        evaluate=AsyncMock(return_value=DecisionResult(answers={}, provider_id="b", attempts=3))
+    )
+    await plugin._evaluate(state="s", questions={})
+    assert recorded == [(False, 2), (True, 1)]
+
+    error = DecisionProviderError("down")
+    error.attempts = 2
+    plugin.provider = SimpleNamespace(evaluate=AsyncMock(side_effect=error))
+    recorded.clear()
+    with pytest.raises(DecisionProviderError):
+        await plugin._evaluate(state="s", questions={})
+    assert recorded == [(False, 2)]
+
+
+def test_pre_0415_prompt_in_native_config_is_migrated_and_removed(host):
+    host.config["jev_pre_prompt"] = "native legacy"
+    plugin = host.module.DecisionPlugin(host.context, host.config)
+    assert plugin._setting("decision_pre_prompt") == "native legacy"
+    assert "jev_pre_prompt" not in host.config
+    assert json.loads(host.path.read_text(encoding="utf-8"))["decision_pre_prompt"] == "native legacy"

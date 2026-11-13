@@ -332,3 +332,9 @@ html #network-shell { --bg: var(--theme-bg); --surface: var(--theme-surface); --
 .usage-table th { color: var(--muted); font-weight: 600; }
 .usage-table td:not(:first-child), .usage-table th:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
 .life-timeline .life-record.sent strong { color: var(--primary); }
+.fallback-list { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 6px; }
+.fallback-list li { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 4px 6px 4px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.fallback-order { flex: none; min-width: 18px; color: var(--muted); font-size: 12px; font-weight: 700; text-align: center; }
+.fallback-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.fallback-actions { display: inline-flex; flex: none; gap: 4px; }
+.fallback-actions .button { min-height: 28px; min-width: 28px; padding: 2px 8px; }

@@ -1,4 +1,4 @@
-"""Jev-controlled Virtual Life runtime hosted by DecisionPlugin."""
+"""Decision-controlled Virtual Life runtime hosted by DecisionPlugin."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from .virtual_life.engine import VirtualLifeBase, temporary_text
 # A candidate postponed because the person is rarely online at this hour.
 USUALLY_AWAY = "user usually away"
 # Outcomes whose own record is already written deeper in the delivery path.
-AUDITED_REASONS = {"sent", "Jev 未通过或候选已失效", "request failed", "platform send failed"}
+AUDITED_REASONS = {"sent", "决策未通过或候选已失效", "request failed", "platform send failed"}
 GATE_LABELS = {
     "disabled": "主动发起未开启",
     "quiet hours": "免打扰时段，30 分钟后再看",
@@ -54,7 +54,7 @@ WOKEN_NOTE_SECONDS = 8 * 3600
 CHAT_WEATHER_TIMEOUT = 6.0
 WEATHER_LOOKUP_LIMIT = 30.0
 WEATHER_FAILURE_BACKOFF = 300.0
-JEV_LABELS = {"initiate": "是否自然", "relevant": "话题价值", "timing": "时机"}
+DECISION_LABELS = {"initiate": "是否自然", "relevant": "话题价值", "timing": "时机"}
 ANGLE_CRITERIA = {
     "planned": "Follow the planned intent of this candidate.",
     "today": "Pick up something actually said in today's chat history instead.",
@@ -93,7 +93,7 @@ def fit_life_state(state, questions, budget):
         return json.dumps({**data, "history": history[-size:] if size else ""}, ensure_ascii=False)
 
     if estimate_request_tokens(encode(0), questions) >= budget:
-        raise ValueError("主动发起固定提示词超过 Jev 上下文，请缩短提示词")
+        raise ValueError("主动发起固定提示词超过决策上下文，请缩短提示词")
     low, high = 0, len(history)
     while low < high:
         mid = (low + high + 1) // 2
@@ -147,7 +147,7 @@ class CurrentPersonaResolver:
         )
 
 
-class JevLifePolicy(ProactivePolicy):
+class DecisionLifePolicy(ProactivePolicy):
     """Keep unanswered counts across midnight and persona changes."""
 
     def ensure_state(self, umo, persona_id, plan, now):
@@ -183,7 +183,7 @@ class LifeRuntime(VirtualLifeBase):
             / "virtual_life",
         )
         self.personas = CurrentPersonaResolver(self.context)
-        self.policy = JevLifePolicy(settings, self.storage, self.timezone)
+        self.policy = DecisionLifePolicy(settings, self.storage, self.timezone)
         # The appearance description is stored per persona next to its reference
         # images, so the plan generator resolves it through this hook.
         self.plan_generator.appearance_resolver = self._persona_appearance
@@ -441,7 +441,7 @@ class LifeRuntime(VirtualLifeBase):
                                 await self.ideas.activity_thought(umo, persona, plan)
                             if self.config["adaptive_settings"]["enable"]:
                                 allowed, _ = self.contacts.gate(umo, persona.id, now)
-                                # Failed model/Jev calls must not be retried every
+                                # Failed model/decision calls must not be retried every
                                 # tick. One retry per 15 min, not a paid busy loop.
                                 key = (umo, persona.id)
                                 if (
@@ -923,7 +923,7 @@ class LifeRuntime(VirtualLifeBase):
                 finally:
                     self._delivery_contact_ids.pop(umo, None)
                     self._delivery_persona_ids.pop(umo, None)
-                return delivered, "sent" if delivered else "Jev 未通过或候选已失效"
+                return delivered, "sent" if delivered else "决策未通过或候选已失效"
         except PlatformUnavailableError as exc:
             failures += 1
             pause = self.config["integration_settings"]["offline_retry_minutes"] * 60
@@ -966,8 +966,8 @@ class LifeRuntime(VirtualLifeBase):
             stage = (
                 "已发送"
                 if sent
-                else "Jev 判断"
-                if reason.startswith("Jev")
+                else "决策判断"
+                if reason.startswith("决策")
                 else "生成与发送"
                 if context
                 else "后台"
@@ -1023,7 +1023,7 @@ class LifeRuntime(VirtualLifeBase):
                 observed, ensure_ascii=False
             )
         state = {
-            "policy": settings["jev_prompt"],
+            "policy": settings["decision_prompt"],
             "time": now.isoformat(),
             "intent": intent,
             "activity": current.activity if current else "",
@@ -1085,18 +1085,18 @@ class LifeRuntime(VirtualLifeBase):
             )
         except Exception as exc:
             if floor_due:
-                # The floor only lowers the bar; it never sends without Jev.
+                # The floor only lowers the bar; it never sends without a decision.
                 self._schedule_idle(umo, run_at=now + timedelta(minutes=15))
                 self.record_audit(
-                    umo, False, f"Jev 判断失败，保底联系 15 分钟后重试：{str(exc)[:100]}"
+                    umo, False, f"决策判断失败，保底联系 15 分钟后重试：{str(exc)[:100]}"
                 )
             else:
-                self.record_audit(umo, False, f"Jev 判断失败：{str(exc)[:100]}")
+                self.record_audit(umo, False, f"决策判断失败：{str(exc)[:100]}")
             return False
         thresholds = {
-            "initiate": settings["jev_threshold"],
-            "relevant": settings["jev_relevant_threshold"],
-            "timing": settings["jev_timing_threshold"],
+            "initiate": settings["decision_threshold"],
+            "relevant": settings["decision_relevant_threshold"],
+            "timing": settings["decision_timing_threshold"],
         }
         if floor_due:
             floor = self.config["adaptive_settings"]["floor_threshold"]
@@ -1112,9 +1112,9 @@ class LifeRuntime(VirtualLifeBase):
             self.record_audit(
                 umo,
                 False,
-                "Jev 未通过，"
+                "决策未通过，"
                 + "，".join(
-                    f"{JEV_LABELS[key]} {scores[key]}/{thresholds[key]}" for key in thresholds
+                    f"{DECISION_LABELS[key]} {scores[key]}/{thresholds[key]}" for key in thresholds
                 )
                 + ("（保底联系）" if floor_due else ""),
             )
@@ -1238,7 +1238,7 @@ class LifeRuntime(VirtualLifeBase):
         if opening:
             detail += f"；开场：{OPENING_LABELS[opening]}"
         self.record_audit(
-            umo, sent, f"Jev 通过，{detail}" if sent else "生成期间会话更新或消息未发送"
+            umo, sent, f"决策通过，{detail}" if sent else "生成期间会话更新或消息未发送"
         )
         return sent
 

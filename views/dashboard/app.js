@@ -13,7 +13,7 @@ async function waitForBridge(timeoutMs = 5000) {
 }
 // The liquid-glass theme is optional. While it is off, neither the WebGL
 // library nor liquid.css is loaded and the page uses style.css.
-const ASSET_VERSION = '0.4.13';
+const ASSET_VERSION = '0.4.15';
 let glassLibraryLoading = null;
 let liquidSheetLoading = null;
 function supportsWebGL2() {
@@ -63,7 +63,7 @@ async function applyLiquidTheme(enabled) {
   // The detailed network graph copies colours when it renders.
   window.__decisionNetworkRestyle?.();
 }
-const DEFAULT_JEV_PROMPT = `你是一个只负责结构化判断的 Decision Model。
+const DEFAULT_DECISION_PROMPT = `你是一个只负责结构化判断的 Decision Model。
 请严格根据当前场景、用户请求和候选能力逐项判断。
 不要生成最终回答，不要执行工具，不要发明候选名称。`;
 const DEFAULT_MAIN_PROMPT = `<decision_routing_hint>
@@ -89,7 +89,7 @@ function payloadOf(value) {
     }
     if (!current || typeof current !== 'object') return {};
     if (current.status === 'error' || current.error) throw new Error(current.message || current.error || '服务器返回错误');
-    if (Array.isArray(current.tools) || Object.prototype.hasOwnProperty.call(current, 'jev_pre_prompt')) return current;
+    if (Array.isArray(current.tools) || Object.prototype.hasOwnProperty.call(current, 'decision_pre_prompt')) return current;
     if (current.data && typeof current.data === 'object') { current = current.data; continue; }
     if (current.result && typeof current.result === 'object') { current = current.result; continue; }
     return current;
@@ -128,19 +128,19 @@ const LIFE_PRESETS = {
     group_settings:{idle_min_minutes:90, idle_max_minutes:240, cooldown_minutes:120, daily_budget_min:0, daily_budget_max:1, daily_hard_max:1},
     adaptive_settings:{friend_min_minutes:240, group_min_minutes:120, max_interval_minutes:4320},
     delivery_settings:{max_unanswered:2, availability_probabilities:{blocked:0, low:0.1, normal:0.5, high:0.8}},
-    integration_settings:{jev_threshold:0.75, jev_relevant_threshold:0.75, jev_timing_threshold:0.6}}},
+    integration_settings:{decision_threshold:0.75, decision_relevant_threshold:0.75, decision_timing_threshold:0.6}}},
   normal: {label:'正常', description:'插件默认值：每天一到三次，留出足够的沉默和冷却。', values:{
     friend_settings:{idle_min_minutes:90, idle_max_minutes:240, cooldown_minutes:120, daily_budget_min:1, daily_budget_max:3, daily_hard_max:5},
     group_settings:{idle_min_minutes:45, idle_max_minutes:120, cooldown_minutes:60, daily_budget_min:0, daily_budget_max:1, daily_hard_max:2},
     adaptive_settings:{friend_min_minutes:120, group_min_minutes:60, max_interval_minutes:2880},
     delivery_settings:{max_unanswered:3, availability_probabilities:{blocked:0, low:0.25, normal:0.7, high:1}},
-    integration_settings:{jev_threshold:0.7, jev_relevant_threshold:0.7, jev_timing_threshold:0.5}}},
+    integration_settings:{decision_threshold:0.7, decision_relevant_threshold:0.7, decision_timing_threshold:0.5}}},
   clingy: {label:'黏人', description:'更常找人：沉默不久就开口，额度更多，但仍遵守免打扰、暂停和每日硬上限。', values:{
     friend_settings:{idle_min_minutes:30, idle_max_minutes:120, cooldown_minutes:45, daily_budget_min:3, daily_budget_max:6, daily_hard_max:10},
     group_settings:{idle_min_minutes:30, idle_max_minutes:90, cooldown_minutes:40, daily_budget_min:1, daily_budget_max:2, daily_hard_max:4},
     adaptive_settings:{friend_min_minutes:45, group_min_minutes:30, max_interval_minutes:1440},
     delivery_settings:{max_unanswered:4, availability_probabilities:{blocked:0, low:0.4, normal:0.9, high:1}},
-    integration_settings:{jev_threshold:0.6, jev_relevant_threshold:0.6, jev_timing_threshold:0.4}}}
+    integration_settings:{decision_threshold:0.6, decision_relevant_threshold:0.6, decision_timing_threshold:0.4}}}
 };
 function presetMatches(config, values) {
   return Object.entries(values).every(([group, fields]) => Object.entries(fields).every(([key, value]) => {
@@ -157,6 +157,7 @@ const app = createApp({
       glassReady: false,
       liquidGlass: false,
       providerTouched: false,
+      fallbackProviderIds: [], fallbackTouched: false, fallbackPick: '',
       switchingGlass: false,
       saving: false,
       activeTab: 'tools',
@@ -218,7 +219,7 @@ const app = createApp({
         tools_scope_blacklist: true,
         tool_noul_threshold: TOOL_THRESHOLD_DEFAULT,
         decision_provider_id: '',
-        jev_pre_prompt: DEFAULT_JEV_PROMPT,
+        decision_pre_prompt: DEFAULT_DECISION_PROMPT,
         main_llm_post_prompt: DEFAULT_MAIN_PROMPT,
         proactive: {...defaults},
         dialogue_enhancement: {
@@ -251,6 +252,10 @@ const app = createApp({
     };
   },
   computed: {
+    fallbackCandidates() {
+      const taken = new Set([...this.fallbackProviderIds, String(this.form.decision_provider_id || '')]);
+      return this.decisionProviders.filter(provider => provider && provider.id && !taken.has(provider.id));
+    },
     // The session picker matters only where data is read per conversation.
     lifeNeedsSession() { return ['life', 'reminders', 'status'].includes(this.lifePanel); },
     lifePresetActive() { return Object.keys(LIFE_PRESETS).find(id => presetMatches(this.lifeConfig, LIFE_PRESETS[id].values)) || ''; },
@@ -328,6 +333,31 @@ const app = createApp({
     groupedSubagents() { const map = new Map(); for (const t of this.subagentVisibleTools) { const key = t.origin_display || '未知来源'; if (!map.has(key)) map.set(key, []); map.get(key).push(t); } return [...map.entries()].map(([origin,items]) => ({origin,items})); }
   },
   methods: {
+    providerLabel(providerId) {
+      const provider = this.decisionProviders.find(row => row && row.id === providerId);
+      return provider ? (provider.name || provider.id) : `${providerId}（不可用）`;
+    },
+    addFallback(event) {
+      const providerId = String(event?.target?.value || this.fallbackPick || '');
+      this.fallbackPick = '';
+      if (event?.target) event.target.value = '';
+      if (!providerId || this.fallbackProviderIds.includes(providerId) || this.fallbackProviderIds.length >= 20) return;
+      this.fallbackProviderIds = [...this.fallbackProviderIds, providerId];
+      this.fallbackTouched = true;
+    },
+    moveFallback(index, delta) {
+      const target = index + delta;
+      if (target < 0 || target >= this.fallbackProviderIds.length) return;
+      const next = [...this.fallbackProviderIds];
+      const [providerId] = next.splice(index, 1);
+      next.splice(target, 0, providerId);
+      this.fallbackProviderIds = next;
+      this.fallbackTouched = true;
+    },
+    removeFallback(index) {
+      this.fallbackProviderIds = this.fallbackProviderIds.filter((_, position) => position !== index);
+      this.fallbackTouched = true;
+    },
     cleanLifeLabel(text) { return String(text || '').replace(/^[^\p{L}\p{N}]+/u, ''); },
     async refreshOptions() {
       try {
@@ -908,11 +938,13 @@ const app = createApp({
         dialogue.disable_group_at_bot_wake_group_ids = this.scopeList(dialogue.disable_group_at_bot_wake_group_ids);
         dialogue.disable_group_reply_to_bot_wake_group_ids = this.scopeList(dialogue.disable_group_reply_to_bot_wake_group_ids);
         dialogue.output_scope = this.scopeList(dialogue.output_scope);
-        const body = {life: JSON.parse(JSON.stringify(this.lifeConfig)), message_interjection_enabled: this.messageInterjection, always_keep_tools: Array.from(this.selectedKeep, String), always_keep_recommend_tools: Array.from(this.selectedRecommend, String), always_keep_mcp: Array.from(this.selectedKeepMcp, String), always_keep_recommend_mcp: Array.from(this.selectedRecommendMcp, String), always_keep_skills: Array.from(this.selectedKeepSkills, String), always_keep_recommend_skills: Array.from(this.selectedRecommendSkills, String), always_keep_subagents: Array.from(this.selectedKeepSubagents, String), always_keep_recommend_subagents: Array.from(this.selectedRecommendSubagents, String), jev_pre_prompt: String(this.form.jev_pre_prompt ?? ''), main_llm_post_prompt: String(this.form.main_llm_post_prompt ?? ''), tool_decision_enabled: this.form.tool_decision_enabled === true, mcp_decision_enabled: this.form.mcp_decision_enabled === true, skill_decision_enabled: this.form.skill_decision_enabled === true, subagent_decision_enabled: this.form.subagent_decision_enabled === true, tool_filter_enabled: this.form.tool_filter_enabled === true, mcp_filter_enabled: this.form.mcp_filter_enabled === true, skill_filter_enabled: this.form.skill_filter_enabled === true, subagent_filter_enabled: this.form.subagent_filter_enabled === true, tools_scope: this.scopeList(this.form.tools_scope), tools_scope_blacklist: this.form.tools_scope_blacklist === true, tool_noul_threshold: numberOr(this.form.tool_noul_threshold, TOOL_THRESHOLD_DEFAULT), proactive, dialogue_enhancement: dialogue};
+        const body = {life: JSON.parse(JSON.stringify(this.lifeConfig)), message_interjection_enabled: this.messageInterjection, always_keep_tools: Array.from(this.selectedKeep, String), always_keep_recommend_tools: Array.from(this.selectedRecommend, String), always_keep_mcp: Array.from(this.selectedKeepMcp, String), always_keep_recommend_mcp: Array.from(this.selectedRecommendMcp, String), always_keep_skills: Array.from(this.selectedKeepSkills, String), always_keep_recommend_skills: Array.from(this.selectedRecommendSkills, String), always_keep_subagents: Array.from(this.selectedKeepSubagents, String), always_keep_recommend_subagents: Array.from(this.selectedRecommendSubagents, String), decision_pre_prompt: String(this.form.decision_pre_prompt ?? ''), main_llm_post_prompt: String(this.form.main_llm_post_prompt ?? ''), tool_decision_enabled: this.form.tool_decision_enabled === true, mcp_decision_enabled: this.form.mcp_decision_enabled === true, skill_decision_enabled: this.form.skill_decision_enabled === true, subagent_decision_enabled: this.form.subagent_decision_enabled === true, tool_filter_enabled: this.form.tool_filter_enabled === true, mcp_filter_enabled: this.form.mcp_filter_enabled === true, skill_filter_enabled: this.form.skill_filter_enabled === true, subagent_filter_enabled: this.form.subagent_filter_enabled === true, tools_scope: this.scopeList(this.form.tools_scope), tools_scope_blacklist: this.form.tools_scope_blacklist === true, tool_noul_threshold: numberOr(this.form.tool_noul_threshold, TOOL_THRESHOLD_DEFAULT), proactive, dialogue_enhancement: dialogue};
         // Only send the Provider when it was picked here, so a page opened
         // before a change on AstrBot's native config page cannot undo it.
         const sentProvider = String(this.form.decision_provider_id || '');
         if (this.providerTouched) body.decision_provider_id = sentProvider;
+        const sentFallbacks = JSON.stringify(this.fallbackProviderIds);
+        if (this.fallbackTouched) body.fallback_decision_provider_ids = JSON.parse(sentFallbacks);
         const result = payloadOf(await activeBridge.apiPost('settings/save', JSON.parse(JSON.stringify(body))));
         if (result.saved !== true) throw new Error('服务器未确认保存成功');
         if (Array.isArray(result.decision_providers)) this.decisionProviders = result.decision_providers;
@@ -920,6 +952,10 @@ const app = createApp({
         if (String(this.form.decision_provider_id || '') === sentProvider) {
           if (typeof result.decision_provider_id === 'string') this.form.decision_provider_id = result.decision_provider_id;
           this.providerTouched = false;
+        }
+        if (JSON.stringify(this.fallbackProviderIds) === sentFallbacks) {
+          if (Array.isArray(result.fallback_decision_provider_ids)) this.fallbackProviderIds = result.fallback_decision_provider_ids.map(String);
+          this.fallbackTouched = false;
         }
         if (Array.isArray(result.always_keep_tools)) this.selectedKeep = result.always_keep_tools.map(String);
         if (Array.isArray(result.always_keep_recommend_tools)) this.selectedRecommend = result.always_keep_recommend_tools.map(String);
@@ -949,6 +985,8 @@ const app = createApp({
         this.decisionProviders = Array.isArray(settings.decision_providers) ? settings.decision_providers : [];
         this.form.decision_provider_id = String(settings.decision_provider_id || '');
         this.providerTouched = false;
+        this.fallbackProviderIds = Array.isArray(settings.fallback_decision_provider_ids) ? settings.fallback_decision_provider_ids.map(String) : [];
+        this.fallbackTouched = false;
         this.messageInterjection = settings.message_interjection_enabled !== false;
         this.selectedKeep = settings.always_keep_tools.map(String);
         this.selectedRecommend = Array.isArray(settings.always_keep_recommend_tools) ? settings.always_keep_recommend_tools.map(String) : [];
@@ -959,7 +997,7 @@ const app = createApp({
         this.selectedKeepSubagents = Array.isArray(settings.always_keep_subagents) ? settings.always_keep_subagents.map(String) : [];
         this.selectedRecommendSubagents = Array.isArray(settings.always_keep_recommend_subagents) ? settings.always_keep_recommend_subagents.map(String) : [];
         this.form.tool_decision_enabled = settings.tool_decision_enabled !== false; this.form.mcp_decision_enabled = settings.mcp_decision_enabled !== false; this.form.skill_decision_enabled = settings.skill_decision_enabled !== false; this.form.subagent_decision_enabled = settings.subagent_decision_enabled !== false; this.form.tool_filter_enabled = settings.tool_filter_enabled !== false; this.form.mcp_filter_enabled = settings.mcp_filter_enabled !== false; this.form.skill_filter_enabled = settings.skill_filter_enabled !== false; this.form.subagent_filter_enabled = settings.subagent_filter_enabled === true; this.form.tools_scope = (Array.isArray(settings.tools_scope) ? settings.tools_scope : []).map(String).join('\n'); this.form.tools_scope_blacklist = settings.tools_scope_blacklist !== false; this.form.tool_noul_threshold = Number.isFinite(Number(settings.tool_noul_threshold)) ? Number(settings.tool_noul_threshold) : TOOL_THRESHOLD_DEFAULT;
-        this.form.jev_pre_prompt = hasOwn(settings, 'jev_pre_prompt') ? String(settings.jev_pre_prompt ?? '') : DEFAULT_JEV_PROMPT; this.form.main_llm_post_prompt = hasOwn(settings, 'main_llm_post_prompt') ? String(settings.main_llm_post_prompt ?? '') : DEFAULT_MAIN_PROMPT;
+        this.form.decision_pre_prompt = hasOwn(settings, 'decision_pre_prompt') ? String(settings.decision_pre_prompt ?? '') : DEFAULT_DECISION_PROMPT; this.form.main_llm_post_prompt = hasOwn(settings, 'main_llm_post_prompt') ? String(settings.main_llm_post_prompt ?? '') : DEFAULT_MAIN_PROMPT;
         this.form.proactive = {...defaults, ...(settings.proactive || {})}; this.form.proactive.proactive_whitelist = (settings.proactive?.proactive_whitelist || []).join('\n'); this.form.proactive.direct_reply_prefixes = (settings.proactive?.direct_reply_prefixes || ['/', '@']).join(', ');
         const incoming = settings.dialogue_enhancement || {}; this.form.dialogue_enhancement = {...this.form.dialogue_enhancement, ...incoming}; this.form.dialogue_enhancement.conversation_flow_scope = (incoming.conversation_flow_scope || []).join('\n'); this.form.dialogue_enhancement.disable_group_at_bot_wake_group_ids = (incoming.disable_group_at_bot_wake_group_ids || []).join('\n'); this.form.dialogue_enhancement.disable_group_reply_to_bot_wake_group_ids = (incoming.disable_group_reply_to_bot_wake_group_ids || []).join('\n'); this.form.dialogue_enhancement.output_scope = (incoming.output_scope || []).join('\n'); if (incoming.output_pipeline) this.form.dialogue_enhancement.output_pipeline = incoming.output_pipeline;
         this.toolsEnabledValue = settings.tools_subagents_decision_enabled !== false; this.proactiveEnabledValue = settings.proactive_reply_enabled === true; this.flowEnabledValue = settings.conversation_flow_enabled !== false; this.loaded = true; this.statusText = `已加载 ${this.tools.length} 个能力`; this.syncThresholdGlass();

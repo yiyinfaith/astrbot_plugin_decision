@@ -230,7 +230,7 @@ async def test_adaptive_ignores_old_unanswered_hard_stop_and_real_send_counts_on
         data["created"] -= 3 * 86400
         runtime.ledger.save_profile(db, UMO, "alice", data)
     # The low-frequency floor lowers the bar to floor_threshold but never
-    # sends against a clear Jev rejection.
+    # sends against a clear 决策 rejection.
     native.owner._evaluate.return_value = SimpleNamespace(
         answers={q: {"noul": 0.0} for q in ("initiate", "relevant", "timing")}
     )
@@ -439,7 +439,7 @@ async def test_persona_uses_framework_final_selection(native):
 
 
 @pytest.mark.asyncio
-async def test_jev_rejection_error_and_stale_never_dispatch(native, monkeypatch):
+async def test_decision_rejection_error_and_stale_never_dispatch(native, monkeypatch):
     dispatch = AsyncMock(return_value=True)
     monkeypatch.setattr("decision.life_runtime.dispatch_life_agent", dispatch)
     native.owner._evaluate.return_value = SimpleNamespace(
@@ -497,13 +497,13 @@ async def test_manual_attempt_obeys_scope_and_does_not_dispatch(native, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_jev_and_platform_failures_have_distinct_runtime_state(native, monkeypatch):
+async def test_decision_and_platform_failures_have_distinct_runtime_state(native, monkeypatch):
     runtime = native.runtime
-    native.owner._evaluate.side_effect = RuntimeError("jev unavailable")
+    native.owner._evaluate.side_effect = RuntimeError("decision unavailable")
     sent, reason = await runtime._attempt_unsolicited(
-        UMO, native.persona, native.plan, "jev failure", "window", attempt_key="w1"
+        UMO, native.persona, native.plan, "decision failure", "window", attempt_key="w1"
     )
-    assert sent is False and "Jev" in reason
+    assert sent is False and "决策" in reason
     assert not runtime.offline
 
     native.owner._evaluate.side_effect = None
@@ -760,7 +760,7 @@ async def test_real_native_photo_tool_loop_preserves_final_reply(native):
 
 
 @pytest.mark.asyncio
-async def test_jev_approval_dispatches_exactly_once(native, monkeypatch):
+async def test_decision_approval_dispatches_exactly_once(native, monkeypatch):
     send = AsyncMock(return_value=True)
     monkeypatch.setattr("decision.life_runtime.dispatch_life_agent", send)
     native.owner._evaluate.return_value = SimpleNamespace(
@@ -949,7 +949,7 @@ async def test_dynamic_tools_have_real_plugin_ownership(native, tmp_path, monkey
     try:
         plugin = module.DecisionPlugin(native.context, Config())
         assert {t.name for t in tools} == {
-            "jev_decide",
+            "decision_judge",
             "adjust_contact_frequency",
             "future_contact",
             "save_life_thought",
@@ -1445,7 +1445,7 @@ def test_should_retry_window_respects_its_switches(native):
 
 
 @pytest.mark.asyncio
-async def test_each_jev_question_has_its_own_threshold(native, monkeypatch):
+async def test_each_decision_question_has_its_own_threshold(native, monkeypatch):
     dispatch = AsyncMock(return_value=True)
     monkeypatch.setattr("decision.life_runtime.dispatch_life_agent", dispatch)
     # Timing is only a supplementary check now: 0.55 passes its 0.5 default.
@@ -1453,14 +1453,14 @@ async def test_each_jev_question_has_its_own_threshold(native, monkeypatch):
         answers={"initiate": {"noul": 0.8}, "relevant": {"noul": 0.8}, "timing": {"noul": 0.55}}
     )
     assert await native.runtime._deliver(UMO, native.persona, native.plan, "share", 0, 0)
-    native.runtime.config["integration_settings"]["jev_relevant_threshold"] = 0.9
+    native.runtime.config["integration_settings"]["decision_relevant_threshold"] = 0.9
     native.runtime.deadlines[UMO] = time.monotonic() + 60
     assert not await native.runtime._deliver(UMO, native.persona, native.plan, "share", 0, 0)
     assert "话题价值 0.8/0.9" in native.runtime.audit[-1]["reason"]
 
 
 @pytest.mark.asyncio
-async def test_floor_contact_retries_later_when_jev_fails(native, monkeypatch):
+async def test_floor_contact_retries_later_when_decision_fails(native, monkeypatch):
     runtime = native.runtime
     runtime.config["adaptive_settings"]["enable"] = True
     runtime._schedule_available_umos.add(UMO)
@@ -1470,7 +1470,7 @@ async def test_floor_contact_retries_later_when_jev_fails(native, monkeypatch):
         runtime.ledger.save_profile(db, UMO, "alice", data)
     dispatch = AsyncMock(return_value=True)
     monkeypatch.setattr("decision.life_runtime.dispatch_life_agent", dispatch)
-    native.owner._evaluate.side_effect = RuntimeError("jev down")
+    native.owner._evaluate.side_effect = RuntimeError("decision down")
     scheduled = []
     monkeypatch.setattr(
         runtime, "_schedule_idle", lambda umo, run_at=None: scheduled.append(run_at)

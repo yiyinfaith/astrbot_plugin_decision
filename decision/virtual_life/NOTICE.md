@@ -7,7 +7,7 @@ Upstream is GPL-3.0; its license is retained in this directory. The containing
 Decision plugin is AGPL-3.0; combined redistribution follows AGPL-3.0.
 
 Modifications: original commands and hook registration removed; data moved to
-Decision plugin data; Jev approval, native Agent dispatch, exact persona,
+Decision plugin data; decision approval, native Agent dispatch, exact persona,
 WebUI configuration/actions and AIGen photo/video bridge are implemented in
 ../life_runtime.py and ../life_media.py. No separate Virtual Life plugin is loaded.
 Additional integration changes: cancellation-safe atomic storage, rollback on

@@ -20,8 +20,8 @@ def test_defaults_roundtrip_and_independent_copies():
 @pytest.mark.parametrize(
     "path,value",
     [
-        (("integration_settings", "jev_threshold"), math.nan),
-        (("integration_settings", "jev_threshold"), 1.01),
+        (("integration_settings", "decision_threshold"), math.nan),
+        (("integration_settings", "decision_threshold"), 1.01),
         (("integration_settings", "max_concurrent"), 0),
         (("integration_settings", "candidate_ttl_minutes"), 0),
         (("friend_settings", "idle_min_minutes"), 0),

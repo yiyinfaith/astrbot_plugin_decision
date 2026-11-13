@@ -7,7 +7,7 @@ from typing import Any
 
 from .context import is_handoff_tool, is_mcp_tool, tool_is_active
 
-DECISION_TOOL_NAME = "jev_decide"
+DECISION_TOOL_NAME = "decision_judge"
 DEFAULT_MAIN_LLM_POST_PROMPT = """<decision_routing_hint>
 当前场景需要根据用户请求选择合适的能力。
 推荐你优先考虑使用以下 Tool：{tools}
@@ -63,7 +63,7 @@ def choose_tools(
 ) -> RoutingOutcome:
     """Route Tools, MCP tools, Skills and handoffs using independent switches.
 
-    Jev answers are always used to build recommendations. ``filter_ordinary``
+    Decision answers are always used to build recommendations. ``filter_ordinary``
     ``filter_mcp`` and ``filter_handoffs`` only control what remains visible to
     the main LLM.
     ``always_keep_recommend`` is intentionally separate from ``always_keep``:
@@ -116,7 +116,7 @@ def choose_tools(
             continue
         if name == DECISION_TOOL_NAME or tool is decision_tool:
             # When ordinary Tool filtering is disabled, the category is
-            # explicitly pass-through.  Keep ``jev_decide`` with the rest of
+            # explicitly pass-through.  Keep ``decision_judge`` with the rest of
             # the full tool set even if the manual Always Keep checkbox is
             # off; filtering it would violate the unfiltered category rule.
             if name in always_keep or not filter_ordinary:
@@ -127,42 +127,42 @@ def choose_tools(
         if is_handoff_tool(tool):
             handoffs.append(tool)
             keep = name in always_keep_handoffs
-            selected_by_jev = selected(handoff_questions.get(name, ()))
+            selected_by_decision = selected(handoff_questions.get(name, ()))
             if not keep and filter_handoffs:
-                keep = selected_by_jev
+                keep = selected_by_decision
             elif not keep:
                 keep = True
             if keep:
                 final.append(tool)
-            if selected_by_jev or (
+            if selected_by_decision or (
                 name in always_keep_handoffs and name in always_keep_handoffs_recommend
             ):
                 recommended_subagents.append(name)
             continue
         if is_mcp_tool(tool):
             keep = name in always_keep_mcp
-            selected_by_jev = selected(mcp_questions.get(name, ()))
+            selected_by_decision = selected(mcp_questions.get(name, ()))
             if not keep and filter_mcp:
-                keep = selected_by_jev
+                keep = selected_by_decision
             elif not keep:
                 keep = True
             if keep:
                 final.append(tool)
-            if selected_by_jev or (name in always_keep_mcp and name in always_keep_mcp_recommend):
+            if selected_by_decision or (name in always_keep_mcp and name in always_keep_mcp_recommend):
                 recommended_mcp.append(name)
             continue
         keep = name in always_keep
-        selected_by_jev = selected(tool_questions.get(name, ()))
+        selected_by_decision = selected(tool_questions.get(name, ()))
         if not keep and filter_ordinary:
-            keep = selected_by_jev
+            keep = selected_by_decision
         elif not keep:
             keep = True
         if keep:
             final.append(tool)
-        # Jev-selected candidates are always recommendations, including a
+        # Decision-selected candidates are always recommendations, including a
         # tool that is also manually kept.  The manual recommendation switch
-        # only controls a kept tool that Jev did not select.
-        if selected_by_jev or (name in always_keep and name in always_keep_recommend):
+        # only controls a kept tool that the decision model did not select.
+        if selected_by_decision or (name in always_keep and name in always_keep_recommend):
             if name not in recommended_tools:
                 recommended_tools.append(name)
 
@@ -171,14 +171,14 @@ def choose_tools(
         if not name or not tool_is_active(skill):
             continue
         keep = name in always_keep_skills
-        selected_by_jev = selected(skill_questions.get(name, ()))
+        selected_by_decision = selected(skill_questions.get(name, ()))
         if not keep and filter_skills:
-            keep = selected_by_jev
+            keep = selected_by_decision
         elif not keep:
             keep = True
         if keep:
             selected_skills.append(skill)
-        if selected_by_jev or (name in always_keep_skills and name in always_keep_skills_recommend):
+        if selected_by_decision or (name in always_keep_skills and name in always_keep_skills_recommend):
             recommended_skills.append(name)
 
     if (

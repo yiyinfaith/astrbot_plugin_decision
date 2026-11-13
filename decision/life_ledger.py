@@ -12,6 +12,50 @@ import uuid
 from contextlib import contextmanager
 
 
+# Wording in decision records written before 0.4.15.
+# Only the plugin's own phrases: error text inside a reason may name the
+# user's providers or models, which must stay as they are.
+_LEGACY_AUDIT_WORDS = (
+    ("原生 JEV DecisionService", "原生决策服务 DecisionService"),
+    ("原生 JEV Decision Provider", "原生决策 Provider"),
+    ("AstrBot JEV ", "AstrBot decision "),
+    ("Jev 未通过", "决策未通过"),
+    ("Jev 通过", "决策通过"),
+    ("Jev 判断", "决策判断"),
+)
+
+
+def _reword_legacy_audit(db) -> None:
+    """Reword only the plugin-written reason/stage fields, once."""
+
+    rows = db.execute(
+        "SELECT id, data FROM audit WHERE data GLOB '*Jev*' OR data GLOB '*JEV*'"
+    ).fetchall()
+    for row in rows:
+        try:
+            entry = json.loads(row["data"])
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(entry, dict):
+            continue
+        changed = False
+        for key in ("reason", "stage"):
+            text = entry.get(key)
+            if not isinstance(text, str):
+                continue
+            new = text
+            for old, replacement in _LEGACY_AUDIT_WORDS:
+                new = new.replace(old, replacement)
+            if new != text:
+                entry[key] = new
+                changed = True
+        if changed:
+            db.execute(
+                "UPDATE audit SET data=? WHERE id=?",
+                (json.dumps(entry, ensure_ascii=False), row["id"]),
+            )
+
+
 class LifeLedger:
     def __init__(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -61,6 +105,12 @@ class LifeLedger:
                     sent INTEGER, data TEXT);
                 CREATE INDEX IF NOT EXISTS audit_scope ON audit(umo,at);
             """)
+        # executescript() commits, so the one-time rewording gets its own
+        # transaction: all rows and the version mark land together.
+        with self.transaction() as db:
+            if db.execute("PRAGMA user_version").fetchone()[0] < 1:
+                _reword_legacy_audit(db)
+                db.execute("PRAGMA user_version=1")
 
     @contextmanager
     def transaction(self):

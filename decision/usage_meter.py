@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any
 
 KEEP_DAYS = 14
+DECISION_PREFIX = "决策·"
+LEGACY_PREFIX = "Jev·"
 
 
 def estimate_tokens(text: Any) -> int:
@@ -60,6 +62,24 @@ class UsageMeter:
                     }
             except (OSError, ValueError):
                 self._days = {}
+        self._rename_legacy_features()
+
+    def _rename_legacy_features(self) -> None:
+        """Merge rows recorded before 0.4.15 under the old "Jev·" label."""
+
+        for rows in self._days.values():
+            for feature in [name for name in rows if name.startswith(LEGACY_PREFIX)]:
+                old = rows.pop(feature)
+                row = rows.setdefault(
+                    DECISION_PREFIX + feature[len(LEGACY_PREFIX) :],
+                    {"calls": 0, "failures": 0, "input_tokens": 0, "output_tokens": 0, "estimated": 0},
+                )
+                for key in ("calls", "failures", "input_tokens", "output_tokens", "estimated"):
+                    try:
+                        row[key] = int(row.get(key, 0) or 0) + int(old.get(key, 0) or 0)
+                    except (TypeError, ValueError):
+                        continue
+                self._dirty = True
 
     def record(
         self,
@@ -70,7 +90,12 @@ class UsageMeter:
         output: Any = None,
         extra_input: int = 0,
         ok: bool = True,
+        count: int = 1,
     ) -> None:
+        """Record ``count`` identical calls (for example retries of one prompt)."""
+        count = int(count)
+        if count <= 0:
+            return
         real = response_usage(response) if response is not None else None
         if real:
             input_tokens, output_tokens, estimated = real[0], real[1], False
@@ -88,11 +113,11 @@ class UsageMeter:
                 feature,
                 {"calls": 0, "failures": 0, "input_tokens": 0, "output_tokens": 0, "estimated": 0},
             )
-            row["calls"] += 1
-            row["failures"] += 0 if ok else 1
-            row["input_tokens"] += input_tokens
-            row["output_tokens"] += output_tokens
-            row["estimated"] += 1 if estimated else 0
+            row["calls"] += count
+            row["failures"] += 0 if ok else count
+            row["input_tokens"] += input_tokens * count
+            row["output_tokens"] += output_tokens * count
+            row["estimated"] += count if estimated else 0
             self._dirty = True
         if time.monotonic() - self._last_save > 60:
             self.save()

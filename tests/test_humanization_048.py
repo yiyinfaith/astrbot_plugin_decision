@@ -30,20 +30,20 @@ UMO = "qq:FriendMessage:42"
 
 def test_old_single_threshold_keeps_relevance_and_loosens_timing():
     raw = life_defaults()
-    raw["integration_settings"] = {"jev_threshold": 0.82}
+    raw["integration_settings"] = {"decision_threshold": 0.82}
     out = normalize_life(raw)
-    assert out["integration_settings"]["jev_threshold"] == 0.82
-    assert out["integration_settings"]["jev_relevant_threshold"] == 0.82
-    assert out["integration_settings"]["jev_timing_threshold"] == 0.5
+    assert out["integration_settings"]["decision_threshold"] == 0.82
+    assert out["integration_settings"]["decision_relevant_threshold"] == 0.82
+    assert out["integration_settings"]["decision_timing_threshold"] == 0.5
 
 
 def test_explicit_thresholds_are_kept_and_validated():
     raw = life_defaults()
-    raw["integration_settings"].update(jev_relevant_threshold=0.3, jev_timing_threshold=0.9)
+    raw["integration_settings"].update(decision_relevant_threshold=0.3, decision_timing_threshold=0.9)
     out = normalize_life(raw)
-    assert out["integration_settings"]["jev_relevant_threshold"] == 0.3
-    assert out["integration_settings"]["jev_timing_threshold"] == 0.9
-    raw["integration_settings"]["jev_timing_threshold"] = 1.2
+    assert out["integration_settings"]["decision_relevant_threshold"] == 0.3
+    assert out["integration_settings"]["decision_timing_threshold"] == 0.9
+    raw["integration_settings"]["decision_timing_threshold"] = 1.2
     with pytest.raises(ValueError, match="阈值"):
         normalize_life(raw)
 
@@ -342,15 +342,15 @@ def test_off_mode_never_touches_the_plugin():
 def test_usage_meter_counts_estimates_real_usage_and_persists(tmp_path):
     path = tmp_path / "usage.json"
     meter = usage_meter.UsageMeter(path)
-    meter.record("Jev·主动发起", prompt="你好" * 10, output="ok")
-    meter.record("Jev·主动发起", prompt="x", output="", ok=False)
+    meter.record("决策·主动发起", prompt="你好" * 10, output="ok")
+    meter.record("决策·主动发起", prompt="x", output="", ok=False)
     response = SimpleNamespace(usage=SimpleNamespace(input=120, output=30), completion_text="hi")
     meter.record("日程与穿搭", response=response, prompt="ignored")
     meter.record("多模态理解", prompt="看图", output="一只猫", extra_input=260)
     meter.save()
     today = usage_meter.UsageMeter(path).summary(7)
     rows = today["days"][today["today"]]
-    assert rows["Jev·主动发起"]["calls"] == 2 and rows["Jev·主动发起"]["failures"] == 1
+    assert rows["决策·主动发起"]["calls"] == 2 and rows["决策·主动发起"]["failures"] == 1
     assert rows["日程与穿搭"]["input_tokens"] == 120 and rows["日程与穿搭"]["estimated"] == 0
     assert rows["多模态理解"]["input_tokens"] >= 260
     assert len(today["days"]) == 7
@@ -398,7 +398,7 @@ def test_dashboard_exposes_presets_usage_and_new_fields():
         assert preset in app
     assert "applyLifePreset(id)" in html and "usage-table" in html and "lifeAuditRows" in html
     for key in (
-        "jev_timing_threshold",
+        "decision_timing_threshold",
         "floor_threshold",
         "two_stage_probability",
         "active_hours_enable",

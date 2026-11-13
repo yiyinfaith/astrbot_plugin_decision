@@ -52,11 +52,15 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
         # A Provider saved in the detail file by older dashboards; read only
         # by the one-time migration into the native config below.
         self._loaded_legacy_provider: str | None = None
+        self._legacy_detail_upgraded = False
         self._detail_settings = self._load_detail_settings()
         legacy_provider_id = self._loaded_legacy_provider
         # AstrBot also renders live config keys. Never merge WebUI settings
         # into this framework-owned object, even only in memory.
-        legacy = {key: config[key] for key in DETAIL_DEFAULTS if key in config}
+        legacy_native = {
+            key: config[key] for key in (*DETAIL_DEFAULTS, *LEGACY_DETAIL_KEYS) if key in config
+        }
+        legacy = upgrade_legacy_detail(legacy_native)
         if legacy:
             try:
                 self._save_detail_settings({**legacy, **self._detail_settings})
@@ -70,12 +74,20 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
                     _safe_error(exc),
                 )
             else:
-                for key in legacy:
+                for key in legacy_native:
                     config.pop(key, None)
         if legacy_provider_id is not None:
             self._migrate_legacy_provider(config, legacy_provider_id)
+        elif self._legacy_detail_upgraded and not legacy:
+            try:
+                self._save_detail_settings(self._detail_settings)
+            except SETTINGS_WRITE_ERRORS as exc:
+                logger.warning(
+                    "Decision Engine could not save renamed settings; they stay renamed in memory: %s",
+                    _safe_error(exc),
+                )
         self._refresh_native_provider_schema()
-        # The host owns the JEV transport, credentials and model.  This
+        # The host owns the decision transport, credentials and model.  This
         # adapter only translates the plugin's questions to AstrBot's native
         # DecisionService.
         self.provider: AstrBotDecisionProvider | None = None
@@ -128,7 +140,7 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
             name=DECISION_TOOL_NAME,
             description=(
                 "Use the configured Decision Engine for one fast structured noul, choice, "
-                "or score judgment. It uses AstrBot native JEV and never executes a tool."
+                "or score judgment. It uses AstrBot native decision and never executes a tool."
             ),
             parameters=decision_tool_parameters(),
             handler=self._run_decision_tool,
@@ -457,6 +469,11 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
                 return {}
             with self._settings_path.open(encoding="utf-8-sig") as file:
                 value = json.load(file)
+            if isinstance(value, Mapping):
+                upgraded = upgrade_legacy_detail(value)
+                # Pre-0.4.15 names are written back once by __init__.
+                self._legacy_detail_upgraded = upgraded != dict(value)
+                value = upgraded
             payload = (
                 {key: value[key] for key in DETAIL_DEFAULTS if key in value}
                 if isinstance(value, Mapping)
@@ -522,14 +539,14 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
                     save_config()
                 except Exception as exc:
                     logger.warning(
-                        "Decision Engine could not persist the migrated JEV Provider selection: %s",
+                        "Decision Engine could not persist the migrated decision Provider selection: %s",
                         _safe_error(exc),
                     )
         try:
             self._save_detail_settings(self._detail_settings)
         except SETTINGS_WRITE_ERRORS as exc:
             logger.warning(
-                "Decision Engine could not remove the dashboard copy of the JEV Provider: %s",
+                "Decision Engine could not remove the dashboard copy of the decision Provider: %s",
                 _safe_error(exc),
             )
 
@@ -552,7 +569,8 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
         if not isinstance(schema, dict):
             return
         field = schema.get("decision_provider_id")
-        if not isinstance(field, dict):
+        fallback = schema.get(FALLBACK_PROVIDER_KEY)
+        if not isinstance(field, dict) and not isinstance(fallback, dict):
             return
         rows = decision_provider_catalog(self.context)
         options = [""]
@@ -574,26 +592,46 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
                     if value
                 )
             )
-        field["options"] = options
-        field["labels"] = labels
-        field["subtitles"] = subtitles
+        if isinstance(field, dict):
+            field["options"] = options
+            field["labels"] = labels
+            field["subtitles"] = subtitles
+        if isinstance(fallback, dict):
+            # Same live list without the "AstrBot default" entry.  Saved IDs
+            # the host no longer has stay listed so they can be removed.
+            fallback_options = options[1:]
+            fallback_labels = labels[1:]
+            fallback_subtitles = subtitles[1:]
+            for provider_id in self._fallback_provider_ids():
+                if provider_id not in fallback_options:
+                    fallback_options.append(provider_id)
+                    fallback_labels.append(f"{provider_id}（不可用）")
+                    fallback_subtitles.append("AstrBot 中已找不到这个决策模型")
+            fallback["options"] = fallback_options
+            fallback["labels"] = fallback_labels
+            fallback["subtitles"] = fallback_subtitles
+
+    def _fallback_provider_ids(self) -> list[str]:
+        return normalize_provider_ids(self._setting(FALLBACK_PROVIDER_KEY, []))
 
     async def initialize(self) -> None:
         self.provider = AstrBotDecisionProvider(
             self.context,
             provider_id=str(self._setting("decision_provider_id", "") or ""),
+            fallback_provider_ids=self._fallback_provider_ids(),
             retries=self._int("retries", 1),
             retry_backoff_sec=self._float("retry_backoff_seconds", 0.0),
             retry_logger=self._log_provider_retry,
+            fallback_logger=self._log_provider_fallback,
         )
         self._ready = self.provider.configured
         if not self._ready:
             logger.warning(
-                "Decision Engine 未找到 AstrBot 原生 JEV DecisionService；插件保持 fail-open。"
+                "Decision Engine 未找到 AstrBot 原生决策服务 DecisionService；插件保持 fail-open。"
             )
         elif not decision_provider_catalog(self.context):
             logger.warning(
-                "Decision Engine 未找到 AstrBot 原生 JEV Provider；请在 AstrBot 模型提供方中配置并选择。"
+                "Decision Engine 未找到 AstrBot 原生决策 Provider；请在 AstrBot 模型提供方中配置并选择。"
             )
         await self._configure_output_runtime()
         # Multi-modal understanding is independent of 主动对话: its tools and
@@ -686,11 +724,19 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
         self, retry_number: int, max_retries: int, reason: str, backoff_seconds: float
     ) -> None:
         logger.warning(
-            "Decision Engine Jev 请求失败，将进行第 %d/%d 次重试；间隔 %.2f 秒：%s",
+            "Decision Engine 决策请求失败，将进行第 %d/%d 次重试；间隔 %.2f 秒：%s",
             retry_number,
             max_retries,
             backoff_seconds,
             _safe_error(RuntimeError(reason)),
+        )
+
+    def _log_provider_fallback(self, failed: str, next_provider: str, reason: str) -> None:
+        logger.warning(
+            "Decision Engine 决策模型 %s 请求失败（%s），改用回退决策模型 %s。",
+            failed,
+            reason,
+            next_provider,
         )
 
     async def terminate(self) -> None:
@@ -754,7 +800,7 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
         return value if isinstance(value, bool) else bool(value)
 
     def _policy(self) -> str:
-        return str(self._setting("jev_pre_prompt", "")).strip() or DEFAULT_POLICY
+        return str(self._setting("decision_pre_prompt", "")).strip() or DEFAULT_POLICY
 
     def _main_llm_post_prompt(self) -> str:
         configured = self._setting("main_llm_post_prompt")
@@ -778,7 +824,7 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
         priority=110,
     )
     async def proactive_reply(self, event: AstrMessageEvent):
-        """Use Jev to decide whether AstrBot's normal Agent should interject."""
+        """Use the decision model to decide whether AstrBot's normal Agent should interject."""
         async for item in self._proactive_reply_impl(event):
             yield item
 
@@ -813,7 +859,7 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
 
         The scope is intentionally independent from active conversation.  A
         user can therefore enable output formatting for a set of groups while
-        keeping Jev proactive decisions disabled there.
+        keeping proactive decision decisions disabled there.
         """
 
         runtime = self._output_runtime
@@ -882,7 +928,8 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
             output = (
                 f"Tool/MCP/Skill/SubAgent decision: {'enabled' if self._bool('tools_subagents_decision_enabled', True) else 'disabled'}\n"
                 f"proactive_reply={self._bool('proactive_reply_enabled', False)}\n"
-                f"jev_provider_id={self._setting('decision_provider_id', '') or 'AstrBot default'}\n"
+                f"decision_provider_id={self._setting('decision_provider_id', '') or 'AstrBot default'}\n"
+                f"fallback_decision_provider_ids={', '.join(self._fallback_provider_ids()) or 'none'}\n"
                 f"tool_filter={self._bool('tool_filter_enabled', True)} mcp_filter={self._bool('mcp_filter_enabled', True)} skill_filter={self._bool('skill_filter_enabled', True)} subagent_filter={self._bool('subagent_filter_enabled', False)} "
                 f"tool_decision={self._bool('tool_decision_enabled', True)} mcp_decision={self._bool('mcp_decision_enabled', True)} skill_decision={self._bool('skill_decision_enabled', True)} subagent_decision={self._bool('subagent_decision_enabled', True)} "
                 f"threshold={self._float('tool_noul_threshold', DEFAULT_TOOL_NOUL_THRESHOLD):.3f}\n"
@@ -901,11 +948,25 @@ class DecisionPlugin(RoutingMixin, LifeMixin, WebUIMixin, Star):
                         }
                     },
                 )
+                answered_by = getattr(result, "provider_id", None)
+                primary = str(getattr(self.provider, "provider_id", "") or "")
+                note = ""
+                if isinstance(answered_by, str) and answered_by != primary:
+                    known = self.provider.known_provider_ids()
+                    reason = (
+                        "已不在 AstrBot 中，请重新选择"
+                        if primary and known and primary not in known
+                        else "失败或冷却中"
+                    )
+                    note = (
+                        f"\n注意：主决策模型 {primary or 'AstrBot 默认'} {reason}，"
+                        f"由回退决策模型 {answered_by} 回答。"
+                    )
                 yield event.plain_result(
-                    f"AstrBot JEV OK: {compact_answer(result.answers['service'])}"
+                    f"AstrBot decision OK: {compact_answer(result.answers['service'])}{note}"
                 )
             except Exception as exc:
-                yield event.plain_result(f"AstrBot JEV failed: {_safe_error(exc)}")
+                yield event.plain_result(f"AstrBot decision failed: {_safe_error(exc)}")
         elif action == "tools":
             tools = self._manager_tool_objects()
             names = [str(getattr(item, "name", "")) for item in tools]

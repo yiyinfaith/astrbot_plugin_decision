@@ -16,7 +16,7 @@ REASON_TEXT = {
     "agent task active": "该会话正在处理另一条 Agent 任务，请稍后再试。",
     "conversation is not idle enough": "会话刚有互动，暂不打扰。",
     "request failed": "生成或发送时出错，详见运行结果。",
-    "Jev 未通过或候选已失效": "Jev 判断此刻不适合发起，或候选已过期。",
+    "决策未通过或候选已失效": "决策判断此刻不适合发起，或候选已过期。",
 }
 
 

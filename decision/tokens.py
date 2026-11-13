@@ -1,4 +1,4 @@
-"""Small dependency-free token budget helpers for Jev request sizing."""
+"""Small dependency-free token budget helpers for decision request sizing."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ _ASCII_PART = re.compile(r"[A-Za-z0-9]+|[^A-Za-z0-9]")
 def estimate_tokens(text: str) -> int:
     """Estimate model tokens conservatively without a provider tokenizer.
 
-    Jev's tokenizer is not guaranteed to be installed with AstrBot. CJK and
+    The decision model's tokenizer is not guaranteed to be installed with AstrBot. CJK and
     non-ASCII characters are counted individually; ASCII runs use a roughly
     four-characters-per-token estimate while punctuation/whitespace are kept
     conservative. This intentionally errs high so a request stays below the

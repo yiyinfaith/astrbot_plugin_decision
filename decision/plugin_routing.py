@@ -8,8 +8,16 @@ from .plugin_shared import *
 from .plugin_shared import _ON_DECORATING_RESULT, _safe_error  # noqa: F401
 
 
+
+def _attempts(outcome: Any) -> int:
+    """Requests sent for one decision (retries and fallbacks included)."""
+
+    attempts = getattr(outcome, "attempts", 1)
+    return attempts if isinstance(attempts, int) and attempts >= 0 else 1
+
+
 class RoutingMixin:
-    """Tool/MCP/Skill/SubAgent inventory, Jev batches and message-interjection helpers."""
+    """Tool/MCP/Skill/SubAgent inventory, decision batches and message-interjection helpers."""
 
     def _tool_list(self, req: ProviderRequest) -> list[Any]:
         return list(getattr(getattr(req, "func_tool", None), "tools", None) or [])
@@ -20,7 +28,7 @@ class RoutingMixin:
         The Decision Engine tool is registered globally through ``Context``. A
         request can still arrive with ``func_tool=None`` when the active
         persona has no ordinary tools, so add a local ToolSet rather than
-        silently making ``jev_decide`` unavailable.
+        silently making ``decision_judge`` unavailable.
         """
 
         tool_set = getattr(req, "func_tool", None)
@@ -36,7 +44,7 @@ class RoutingMixin:
         """Return whether AstrBot already matched a registered command.
 
         AstrBot records parsed command handlers during its waking-check stage.
-        Such events must stay on the command pipeline: running Jev routing or
+        Such events must stay on the command pipeline: running decision routing or
         proactive analysis first could delay, alter, or duplicate a native or
         plugin command. An empty mapping means that no command matched.
         """
@@ -262,7 +270,7 @@ class RoutingMixin:
         dialogue_enabled: bool,
         questions: Mapping[str, Mapping[str, Any]],
     ) -> str:
-        """Trim the oldest proactive history until the full Jev request fits."""
+        """Trim the oldest proactive history until the full decision request fits."""
 
         budget = self._context_budget()
 
@@ -315,7 +323,7 @@ class RoutingMixin:
         question_to_skill: Mapping[str, str],
         question_to_handoff: Mapping[str, str],
     ) -> list[tuple[str, dict[str, dict[str, Any]]]]:
-        """Split candidate judgments only when the complete Jev request is oversized."""
+        """Split candidate judgments only when the complete decision request is oversized."""
 
         full_state = self._state_for_request(req, ordinary, mcp_tools, skills, handoffs)
         budget = self._context_budget()
@@ -418,23 +426,32 @@ class RoutingMixin:
         self._call_count += 1
         started = time.perf_counter()
         prompt = str(state) + json.dumps(questions, ensure_ascii=False, default=str)
+        label = usage_meter.DECISION_PREFIX + feature
         try:
             result = await self.provider.evaluate(
                 state=state,
                 questions=questions,
             )
-            self._last_call_latency_ms = (time.perf_counter() - started) * 1000
-            usage_meter.record(
-                "Jev·" + feature,
-                prompt=prompt,
-                output=json.dumps(getattr(result, "answers", {}), ensure_ascii=False, default=str),
-            )
-            return result
-        except Exception:
+        except Exception as exc:
             self._failure_count += 1
             self._last_call_latency_ms = (time.perf_counter() - started) * 1000
-            usage_meter.record("Jev·" + feature, prompt=prompt, output="", ok=False)
+            # Every request sent (retries and fallbacks included) is counted.
+            if _attempts(exc):
+                usage_meter.record(
+                    label, prompt=prompt, output="", ok=False, count=_attempts(exc)
+                )
             raise
+        self._last_call_latency_ms = (time.perf_counter() - started) * 1000
+        if _attempts(result) > 1:
+            usage_meter.record(
+                label, prompt=prompt, output="", ok=False, count=_attempts(result) - 1
+            )
+        usage_meter.record(
+            label,
+            prompt=prompt,
+            output=json.dumps(getattr(result, "answers", {}), ensure_ascii=False, default=str),
+        )
+        return result
 
     def _log_routing_outcome(self, outcome: Any) -> None:
         selected_tools = [
@@ -490,7 +507,7 @@ class RoutingMixin:
         choice_options: list[dict[str, str]] | None = None,
         score_levels: list[str] | None = None,
     ) -> str:
-        """Handler exposed to the main LLM as ``jev_decide``."""
+        """Handler exposed to the main LLM as ``decision_judge``."""
 
         if decision_type not in {"noul", "choice", "score"}:
             return "Decision Engine error: decision_type must be noul, choice, or score."
@@ -655,7 +672,7 @@ class RoutingMixin:
         sender_id: str,
         text: str,
     ) -> tuple[list[str], DialogueInference]:
-        """Record one non-command message and return its Jev-facing snapshot."""
+        """Record one non-command message and return its decision-facing snapshot."""
 
         flow_enabled = self._conversation_flow_enabled_for(event)
         flow_window = max(2, min(30, self._int("conversation_flow_window", 8)))
@@ -853,7 +870,7 @@ class RoutingMixin:
         if sender_id and self_id and sender_id == self_id:
             return True
         # AstrBot has already decided this is a wake/command event; allow its
-        # native pipeline to handle it and do not issue a second Jev request.
+        # native pipeline to handle it and do not issue a second decision request.
         if bool(getattr(event, "is_at_or_wake_command", False)):
             return True
         if message_type == MessageType.GROUP_MESSAGE:
@@ -920,7 +937,7 @@ class RoutingMixin:
             always_keep.add("adjust_contact_frequency")
         if not self._bool("always_keep_tools_customized", False):
             always_keep.update(self._builtin_tool_names())
-            # jev_decide is registered by this plugin rather than AstrBot's
+            # decision_judge is registered by this plugin rather than AstrBot's
             # builtin manager, but it is still a builtin Decision Engine tool
             # and must start in the WebUI's Always Keep selection.
             always_keep.add(DECISION_TOOL_NAME)
@@ -987,10 +1004,10 @@ class RoutingMixin:
                 "Decision Engine ignored %d Always Keep names not present in this request.",
                 len(unknown_always_keep),
             )
-        # Only the categories whose decision switches are enabled need Jev
+        # Only the categories whose decision switches are enabled need a decision
         # questions.  Filtering is intentionally independent: a judged
         # category with filtering disabled remains fully visible while its
-        # Jev-selected candidates can still be recommended.
+        # Decision-selected candidates can still be recommended.
         decision_ordinary = ordinary if tool_decision_enabled else []
         decision_mcp = mcp_tools if mcp_decision_enabled else []
         decision_skills = skills if skill_decision_enabled else []
@@ -1129,8 +1146,8 @@ class RoutingMixin:
             # request untouched. Respect an explicit decision-tool opt-out.
             logger.warning("Decision Engine tool filter unavailable: %s", _safe_error(exc))
             # When ordinary Tool filtering is disabled, the whole ordinary
-            # category is pass-through even if Jev itself is unavailable.
-            # Keep ``jev_decide`` in that case just as the normal routing path
+            # category is pass-through even if the decision model itself is unavailable.
+            # Keep ``decision_judge`` in that case just as the normal routing path
             # does; remove it only when filtering is actually enabled and the
             # user did not select Always Keep.
             if tool_filter_enabled and DECISION_TOOL_NAME not in always_keep:
@@ -1139,7 +1156,7 @@ class RoutingMixin:
                     for tool in tool_set.tools
                     if getattr(tool, "name", None) != DECISION_TOOL_NAME
                 ]
-            # Manual recommendations do not depend on Jev's availability.
+            # Manual recommendations do not depend on decision availability.
             # Preserve them in the main LLM system prompt even when the
             # decision request failed and routing fell back to fail-open.
             manual_recommended_tools = [
@@ -1232,7 +1249,7 @@ class RoutingMixin:
         self._log_routing_outcome(outcome)
 
     async def _proactive_reply_impl(self, event: AstrMessageEvent):
-        """Use Jev to decide whether AstrBot's normal Agent should interject."""
+        """Use the decision model to decide whether AstrBot's normal Agent should interject."""
 
         if not self._bool("message_interjection_enabled", True):
             return
@@ -1308,7 +1325,7 @@ class RoutingMixin:
             )
             flow_enabled = self._conversation_flow_enabled_for(event)
             # Keep every allowlisted message in the bounded session history,
-            # while the analysis cooldown suppresses only the Jev request.
+            # while the analysis cooldown suppresses only the decision request.
             forced_summon = explicit_summon and self._bool("force_reply_when_summoned", True)
             if not self.proactive.can_analyze(session) and not forced_summon:
                 return
@@ -1325,7 +1342,7 @@ class RoutingMixin:
                 observation_timeout=self._float("observation_timeout_seconds", 600.0),
             )
             if forced_summon:
-                # Skip the Jev judgement and let AstrBot's native Agent answer,
+                # Skip the decision judgement and let AstrBot's native Agent answer,
                 # like a direct prefix: an explicit summon is neither limited
                 # by nor counted against the proactive cooldown and window.
                 event.is_at_or_wake_command = True
@@ -1335,7 +1352,7 @@ class RoutingMixin:
                 )
                 return
             # A proactive reply is already in flight: allow_reply would reject
-            # any result, so do not spend a Jev request on this message.
+            # any result, so do not spend a decision request on this message.
             if self.proactive.has_pending_reply(session):
                 return
             questions = {
@@ -1378,7 +1395,7 @@ class RoutingMixin:
                     session,
                     success=False,
                     # Retry backoff controls the gap between transport
-                    # attempts inside one Jev request.  Once all attempts
+                    # attempts inside one decision request.  Once all attempts
                     # fail, use the proactive analysis interval instead
                     # of zero so an API outage cannot trigger one new
                     # request for every incoming message.
@@ -1413,7 +1430,7 @@ class RoutingMixin:
                 )
             )
             logger.warning(
-                "Decision Engine 因为 Jev 综合分 %.3f（指向 %.3f，介入 %.3f），所以%s。",
+                "Decision Engine 因为决策综合分 %.3f（指向 %.3f，介入 %.3f），所以%s。",
                 aggregate,
                 addressing,
                 interject,

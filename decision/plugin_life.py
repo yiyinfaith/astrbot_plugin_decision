@@ -65,7 +65,7 @@ class LifeMixin:
         return "、".join(f"{labels.get(kind, kind)}×{count}" for kind, count in counts.items())
 
     async def _media_placeholder(self, refs: Any, umo: str, event=None) -> str:
-        """Give Jev attachment semantics when this turn's auto task is ready."""
+        """Give the decision model attachment semantics when this turn's auto task is ready."""
 
         summary = self._media_kind_summary(refs)
         cached: list[str] = []
@@ -298,7 +298,7 @@ class LifeMixin:
         """Activate or deactivate the understanding tools inside AstrBot itself.
 
         ``Context.activate_llm_tool`` / ``deactivate_llm_tool`` flip the global
-        active flag used by JEV routing, the tool list and the actual call path, so
+        active flag used by decision routing, the tool list and the actual call path, so
         a disabled tool is really unavailable instead of just hidden.
         """
 

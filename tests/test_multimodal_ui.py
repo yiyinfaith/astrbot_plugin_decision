@@ -1,4 +1,4 @@
-"""WebUI structure and the non-text Jev switch semantics."""
+"""WebUI structure and the non-text 决策 switch semantics."""
 
 from __future__ import annotations
 
